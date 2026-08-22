@@ -156,6 +156,107 @@ else
 fi
 
 echo ""
+echo "=== 1c. SKILL.md 埋め込み bash ブロックの構文チェック ==="
+# claude-skills/improvement-dispatcher/SKILL.md と claude-skills/improvement-work/SKILL.md には、
+# orchestrator/work が実際に実行する bash コードブロックが埋め込まれている
+# （例: improvement-dispatcher の手順3・手順5）。ここでは各 ```bash フェンスブロックを抽出し、
+# bash -n で構文チェックする。フェンスは箇条書きの入れ子（行頭に空白のインデント）で
+# 書かれていることがあるため、行頭が完全に ```bash / ``` と一致する場合だけでなく、
+# 前後に空白を許した正規表現でマッチさせる。
+#
+# ブロックには <n> や <作業ブランチ> のようなプレースホルダが含まれることがある。この山括弧を
+# そのまま bash -n に渡すと、bash がリダイレクト演算子（`<`/`>`）として誤解釈し、プレース
+# ホルダ自体が原因の構文エラーになる（例: `git worktree remove <ワークツリーのパス>` は、
+# `<`/`>` の後に続くはずのファイル名が無いというエラーになる）。これは TASK-6 実装時に手動で
+# `bash -n` を17ブロック（dispatcher 9個、work 8個）に対して実行した際、4ブロックを
+# プレースホルダ由来として個別に除外した対象と一致する。
+# ここではブロックを除外する代わりに、構文チェック前に `<...>`（山括弧を含まない中身）を
+# 安全なダミートークンへ機械的に置換する。これにより山括弧に起因する偽陽性を消しつつ、
+# クォートの閉じ忘れ等の本物の構文エラーはそのまま検出できるので、個別のブロック除外リストを
+# 保守せずに恒常的な自動チェックの対象へ含められる。置換パターンは `<(` で始まる箇所
+# （プロセス置換 `<(cmd)`）を除外しており、`<(cmd1) <(cmd2) > out` のような行で
+# 2つ目のプロセス置換と実際のリダイレクトを1つのプレースホルダとして誤って飲み込まないようにする。
+check_skill_bash_blocks() {
+  local skill_file="$1"
+  local label="$2"
+
+  if [ ! -f "$skill_file" ]; then
+    fail "$label: $skill_file が存在しない"
+    return
+  fi
+
+  local open_re='^[[:space:]]*```bash[[:space:]]*$'
+  local close_re='^[[:space:]]*```[[:space:]]*$'
+
+  # 抽出ループとは独立に開始フェンス（```bash、インデント許容）の総数を数え、
+  # ループ側の処理件数と突き合わせる。ループのバグ（フェンスの見落とし、閉じフェンスが
+  # 無いまま終端する 等）でブロックが黙って処理から漏れることを検出するための二重チェック。
+  local expected_count
+  expected_count="$(grep -Ec "$open_re" "$skill_file" || true)"
+
+  local in_block=0
+  local block_num=0
+  local block=""
+  local line
+  local found_any=0
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_block" -eq 0 ]; then
+      if [[ "$line" =~ $open_re ]]; then
+        in_block=1
+        block=""
+      fi
+      continue
+    fi
+
+    if [[ "$line" =~ $close_re ]]; then
+      in_block=0
+      block_num=$((block_num + 1))
+      found_any=1
+
+      local sanitized
+      sanitized="$(printf '%s\n' "$block" | sed -E 's/<[^<>(][^<>]*>/PLACEHOLDER_TOKEN/g')"
+
+      if [ -z "$(printf '%s' "$sanitized" | tr -d '[:space:]')" ]; then
+        fail "$label: bash ブロック #$block_num が空である（内容の抽出漏れの可能性がある）"
+        continue
+      fi
+
+      local block_tmp
+      block_tmp="$(mktemp)"
+      printf '%s' "$sanitized" > "$block_tmp"
+
+      local err_out
+      err_out="$(bash -n "$block_tmp" 2>&1)"
+      local rc=$?
+      rm -f "$block_tmp"
+
+      if [ "$rc" -eq 0 ]; then
+        pass "$label: bash ブロック #$block_num の構文チェック"
+      else
+        fail "$label: bash ブロック #$block_num の構文エラー: $err_out"
+      fi
+      continue
+    fi
+
+    block+="$line"$'\n'
+  done < "$skill_file"
+
+  if [ "$in_block" -eq 1 ]; then
+    fail "$label: 閉じフェンス（\`\`\`）が見つからないまま bash ブロックが終端した（ブロック #$((block_num + 1)) 相当）"
+  fi
+
+  if [ "$found_any" -eq 0 ]; then
+    fail "$label: \`\`\`bash ブロックが1つも見つからない（抽出ロジックの不具合の可能性がある）"
+  elif [ "$block_num" -ne "$expected_count" ]; then
+    fail "$label: 抽出できたブロック数（$block_num）が開始フェンスの総数（$expected_count）と一致しない（見落としの可能性がある）"
+  fi
+}
+
+check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-dispatcher/SKILL.md" "improvement-dispatcher/SKILL.md"
+check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-work/SKILL.md" "improvement-work/SKILL.md"
+
+echo ""
 echo "=== 2. 一時リポジトリへのセットアップ ==="
 
 TMP_REPO="$(mktemp -d)"
