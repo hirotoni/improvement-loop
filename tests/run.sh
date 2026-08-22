@@ -590,6 +590,95 @@ fi
 assert_statuses_present "$multiline_result_config" "複数行リスト形式からの正規化後、再実行後"
 
 echo ""
+echo "=== 6. config.my.yml の不足キー補完（マイグレーション）の回帰テスト ==="
+# 配布元テンプレート（backlogmd-custom-config/config.my.yml）に新しいキーが
+# 追加された状況を、「導入先の config.my.yml に一部キーが欠けている」状態として
+# 再現する。setup-improvement-loop を実行すると、欠けているキーだけがテンプレート
+# 側のコメント・既定値付きで補われ、既存のキーの値・コメント、テンプレートに
+# 無いユーザー独自のキーはそのまま残ることを確認する（TASK-19）。
+
+TMP_REPO_MIGRATION="$(mktemp -d)"
+cleanup_migration() {
+  rm -rf "$TMP_REPO_MIGRATION"
+}
+trap 'cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_REPO_MIGRATION" && git init -q)
+mkdir -p "$TMP_REPO_MIGRATION/.backlog"
+
+# テンプレートの最後のキー（auto_merge_reviewed、コメント込み）が丸ごと欠けた
+# 「旧バージョンの config.my.yml」を、テンプレートの先頭から max_redispatch の
+# 値行までを切り出して作る。
+migration_config="$TMP_REPO_MIGRATION/.backlog/config.my.yml"
+max_redispatch_line="$(grep -n '^  max_redispatch:' "$SOURCE_CONFIG" | head -1 | cut -d: -f1)"
+head -n "$max_redispatch_line" "$SOURCE_CONFIG" > "$migration_config"
+
+if grep -q '^  auto_merge_reviewed:' "$migration_config"; then
+  fail "テスト前提が壊れている: auto_merge_reviewed の除去に失敗した"
+fi
+
+# 既存キー（max_in_review）をユーザーが値・コメント付きで変更した状態を作る
+# （AC#2 検証用）。sed -i は使わず、他の箇所と同じ mktemp+mv で書き換える。
+migration_config_tmp="$(mktemp)"
+sed 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
+  "$migration_config" > "$migration_config_tmp"
+mv "$migration_config_tmp" "$migration_config"
+
+# テンプレートに無いユーザー独自のキーを追記する（AC#3 検証用）。
+printf '\n  # ユーザー独自の調整値。テンプレートには存在しない。\n  my_custom_key: "keep-me"\n' >> "$migration_config"
+
+migration_output="$("$SETUP_SCRIPT" "$TMP_REPO_MIGRATION" 2>&1)"
+migration_exit=$?
+if [ "$migration_exit" -eq 0 ]; then
+  pass "欠けたキーを持つ config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
+else
+  fail "欠けたキーを持つ config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${migration_exit}）:
+$migration_output"
+fi
+
+# AC#1: 欠けていた auto_merge_reviewed が、テンプレート側の値・コメント付きで補われる
+if grep -Fq '  auto_merge_reviewed: false' "$migration_config"; then
+  pass "欠けていたキー auto_merge_reviewed がテンプレートの既定値付きで補われた"
+else
+  fail "欠けていたキー auto_merge_reviewed が補われなかった"
+fi
+if grep -Fq '  # Reviewed になったタスクを orchestrator が main に自動マージするかどうか。' "$migration_config"; then
+  pass "補われた auto_merge_reviewed にテンプレート側のコメントが付いている"
+else
+  fail "補われた auto_merge_reviewed にテンプレート側のコメントが付いていない"
+fi
+
+# AC#2: 既にあったキー（ユーザーが値・コメントを変更した max_in_review）が変更されない
+if grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$migration_config"; then
+  pass "再実行後も既存キー max_in_review の値・コメントが変更されない"
+else
+  fail "再実行で既存キー max_in_review の値・コメントが変更された"
+fi
+
+# AC#3: テンプレートに無いユーザー独自のキーが保持される
+if grep -Fq '  my_custom_key: "keep-me"' "$migration_config"; then
+  pass "テンプレートに無いユーザー独自のキー my_custom_key が保持される"
+else
+  fail "テンプレートに無いユーザー独自のキー my_custom_key が失われた"
+fi
+
+# 全キーが揃った状態で再実行しても、キーが重複追加されない（冪等性）ことを確認する。
+migration_output2="$("$SETUP_SCRIPT" "$TMP_REPO_MIGRATION" 2>&1)"
+migration_exit2=$?
+if [ "$migration_exit2" -eq 0 ]; then
+  pass "全キーが揃った後の再実行も成功する（exit 0）"
+else
+  fail "全キーが揃った後の再実行が失敗した（exit ${migration_exit2}）:
+$migration_output2"
+fi
+auto_merge_count="$(grep -Fc '  auto_merge_reviewed:' "$migration_config" || true)"
+if [ "$auto_merge_count" = "1" ]; then
+  pass "全キーが揃った後の再実行で auto_merge_reviewed が重複追加されない"
+else
+  fail "全キーが揃った後の再実行で auto_merge_reviewed が重複している（${auto_merge_count} 件）"
+fi
+
+echo ""
 echo "=== サマリー ==="
 printf 'PASS: %d, FAIL: %d, SKIP: %d\n' "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
 

@@ -12,7 +12,10 @@
 # 冪等性の方針:
 #   - シンボリックリンクは正しいリンク先を指していれば何もしない。
 #     別の実体（別リンク先のリンクを含む）が既に存在すればエラーで停止する。
-#   - .backlog/config.my.yml はユーザー所有ファイルなので、既に存在すれば上書きしない。
+#   - .backlog/config.my.yml はユーザー所有ファイルなので、既存のキーの値・
+#     コメントは上書きしない。既に存在する場合は、配布元テンプレートにあって
+#     導入先に無いキーだけを、テンプレート側のコメント・既定値付きで補う
+#     （ensure_backlog_statuses と同じ「不足分だけ安全に追加する」パターン）。
 #   - .git/info/exclude への追記は、同じ行が無い場合だけ行う。
 #   - backlog init は .backlog/config.yml が無いときだけ実行する。
 #   - .backlog/config.yml の statuses は、欠けている improvement ループ既定の
@@ -183,6 +186,78 @@ ensure_backlog_statuses() {
   CREATED+=(".backlog/config.yml statuses (不足していた improvement ループの既定ステータスを追加)")
 }
 
+# .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
+# （backlogmd-custom-config/config.my.yml）にあって導入先の既存ファイルに無いキー
+# だけを、テンプレート側のコメント・既定値付きで補う。ensure_backlog_statuses() と
+# 同じ「不足分だけ安全に追加する」パターンを踏襲する。
+# 対応するのはキーの新規追加の検出・追記のみ。キーの rename・削除・意味変更には
+# 対応しない。導入先に既にあるキーの値・コメントは一切変更せず、テンプレートに
+# 無いユーザー独自のキーもそのまま保持する。
+# python3 等の追加依存を避け、grep/sed/awk のみで実装する。
+ensure_config_my_yml_keys() {
+  local target_file="$1"
+  local source_file="$2"
+
+  local key_re='^  [A-Za-z0-9_]+:'
+
+  local source_keys=()
+  while IFS= read -r k; do
+    source_keys+=("$k")
+  done < <(grep -E "$key_re" "$source_file" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/')
+
+  local target_keys=()
+  while IFS= read -r k; do
+    target_keys+=("$k")
+  done < <(grep -E "$key_re" "$target_file" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/')
+
+  local missing_keys=()
+  local key
+  for key in "${source_keys[@]}"; do
+    if ! array_contains "$key" ${target_keys[@]+"${target_keys[@]}"}; then
+      missing_keys+=("$key")
+    fi
+  done
+
+  if [ "${#missing_keys[@]}" -eq 0 ]; then
+    log "[skip] .backlog/config.my.yml は既にテンプレートの全キーを含む。"
+    SKIPPED+=(".backlog/config.my.yml (既にテンプレートの全キーを含む)")
+    return 0
+  fi
+
+  for key in "${missing_keys[@]}"; do
+    # そのキーの直前にある連続する2スペースインデントのコメント行（キーの
+    # 説明・既定値の記述）と、キー行自体をひとまとまりのブロックとして
+    # source から抽出する。空行または別のキー行に当たった時点で、それ以前に
+    # 溜めたコメント行は「別のキーに属するもの」として捨てる。
+    local block
+    block="$(awk -v key="$key" '
+      BEGIN { n = 0 }
+      {
+        line = $0
+        if (line ~ /^[[:space:]]*$/) { n = 0; next }
+        if (line ~ ("^  " key ":")) {
+          for (i = 1; i <= n; i++) print buf[i]
+          print line
+          exit
+        }
+        if (line ~ /^  [A-Za-z0-9_]+:/) { n = 0; next }
+        if (line ~ /^  #/) { n++; buf[n] = line; next }
+        n = 0
+      }
+    ' "$source_file")"
+
+    if [ -z "$block" ]; then
+      err "config.my.yml テンプレートからキー '$key' のブロックを抽出できなかった。手動で確認すること: $source_file"
+      exit 1
+    fi
+
+    printf '\n%s\n' "$block" >> "$target_file"
+    log "[fix]  .backlog/config.my.yml にキー '$key' を追加した。"
+  done
+
+  CREATED+=(".backlog/config.my.yml (不足していたキーを追加: ${missing_keys[*]})")
+}
+
 # realpath があればそれを使う。無い環境向けのフォールバックも用意する
 # （シンボリックリンクの多段解決はしないが、対象は最終的に絶対パスの実体に還元される）。
 resolve_path() {
@@ -322,8 +397,8 @@ done
 TARGET_CONFIG_FILE="$TARGET_REPO_ROOT/.backlog/config.my.yml"
 mkdir -p "$TARGET_REPO_ROOT/.backlog"
 if [ -f "$TARGET_CONFIG_FILE" ]; then
-  log "[skip] .backlog/config.my.yml は既に存在する。上書きしない（ユーザー所有ファイル）。"
-  SKIPPED+=(".backlog/config.my.yml (既存)")
+  log "[skip] .backlog/config.my.yml は既に存在する。既存のキーは上書きしない（ユーザー所有ファイル）。"
+  ensure_config_my_yml_keys "$TARGET_CONFIG_FILE" "$SOURCE_CONFIG_FILE"
 else
   cp "$SOURCE_CONFIG_FILE" "$TARGET_CONFIG_FILE"
   log "[new]  .backlog/config.my.yml を配置した。"
