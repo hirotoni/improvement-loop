@@ -39,6 +39,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 | `max_in_progress`      | 同時に `In Progress` にできる件数                                 | 1       |
 | `max_redispatch`       | 同じタスクを再引き渡しできる回数                                  | 2       |
 | `auto_merge_reviewed`  | `Reviewed` を検知したとき main に自動マージするかどうか（手順 3） | `false` |
+| `worktree_base_dir`    | ワークツリーの作成先ベースディレクトリ（手順 5）。配下にさらにリポジトリ名で名前空間分けされる | `""`（= リポジトリの親ディレクトリ/`.worktree`） |
 
 ファイルが存在しない場合、`improvement_loop` が無い場合、個別のキーが欠けている場合は、それぞれ既定値を使う。読めなかった旨を報告に 1 行添えること。値の変更は直接編集で行う。`backlog config set` は `config.yml` 側の設定を触るもので、このファイルには効かない。
 
@@ -99,7 +100,7 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
    backlog task edit TASK-<n> -s "Done" --comment 'PR で main にマージ済み' --comment-author @human --plain
    ```
 
-3. 対応するワークツリー（`<リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`）の後片付け（`git worktree remove`）も、この設定のときは orchestrator ではなく人間が行う。orchestrator は `auto_merge_reviewed: false` の間、`Reviewed`/`Done` のワークツリーを片付けない。
+3. 対応するワークツリー（既定では `<リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`。配置場所は `worktree_base_dir` で変更できる）の後片付け（`git worktree remove`）も、この設定のときは orchestrator ではなく人間が行う。orchestrator は `auto_merge_reviewed: false` の間、`Reviewed`/`Done` のワークツリーを片付けない。
 
 この設定のとき、手順 7 の「人間に必要な行動」に `Reviewed` の一覧を毎回含めて報告し、ループが `Reviewed` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
 
@@ -139,7 +140,7 @@ backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<マ�
 マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。一方、ワークツリーのディレクトリはマージが完了すれば役目を終えるので片付ける。
 
 ```bash
-git worktree remove <ワークツリーのパス>   # 例: <リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>
+git worktree remove <ワークツリーのパス>   # 例（既定の worktree_base_dir の場合）: <リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>
 ```
 
 サブエージェントが後始末し忘れた未コミットの変更がワークツリー側に残っていて `remove` が失敗する場合は、`--force` で強制削除せず、その旨を報告してそのワークツリーは残す。中身の破棄が必要かどうかの判断は人間に委ねる。
@@ -174,21 +175,71 @@ backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain  # 
 - `In Review` のタスクが `max_in_review` 件以上溜まっている。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告する。
 - `To Do` に対象が無い。手順 7 に進む。
 
-以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でリポジトリの親ディレクトリの `.worktree/<リポジトリ名>/` 配下に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
+以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリの親ディレクトリの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
 
 ### 5. ワークツリーを作って引き渡す
 
-作業ブランチはメインの作業木の上には作らない。リポジトリの親ディレクトリの `.worktree/<リポジトリ名>/` 配下に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
+作業ブランチはメインの作業木の上には作らない。ワークツリーの作成先ベースディレクトリ（`improvement_loop.worktree_base_dir`。既定ではリポジトリの親ディレクトリの `.worktree/`）配下の `<リポジトリ名>/` に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この名前空間分けは `worktree_base_dir` の値を変えても常に適用される。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
 
 このハーネスは Bash 呼び出しごとにカレントディレクトリとシェル変数をリセットする（呼び出しをまたいで保持されない）。そのため、以下は **1 回の Bash 呼び出しにまとめて実行する**。複数回に分けると、後半のコマンドが `$WORKTREE_DIR` や `$BRANCH` を参照できず失敗する。
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-PARENT_DIR=$(dirname "$REPO_ROOT")
 REPO_NAME=$(basename "$REPO_ROOT")
-mkdir -p "$PARENT_DIR/.worktree/$REPO_NAME"
-WORKTREE_DIR="$PARENT_DIR/.worktree/$REPO_NAME/task-<n>-<英小文字のスラッグ>"
+
+# improvement_loop.worktree_base_dir（.backlog/config.my.yml、手順 1 で cat した値。
+# キーが無い、または空文字なら既定値 <リポジトリの親ディレクトリ>/.worktree を使う）。
+# 絶対パス、またはリポジトリルート起点の相対パスを指定できる。実際の作成先は
+# この配下にさらにリポジトリ名で名前空間分けされる（BASE_DIR/$REPO_NAME/task-<n>-<スラッグ>）。
+WORKTREE_BASE_DIR_CONFIG="<config.my.yml の improvement_loop.worktree_base_dir の値。無ければ空文字>"
+
+if [ -z "$WORKTREE_BASE_DIR_CONFIG" ]; then
+  BASE_DIR="$(dirname "$REPO_ROOT")/.worktree"
+elif [[ "$WORKTREE_BASE_DIR_CONFIG" = /* ]]; then
+  BASE_DIR="$WORKTREE_BASE_DIR_CONFIG"
+else
+  BASE_DIR="$REPO_ROOT/$WORKTREE_BASE_DIR_CONFIG"
+fi
+
+# 相対パス・末尾スラッシュ・".." などの表記ゆれを解決してから使う。
+# 解決前の文字列のまま次のリポジトリ内外判定（case 文）を行うと、
+# 例えば末尾スラッシュ付きでリポジトリ内判定を素通りしたり、".." で
+# 実際にはリポジトリ外なのに内側だと誤判定したりする恐れがある。
+mkdir -p "$BASE_DIR"
+BASE_DIR="$(cd "$BASE_DIR" && pwd -P)"
+if [ -z "$BASE_DIR" ]; then
+  echo "worktree_base_dir の解決に失敗した: $WORKTREE_BASE_DIR_CONFIG" >&2
+  exit 1
+fi
+
+mkdir -p "$BASE_DIR/$REPO_NAME"
+WORKTREE_DIR="$BASE_DIR/$REPO_NAME/task-<n>-<英小文字のスラッグ>"
 BRANCH="improvement/task-<n>-<英小文字のスラッグ>"
+
+# BASE_DIR（正規化済み）がリポジトリルート内を指す場合だけ、.git/info/exclude
+# （git rev-parse --git-common-dir 起点）に除外パターンを追加し、git の
+# 追跡対象に入らないようにする。リポジトリ外を指す場合は追記しない
+# （既にリポジトリの外なので対象外であり、追記の必要が無い）。
+case "$BASE_DIR" in
+  "$REPO_ROOT")
+    # BASE_DIR がリポジトリルートそのものと一致する退行的な設定値の場合、
+    # "." を除外パターンにするとリポジトリ全体が git status から隠れてしまう
+    # ため、代わりにリポジトリ名のディレクトリ単位で除外する。
+    REL_BASE_DIR="$REPO_NAME"
+    ;;
+  "$REPO_ROOT"/*)
+    REL_BASE_DIR="${BASE_DIR#"$REPO_ROOT"/}"
+    ;;
+  *)
+    REL_BASE_DIR=""
+    ;;
+esac
+
+if [ -n "$REL_BASE_DIR" ]; then
+  BASE_DIR_EXCLUDE_FILE="$(git rev-parse --git-common-dir)/info/exclude"
+  mkdir -p "$(dirname "$BASE_DIR_EXCLUDE_FILE")"
+  grep -Fxq "$REL_BASE_DIR" "$BASE_DIR_EXCLUDE_FILE" 2>/dev/null || echo "$REL_BASE_DIR" >> "$BASE_DIR_EXCLUDE_FILE"
+fi
 
 git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
 
