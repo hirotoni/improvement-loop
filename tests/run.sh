@@ -25,6 +25,45 @@ SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
 
 SKILL_NAMES=(improvement-dispatcher improvement-scout improvement-work improvement-add)
 
+# REQUIRED_STATUSES は bin/setup-improvement-loop 側の定義を単一の情報源として
+# 使う。ここに配列リテラルを複製すると、片方だけ更新されてテストが実体と
+# ズレたまま緑になる恐れがあるため、対象スクリプトからその1行を抽出して評価する。
+REQUIRED_STATUSES_DEF="$(grep -m1 '^REQUIRED_STATUSES=' "$SETUP_SCRIPT" || true)"
+if [ -z "$REQUIRED_STATUSES_DEF" ]; then
+  printf 'FAIL: bin/setup-improvement-loop に REQUIRED_STATUSES の定義が見つからない\n'
+  exit 1
+fi
+eval "$REQUIRED_STATUSES_DEF"
+
+# .backlog/config.yml の statuses 行に REQUIRED_STATUSES の全項目が含まれるか検証する。
+# 引数: config.yml のパス, 呼び出し元がログに出す説明文の接頭辞
+assert_statuses_present() {
+  local config_file="$1"
+  local label="$2"
+  if [ ! -f "$config_file" ]; then
+    fail "$label: $config_file が存在しない"
+    return
+  fi
+  local status_line
+  status_line="$(grep -m1 '^statuses:' "$config_file" || true)"
+  if [ -z "$status_line" ]; then
+    fail "$label: $config_file に statuses 行が無い"
+    return
+  fi
+  local missing=()
+  local status
+  for status in "${REQUIRED_STATUSES[@]}"; do
+    if ! grep -Fq "\"$status\"" <<<"$status_line"; then
+      missing+=("$status")
+    fi
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    pass "$label: statuses に improvement ループの既定6ステータスがすべて含まれる"
+  else
+    fail "$label: statuses に不足がある（${missing[*]}）: $status_line"
+  fi
+}
+
 PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
@@ -143,6 +182,12 @@ for name in "${SKILL_NAMES[@]}"; do
   fi
 done
 
+# ---- .backlog/config.yml の statuses の検証 ----
+# backlog init --defaults の既定 statuses は To Do / In Progress / Done の3種のみで、
+# improvement ループの4スキルが前提とする Proposed / In Review / Reviewed が無いと
+# improvement-work が最初に In Review へ上げようとした時点で Invalid status で失敗する。
+assert_statuses_present "$TMP_REPO/.backlog/config.yml" "1回目実行後"
+
 # ---- config.my.yml の検証 ----
 target_config="$TMP_REPO/.backlog/config.my.yml"
 if [ -f "$target_config" ]; then
@@ -243,6 +288,16 @@ echo "=== 3. 冪等性・ユーザー所有ファイル保護の検証 ==="
 MARKER="# TEST-MARKER-$$-$(date +%s)"
 printf '\n%s\n' "$MARKER" >> "$target_config"
 
+# .backlog/config.yml の statuses にユーザー独自のステータスを追加しておき、
+# 再実行で消えないこと（既存設定の保持）と、6ステータスが揃った状態が
+# 維持されること（欠けている分だけ補う冪等性）を同時に検証する。
+target_backlog_config="$TMP_REPO/.backlog/config.yml"
+CUSTOM_STATUS="CustomStatus-$$"
+cp "$target_backlog_config" "$target_backlog_config.pre-idempotency-check"
+sed "s/^statuses: \[\(.*\)\]\$/statuses: [\1, \"$CUSTOM_STATUS\"]/" \
+  "$target_backlog_config.pre-idempotency-check" > "$target_backlog_config"
+rm -f "$target_backlog_config.pre-idempotency-check"
+
 setup_output2="$("$SETUP_SCRIPT" "$TMP_REPO" 2>&1)"
 setup_exit2=$?
 if [ "$setup_exit2" -eq 0 ]; then
@@ -256,6 +311,14 @@ if grep -Fxq "$MARKER" "$target_config" 2>/dev/null; then
   pass "再実行後も .backlog/config.my.yml へのユーザー変更が保持されている（上書きされない）"
 else
   fail "再実行で .backlog/config.my.yml のユーザー変更が失われた"
+fi
+
+# ---- .backlog/config.yml の statuses の冪等性・既存設定保持の検証 ----
+assert_statuses_present "$target_backlog_config" "2回目実行後"
+if grep -m1 '^statuses:' "$target_backlog_config" | grep -Fq "\"$CUSTOM_STATUS\""; then
+  pass "再実行後もユーザー独自の statuses（${CUSTOM_STATUS}）が保持されている"
+else
+  fail "再実行でユーザー独自の statuses（${CUSTOM_STATUS}）が失われた"
 fi
 
 # シンボリックリンクが再実行後も壊れていないことも確認する。
@@ -285,6 +348,50 @@ done
 if [ "$no_dup" = true ]; then
   pass ".git/info/exclude に重複行が無い（再実行後も各行1回）"
 fi
+
+echo ""
+echo "=== 4. statuses: [] (空配列) に対する回帰テスト ==="
+# macOS の既定 /bin/bash は 3.2 系であり、set -u 下で空配列を
+# "${arr[@]}" のように無条件展開すると unbound variable で落ちる
+# （bash 4.4 で修正されたバグ）。.backlog/config.yml の statuses が
+# 空配列（例: ユーザーが手動で `statuses: []` にした場合）でも
+# setup-improvement-loop がクラッシュしないことを確認する。
+
+TMP_REPO_EMPTY_STATUSES="$(mktemp -d)"
+cleanup_empty_statuses() {
+  rm -rf "$TMP_REPO_EMPTY_STATUSES"
+}
+trap 'cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_REPO_EMPTY_STATUSES" && git init -q)
+mkdir -p "$TMP_REPO_EMPTY_STATUSES/.backlog"
+cat > "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" <<'YAML'
+project_name: "empty-statuses-test"
+default_status: "To Do"
+statuses: []
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+empty_statuses_output="$("$SETUP_SCRIPT" "$TMP_REPO_EMPTY_STATUSES" 2>&1)"
+empty_statuses_exit=$?
+if [ "$empty_statuses_exit" -eq 0 ]; then
+  pass "statuses: [] な config.yml に対しても setup-improvement-loop が成功する（exit 0）"
+else
+  fail "statuses: [] な config.yml で setup-improvement-loop が失敗した（exit ${empty_statuses_exit}）:
+$empty_statuses_output"
+fi
+assert_statuses_present "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" "statuses: [] からの補完後"
 
 echo ""
 echo "=== サマリー ==="

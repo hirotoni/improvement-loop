@@ -15,10 +15,16 @@
 #   - .backlog/config.my.yml はユーザー所有ファイルなので、既に存在すれば上書きしない。
 #   - .git/info/exclude への追記は、同じ行が無い場合だけ行う。
 #   - backlog init は .backlog/config.yml が無いときだけ実行する。
+#   - .backlog/config.yml の statuses は、欠けている improvement ループ既定の
+#     ステータスだけを補う（既存の要素・順序・ユーザー独自のステータスは変更しない）。
 
 set -euo pipefail
 
 SKILL_NAMES=(improvement-dispatcher improvement-scout improvement-work improvement-add)
+
+# improvement ループの4スキル（scout/add/dispatcher/work）が前提とする状態遷移。
+# この順序を正準順序として、欠けているものを config.yml の statuses に補う。
+REQUIRED_STATUSES=(Proposed "To Do" "In Progress" "In Review" Reviewed Done)
 
 log() {
   printf '%s\n' "$*"
@@ -26,6 +32,116 @@ log() {
 
 err() {
   printf 'エラー: %s\n' "$*" >&2
+}
+
+# $1 が残りの引数リストに含まれていれば真を返す。
+array_contains() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    if [ "$item" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# $1 が残りの引数リストの何番目にあるかを標準出力に書く。無ければ -1。
+array_index_of() {
+  local needle="$1"
+  shift
+  local i=0
+  local item
+  for item in "$@"; do
+    if [ "$item" = "$needle" ]; then
+      printf '%s\n' "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  printf '%s\n' "-1"
+}
+
+# .backlog/config.yml の statuses（例: statuses: ["To Do", "In Progress", "Done"]）
+# に、REQUIRED_STATUSES のうち欠けているものだけを正準順序の位置に挿入する。
+# 既存の要素（ユーザー独自のステータスを含む）は順序も含め一切変更しない。
+# python3 等の追加依存を避け、grep/awk のみで実装する。
+ensure_backlog_statuses() {
+  local config_file="$1"
+
+  local line
+  line="$(grep -m1 '^statuses:' "$config_file" || true)"
+  if [ -z "$line" ]; then
+    err "config.yml に statuses 行が見つからない。手動で確認すること: $config_file"
+    exit 1
+  fi
+
+  local existing=()
+  while IFS= read -r item; do
+    existing+=("$item")
+  done < <(printf '%s\n' "$line" | grep -o '"[^"]*"' | sed 's/^"//; s/"$//')
+
+  # bash 3.2（macOS の既定 /bin/bash）は set -u 下で、空配列を
+  # "${arr[@]}" のように無条件展開すると "unbound variable" で落ちる
+  # （bash 4.4 で修正されたバグ）。既存 statuses が空（例: statuses: []）
+  # の場合に踏むため、"${arr[@]+"${arr[@]}"}" 形式のガード付き展開を使う。
+  local working=(${existing[@]+"${existing[@]}"})
+
+  local status
+  for status in "${REQUIRED_STATUSES[@]}"; do
+    if array_contains "$status" ${working[@]+"${working[@]}"}; then
+      continue
+    fi
+    # status より正準順序で後にある REQUIRED_STATUSES のうち、working に
+    # 既に存在する最初のものの直前に挿入する。無ければ末尾に追加する。
+    local insert_idx=${#working[@]}
+    local reached=false
+    local candidate
+    for candidate in "${REQUIRED_STATUSES[@]}"; do
+      if [ "$reached" = true ]; then
+        local idx
+        idx="$(array_index_of "$candidate" ${working[@]+"${working[@]}"})"
+        if [ "$idx" -ge 0 ]; then
+          insert_idx="$idx"
+          break
+        fi
+      fi
+      if [ "$candidate" = "$status" ]; then
+        reached=true
+      fi
+    done
+    working=("${working[@]:0:insert_idx}" "$status" "${working[@]:insert_idx}")
+  done
+
+  if [ "${#working[@]}" -eq "${#existing[@]}" ]; then
+    log "[skip] .backlog/config.yml の statuses は既に improvement ループの既定ステータスをすべて含む。"
+    SKIPPED+=(".backlog/config.yml statuses (既に揃っている)")
+    return 0
+  fi
+
+  local new_line="statuses: ["
+  local i
+  for i in "${!working[@]}"; do
+    if [ "$i" -gt 0 ]; then
+      new_line+=", "
+    fi
+    new_line+="\"${working[$i]}\""
+  done
+  new_line+="]"
+  # 元の行が `]` の後に何かを持っていた場合（例: 末尾コメント）は保持する。
+  new_line+="${line##*]}"
+
+  local tmp_file
+  tmp_file="$(mktemp "${config_file}.XXXXXX")"
+  awk -v newline="$new_line" '
+    /^statuses:/ { print newline; next }
+    { print }
+  ' "$config_file" > "$tmp_file"
+  mv "$tmp_file" "$config_file"
+
+  log "[fix]  .backlog/config.yml の statuses を更新した: $new_line"
+  CREATED+=(".backlog/config.yml statuses (不足していた improvement ループの既定ステータスを追加)")
 }
 
 # realpath があればそれを使う。無い環境向けのフォールバックも用意する
@@ -104,6 +220,11 @@ else
   (cd "$TARGET_REPO_ROOT" && backlog init "$project_name" --defaults --backlog-dir .backlog --agent-instructions none < /dev/null)
   CREATED+=(".backlog/ (backlog init)")
 fi
+
+# backlog init の既定 statuses（To Do, In Progress, Done）には、improvement
+# ループの4スキルが前提とする Proposed / In Review / Reviewed が無い。
+# 新規作成・既存スキップのどちらの場合も、欠けていれば補う。
+ensure_backlog_statuses "$BACKLOG_CONFIG_YML"
 
 # ---- 4. スキルのシンボリックリンク配置 ----
 TARGET_SKILLS_DIR="$TARGET_REPO_ROOT/.claude/skills"
