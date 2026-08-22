@@ -149,7 +149,7 @@ git worktree remove <ワークツリーのパス>   # 例（既定の worktree_b
 
 ### 4. 次に引き渡すタスクを選ぶ
 
-`In Progress` が無いときだけ選ぶ。`To Do` の中から次の規則で 1 件選ぶ。
+`In Progress` の件数が `max_in_progress`（調整値、既定 1）未満のときだけ選ぶ。`max_in_progress` が既定値 1 のままなら、これは従来通り「`In Progress` が無いときだけ」という挙動になる。`To Do` の中から次の規則で 1 件選ぶ。
 
 除外するもの：
 
