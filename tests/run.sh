@@ -202,7 +202,7 @@ fi
 
 # ---- .git/info/exclude の検証 ----
 exclude_file="$TMP_REPO/.git/info/exclude"
-expected_lines=(".backlog/")
+expected_lines=(".backlog")
 for name in "${SKILL_NAMES[@]}"; do
   expected_lines+=(".claude/skills/$name")
 done

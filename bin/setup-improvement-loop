@@ -287,7 +287,7 @@ EXCLUDE_FILE="$GIT_DIR/info/exclude"
 mkdir -p "$GIT_DIR/info"
 touch "$EXCLUDE_FILE"
 
-EXCLUDE_LINES=(".backlog/")
+EXCLUDE_LINES=(".backlog")
 for name in "${SKILL_NAMES[@]}"; do
   EXCLUDE_LINES+=(".claude/skills/$name")
 done

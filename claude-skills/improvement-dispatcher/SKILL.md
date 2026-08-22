@@ -50,6 +50,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 backlog task list --plain
 git status --porcelain
 git branch --show-current
+git worktree list
 cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を使う
 ```
 
@@ -62,12 +63,12 @@ cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を�
 - 対応するサブエージェントが動いている → 今回の起動でやることはない。手順 7 に進む。
 - サブエージェントが完了している → 手順 6 の検証に進む。
 - サブエージェントが存在しない（前回のセッションが落ちた、中断された） → 復旧する。
-  1. `backlog task view TASK-<n> --plain` で notes と plan を読む。
-  2. 作業ブランチの有無と `git log <branch> --oneline` で到達点を確認する。
-  3. 実装が途中まで進んでいるなら、その到達点を引き渡し情報に含めて再度引き渡す（手順 5）。
-  4. 何も進んでいないなら、`backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @orchestrator` で戻す。
+  1. `backlog task view TASK-<n> --plain` で notes と plan を読む。notes には引き渡し時のワークツリーのパスが残っているはずである。
+  2. `git worktree list` でそのワークツリーが残っているか確認する。残っていれば `git -C <ワークツリーのパス> log --oneline` で到達点を確認する。ワークツリーが無くなっていても、そのブランチ自体（`improvement/task-<n>-<スラッグ>`）は `git branch` の一覧に残る。`git worktree remove` はワークツリーのディレクトリを片付けるだけでブランチは削除しない。ブランチが残っていれば、メインの作業木から `git log <作業ブランチ> --oneline` で到達点を確認できる（ワークツリーに入る必要はない）。
+  3. 実装が途中まで進んでいるなら、その到達点を引き渡し情報に含めて再度引き渡す（手順 5）。ワークツリーが残っていればそのまま再利用する。無くなっていれば、まず `git worktree prune` で古い管理情報を掃除してから、既存の作業ブランチを起点にワークツリーを作り直す（手順 5 の「既存ブランチの再利用」分岐を使う）。
+  4. 何も進んでいないなら、`backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @orchestrator` で戻す。ワークツリーが残っていれば `git worktree remove <ワークツリーのパス>` で片付ける。
 
-`In Progress` は同時に `max_in_progress` 件までとする。作業木を共有しているため、これを超えて走らせるとブランチが混ざる。
+`In Progress` は同時に `max_in_progress` 件までとする。以前はメインの作業木を複数のサブエージェントで共有していたため、この上限がブランチの混線を防ぐ唯一の歯止めだった。手順 5 でタスクごとに独立したワークツリーへ分離した現在、その理由自体は成立しなくなっている。ただし値を引き上げるかどうかはこのタスクのスコープ外として据え置く（レビュー体制や運用実績を見て別途判断する）。
 
 ### 3. レビュー済みのものを main にマージする
 
@@ -81,11 +82,10 @@ backlog task list --status "Reviewed" --plain
 
 マージの前提条件。1 つでも欠けたらマージせず、状況を報告して今回の起動を終える。
 
-- `git status --porcelain` が空である。汚れているときはブランチを切り替えない。stash も reset もしない。
-- サブエージェントが動いていない。作業木を共有しているため、稼働中に main へ切り替えると相手の作業を壊す。
-- 対応する作業ブランチが存在し、`git log main..<作業ブランチ>` にコミットがある。
+- **メインの作業木**（人間や orchestrator がいるこのディレクトリ）の `git status --porcelain` が空である。汚れているときはそこでブランチを切り替えない。stash も reset もしない。作業ブランチはワークツリーで分離されているため、この条件はメインの作業木自身の汚れ（人間の手元の変更）にのみ関する。他のサブエージェントが別のワークツリーで稼働中かどうかはこの条件に影響しない。
+- 対応する作業ブランチが存在し、`git log main..<作業ブランチ>` にコミットがある。ブランチさえ存在すればよく、対応するワークツリーがまだ残っているかは問わない。
 
-対象は 1 件ずつ処理する。まず早送りを試す。
+対象は 1 件ずつ処理する。マージ操作自体はメインの作業木（main を checkout しているディレクトリ）で行い、ワークツリー側のディレクトリに入る必要はない。まず早送りを試す。
 
 ```bash
 git switch main
@@ -109,7 +109,15 @@ git merge --no-commit --no-ff <作業ブランチ>
 backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<マージ後の main の短縮ハッシュ>）' --comment-author @orchestrator
 ```
 
-マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す。処理後に `git log --oneline -1 main` で main の位置を確認し、報告に含める。
+マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。一方、ワークツリーのディレクトリはマージが完了すれば役目を終えるので片付ける。
+
+```bash
+git worktree remove <ワークツリーのパス>   # 例: <リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>
+```
+
+サブエージェントが後始末し忘れた未コミットの変更がワークツリー側に残っていて `remove` が失敗する場合は、`--force` で強制削除せず、その旨を報告してそのワークツリーは残す。中身の破棄が必要かどうかの判断は人間に委ねる。
+
+処理後に `git log --oneline -1 main` で main の位置を確認し、報告に含める。
 
 ### 4. 次に引き渡すタスクを選ぶ
 
@@ -136,20 +144,67 @@ backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain  # 
 
 引き渡しを止める条件：
 
-- `git status --porcelain` に出力がある（作業木が汚れている）。ユーザーの作業中の変更を stash も破棄もしない。状況を報告して今回の起動を終える。
 - `In Review` のタスクが `max_in_review` 件以上溜まっている。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告する。
 - `To Do` に対象が無い。手順 7 に進む。
 
-### 5. ブランチを作って引き渡す
+以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でリポジトリの親ディレクトリの `.worktree/` 配下に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
+
+### 5. ワークツリーを作って引き渡す
+
+作業ブランチはメインの作業木の上には作らない。リポジトリの親ディレクトリの `.worktree/` 配下に、タスクごとに独立したワークツリーを作る。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
+
+このハーネスは Bash 呼び出しごとにカレントディレクトリとシェル変数をリセットする（呼び出しをまたいで保持されない）。そのため、以下は **1 回の Bash 呼び出しにまとめて実行する**。複数回に分けると、後半のコマンドが `$WORKTREE_DIR` や `$BRANCH` を参照できず失敗する。
 
 ```bash
-git switch <デフォルトブランチ>
-git pull --ff-only            # リモートがあり、取得できる場合のみ
-git switch -c improvement/task-<n>-<英小文字のスラッグ>
+REPO_ROOT=$(git rev-parse --show-toplevel)
+PARENT_DIR=$(dirname "$REPO_ROOT")
+mkdir -p "$PARENT_DIR/.worktree"
+WORKTREE_DIR="$PARENT_DIR/.worktree/task-<n>-<英小文字のスラッグ>"
+BRANCH="improvement/task-<n>-<英小文字のスラッグ>"
+
+git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
+
+if git fetch origin 2>/dev/null; then
+  DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+  BASE_REF="origin/${DEFAULT_BRANCH:-main}"
+else
+  BASE_REF="main"   # デフォルトブランチが判定できない/リモートが無い場合は main を使う
+fi
+
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  # 再引き渡し等で既にブランチが存在する場合は、新規作成せずそのブランチを割り当てる
+  git worktree add "$WORKTREE_DIR" "$BRANCH"
+else
+  git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF"
+fi
+
+# .backlog/ は git 管理外（.git/info/exclude で除外）なので、
+# git worktree add では新しいワークツリーに作られない。
+# メインの作業木の .backlog/ へのシンボリックリンクにして、タスクデータを共有する。
+if [ -e "$REPO_ROOT/.backlog" ] && [ ! -e "$WORKTREE_DIR/.backlog" ]; then
+  ln -s "$REPO_ROOT/.backlog" "$WORKTREE_DIR/.backlog"
+fi
+
+# 古いインストール（.git/info/exclude が末尾スラッシュ付きの ".backlog/" のまま）だと、
+# 上のシンボリックリンクは除外パターンにマッチせず、ワークツリー内で git status が
+# 常に汚れて見える。スラッシュ無しの ".backlog" は両方にマッチするので、無ければ足す。
+EXCLUDE_FILE="$(git rev-parse --git-common-dir)/info/exclude"
+mkdir -p "$(dirname "$EXCLUDE_FILE")"
+grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE_FILE"
+
 backlog task edit TASK-<n> -s "In Progress" -a @improvement-work --plain
+
+echo "WORKTREE_DIR=$WORKTREE_DIR"
+echo "BRANCH=$BRANCH"
 ```
 
-デフォルトブランチは `git symbolic-ref --short refs/remotes/origin/HEAD` で判定する。取れなければ `main` を使う。
+デフォルトブランチ名の判定は `git symbolic-ref --short refs/remotes/origin/HEAD` に依存する。この参照が設定されていないリモート環境では `DEFAULT_BRANCH` が空になり、上のスクリプトは `main` にフォールバックする。実際のデフォルトブランチが `main` 以外の場合は、このフォールバック値を書き換える。
+
+出力された `WORKTREE_DIR` と `BRANCH` の値は、以降の手順（サブエージェントへの引き渡しプロンプト、`--append-notes` への記録）でリテラルな文字列として使う。シェル変数として次の呼び出しに持ち越そうとしない。
+
+新しいワークツリーはフェッチできれば `origin/<デフォルトブランチ>` を起点にするため、ローカルの `main` 自体が古くても最新の内容から分岐する。一方でローカルの `main` は、以前のように毎回 `pull` されるわけではなく、手順 3 の ff-only マージで進む分だけ更新される。ローカル `main` と `origin/main` がしばらく乖離しても、次の分岐や手順 3 のマージには支障が無い。
+
+`$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`git worktree add` は失敗する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
 
 引き渡しはサブエージェント（`Agent`、`subagent_type: general-purpose`）に対して行う。背景実行のままにする。完了時に通知が返るので、待ち合わせのための短い間隔での起動は入れない。
 
@@ -157,12 +212,12 @@ backlog task edit TASK-<n> -s "In Progress" -a @improvement-work --plain
 
 - 冒頭に `improvement-work スキルを使って進めること`。
 - タスク ID と、`backlog task view TASK-<n> --plain` で全文を読む指示。
-- 作業ブランチ名と、そのブランチから移動しないこと。
+- **作業ディレクトリ（ワークツリーの絶対パス、`$WORKTREE_DIR`）**と、そのディレクトリから移動しないこと。ブランチ名（`$BRANCH`）も参考情報として伝えるが、サブエージェントは自分でブランチを切り替えたり新しく作ったりしない。ワークツリーは引き渡し時点で既にそのブランチを checkout 済みである。
 - リポジトリの規約（`CLAUDE.md` の場所、backlog CLI 経由の原則、実行すべき検証コマンド）。
 - 非目標。タスクの受入基準の外に手を広げないこと。
 - 完了時に返すべき内容：変更ファイル、実行した検証とその結果、残るリスク、受入基準を満たせたか、人間の判断が必要な未解決点。
 
-引き渡した内容の要点は `backlog task edit TASK-<n> --append-notes '<引き渡し内容>'` に残す。セッションが落ちても手順 2 で復旧できる。
+引き渡した内容の要点（ワークツリーのパスとブランチ名）は `backlog task edit TASK-<n> --append-notes '<引き渡し内容>'` に残す。セッションが落ちても手順 2 で復旧できる。
 
 ### 6. 完了を検証する
 
@@ -197,7 +252,7 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
   - `In Review` のレビュー、済んだら `backlog task edit TASK-<n> -s "Reviewed"`（次の起動で orchestrator が main にマージし `Done` にする）
   - main のプッシュ（orchestrator は行わない）
   - `blocked:needs-decision` の判断：コメントに書かれた選択肢に答え、`backlog task edit TASK-<n> --remove-label 'blocked:needs-decision'` でループに戻す
-- 作業ブランチ名の一覧（レビュー対象）。
+- 作業ブランチ名とワークツリーのパスの一覧（レビュー対象）。
 
 `/loop` に間隔が指定されている場合は、その間隔に任せる。間隔が指定されていない（動的ペース）場合は `ScheduleWakeup` で次回を決める。
 
@@ -211,7 +266,8 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
 - `push` と PR 作成をしない。リモートへの反映は人間が行う。
 - `merge` は手順 3 の `Reviewed` のものに限る。それ以外のブランチを main に入れない。
 - `rebase` と `--force` を伴う git 操作をしない。レビュー済みのコミットの同一性を変えない。
-- 作業木が汚れているとき、およびサブエージェントが稼働中のときは、ブランチを切り替えない。stash も reset もしない。
+- メインの作業木が汚れているときは、そこでブランチを切り替えない（該当するのは手順 3 のマージ時のみ。手順 5 のワークツリー作成はメインの作業木の状態を問わない）。stash も reset もしない。
+- サブエージェントが作業しているワークツリーの中身を直接編集・削除しない。片付けはマージ完了後（手順 3）に、そのワークツリーに限って `git worktree remove` で行う。
 - `Proposed` を `To Do` に上げない。`In Review` を `Reviewed` に上げない。`Reviewed` 以外を `Done` にしない。
 - `.backlog/` 配下の md を直接編集しない。すべて `backlog` CLI 経由で行う。
 - `max_in_progress` 件を超えて `In Progress` にしない。
