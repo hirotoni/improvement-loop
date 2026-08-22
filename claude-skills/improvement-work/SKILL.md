@@ -1,0 +1,199 @@
+---
+name: improvement-work
+description: improvement-orchestrator から引き渡された Backlog.md タスクを、interview-dev-loop の型で遂行する。サブエージェントとして起動される前提のため人間に質問できず、曖昧さは repo の根拠から自分で解決し、判断が必要な点だけ中断して差し戻す。作業ブランチ上で実装・検証・コミットし、タスクを In Review にして報告する。単独のタスク実装依頼で、人間と対話できる場合は interview-dev-loop を直接使う。
+---
+
+# improvement-work
+
+引き渡された 1 件の Backlog.md タスクを、作業ブランチ上で完了させる。
+`interview-dev-loop` の型を踏襲するが、**人間と対話できない**前提で読み替える。
+
+## ループ内の位置
+
+| status | 意味 | 動かす主体 |
+| --- | --- | --- |
+| `Proposed` | 起票された改善候補。未承認 | improvement-scout が起票 |
+| `To Do` | 着手が承認された | 人間 |
+| `In Progress` | 作業ブランチに引き渡し済み | improvement-orchestrator |
+| `In Review` | 実装がブランチに乗り、レビュー待ち | **work が動かす** |
+| `Done` | レビューとマージが済んだ | 人間 |
+
+**承認は既に済んでいる。** 人間が `Proposed` を `To Do` に上げた時点が承認である。
+だから改めて承認を求めない。ただし承認されたのはタスクの受入基準の範囲だけである。そこから外に出るときは中断する（後述）。
+
+`Done` にしない。終端は `In Review` である。
+
+## 1. 引き渡し内容を確認する
+
+```bash
+backlog instructions task-execution
+backlog task view TASK-<n> --plain
+git branch --show-current
+git status --porcelain
+```
+
+- 指定された作業ブランチにいることを確認する。違っていたら切り替える。ブランチが無ければ orchestrator の引き渡しが不完全なので、その旨を報告して止まる。
+- 自分を担当者にする：`backlog task edit TASK-<n> -a @improvement-work --plain`。status は既に `In Progress` になっている。
+- リポジトリの規約（`CLAUDE.md`、`AGENTS.md`、lint 設定）を読む。backlog の操作は必ず CLI 経由で行う。
+
+## 2. 調査する（interview-dev-loop の Pre-approval 相当）
+
+該当する角度をすべて見て、見たものを名指しで書けるようにする。
+
+- code：タスクが指している実物を読み切る
+- docs：README、CLAUDE.md、コメントの宣言
+- tests：既存の検証手段。無いなら無いと書く
+- 既存の記録：`git log -- <path>`、過去タスクの notes、関連タスク
+- ローカル規約：lint、フォーマッタ、pre-commit、CI
+
+調査結果を `Collected Findings` / `Working Plan Context` / `Still Ambiguous` の形でまとめ、タスクに残す。
+
+```bash
+backlog task edit TASK-<n> --append-notes '### Collected Findings
+- code: ...
+- docs: ...
+- tests: ...
+- 既存の記録: ...
+- ローカル規約: ...
+
+### Working Plan Context
+- 目的: ...
+- 現状: ...
+- 確定している前提: ...
+- 壊してはいけない制約: ...
+- 未決: ...' --plain
+```
+
+## 3. 曖昧さを自分で解決する（Clarification の読み替え）
+
+人間に選択肢を提示できない。`Still Ambiguous` の各項目は、次の順で自分で決める。
+
+1. タスクの受入基準。基準が答えているなら、それが答えである。
+2. リポジトリの既存実装と規約。同種の処理がどう書かれているかに合わせる。
+3. 既存のテスト・検証が守っている振る舞い。壊さない方を選ぶ。
+4. `git log` に残る過去の意図。同じ判断を繰り返す。
+5. それでも決まらないなら、可逆で影響の小さい方を選ぶ。
+
+決めたことは根拠つきで残す。採用しなかった選択肢も 1 行書く。後から人間が覆せるようにするためである。
+
+```bash
+backlog task edit TASK-<n> --append-notes '### 自己解決した判断
+- 判断: ...
+  根拠: <file:line / 規約 / 既存テスト>
+  採用しなかった選択肢: ...' --plain
+```
+
+### 中断する条件
+
+次に当たったら、実装せずに差し戻す。推測で進めない。
+
+- 受入基準の外にある製品判断（挙動の方針、UI の意味、命名規則の変更など）が必要になった。
+- 破壊的、または外向きの操作（データ削除、force push、外部サービスへの送信、公開設定の変更）が必要になった。
+- タスクの前提が既に成立していない（対象コードが消えている、既に直っている）。
+- 受入基準どうしが矛盾している。
+
+差し戻しの手順：
+
+```bash
+backlog task edit TASK-<n> \
+  --add-label 'blocked:needs-decision' \
+  -s "To Do" \
+  --comment '<判断が必要な点。選択肢と、それぞれの結果を A) B) 形式で書く>' \
+  --comment-author @improvement-work --plain
+```
+
+そのうえで、報告に `blocked` であることと必要な判断を書いて終わる。`blocked:needs-decision` が付いたタスクは orchestrator の選択対象から外れ、人間が判断してラベルを外すまで動かない。
+
+## 4. 計画を記録する（Plan gate の読み替え）
+
+曖昧さの処理が終わってから計画を書く。計画は **backlog タスクの plan フィールドに記録する**。
+
+```bash
+backlog task edit TASK-<n> --plan '1. ...
+2. ...
+3. 検証: ...' --plain
+```
+
+- `docs/plans/*.md` などの計画ファイルを repo に作らない。このリポジトリでは backlog タスクが計画の記録場所である。
+- 下書きが必要ならスクラッチパッド（repo 外）に書く。repo に残さない。
+- 計画には手順、検証方法、触らない範囲（非目標）を含める。
+- 途中で方針が変わったら、実装を進める前に `--plan` を更新する。タスクが常に現在の計画を指している状態を保つ。
+
+## 5. 実装する
+
+- 1 スライスずつ実装し、その都度検証する。
+- 受入基準の範囲に留まる。範囲外の問題を見つけても直さない。`backlog task edit TASK-<n> --comment '<発見した別の問題>' --comment-author @improvement-work` に記録し、報告に「改善候補」として挙げる。次の scout の材料になる。
+- 同じ根本原因が受入基準の範囲内に複数箇所あるなら、まとめて直す。
+- 関係のない既存の変更を戻さない。
+- 進捗は `backlog task edit TASK-<n> --append-notes '<実装したこと>'` に残す。
+
+## 6. レビューパスを回す
+
+実装が一巡したら、実装とは別の目で差分を見る。
+
+```bash
+git diff <デフォルトブランチ>...HEAD
+```
+
+- サブエージェントを立てられる場合は、レビュー専用に 1 つ立て、差分だけを渡して `P0`/`P1`/`P2`/`P3` の一覧か `No findings` を返させる。
+- 立てられない場合は自分でレビューパスを回す。差分を頭から読み直し、実装時の意図を持ち込まずに指摘を出す。
+- 深刻度：`P0` は正しさ・セキュリティ・データ損失、`P1` は重要な不具合や検証の欠落、`P2` は保守性と設計の問題、`P3` は nit。
+- `P0`/`P1`/`P2` が残っている限り、根本原因を直してレビューをやり直す。実装が終わったことは停止条件ではない。
+- `P3` は安く直せるときだけ直す。
+
+## 7. 検証する
+
+リポジトリが宣言している検査を探して実行する。思い込みで済ませない。
+
+- `.pre-commit-config.yaml`、CI 設定、`Makefile`、`package.json` の scripts を見て、該当するものを走らせる。
+- 対象が設定ファイル（シェル、エディタ、ツール設定）なら、実際に読み込ませて確認する。例：シェルスクリプトは `bash -n` / `shellcheck`、Neovim 設定は `nvim --headless '+qa'` の終了コードとエラー出力。
+- 受入基準ごとに、それを満たしたと言える証跡（コマンドと出力）を用意する。証跡が作れない基準はチェックしない。
+
+## 8. コミットする
+
+```bash
+git add <変更したファイル>
+git commit
+```
+
+- 作業ブランチにコミットする。ブランチはこのタスクのために作られている。
+- コミットメッセージはリポジトリの既存の書式に合わせる。ハーネスがトレーラを要求している場合はそれに従う。
+- `push` しない。`merge` しない。PR を作らない。リモートに触らない。
+- 作業木を汚したまま終わらない。一時ファイルは消す。`git status --porcelain` が空になる状態にする。
+
+## 9. 完了させて報告する
+
+```bash
+backlog instructions task-finalization
+backlog task edit TASK-<n> --check-ac <満たした基準の番号> --plain
+backlog task edit TASK-<n> --append-notes '検証: <コマンドと結果>' --plain
+backlog task edit TASK-<n> --final-summary '<何を変え、なぜ、どう検証したか>' --plain
+backlog task edit TASK-<n> -s "In Review" --plain
+```
+
+- 受入基準は証跡がある分だけチェックする。コードが存在することを根拠にチェックしない。
+- 満たせなかった基準があるなら、チェックせずに理由を notes に書く。
+- 最後に `In Review` にする。`Done` にはしない。
+
+報告（orchestrator が読む）に含めるもの：
+
+1. タスク ID と最終 status。
+2. 作業ブランチ名とコミットの一覧。
+3. 変更したファイル。
+4. 実行した検証とその結果。
+5. 満たせた受入基準と、満たせなかった基準（理由つき）。
+6. 残るリスク。
+7. 範囲外で見つけた改善候補。
+8. 人間の判断が必要な未解決点（あれば `blocked` と明示）。
+
+言語は引き渡し時の会話言語に合わせる。既存タスクの記述言語がそれと異なる場合はタスクの言語に合わせる。
+
+## 禁止事項
+
+- `push`、`merge`、PR 作成、リモート操作をしない。
+- タスクを `Done` にしない。終端は `In Review` である。
+- 受入基準の外に手を広げない。見つけた問題は記録して報告する。
+- 人間に質問して待たない。答えを得られないので、解決するか差し戻すかの二択にする。
+- `docs/plans/*.md` のような計画ファイルを repo に残さない。計画は backlog タスクに記録する。
+- `.backlog/` 配下の md を直接編集しない。すべて `backlog` CLI 経由で行う。
+- 検証していない結果を報告に書かない。実行していないなら実行していないと書く。
