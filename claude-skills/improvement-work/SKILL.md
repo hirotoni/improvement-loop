@@ -16,7 +16,8 @@ description: improvement-orchestrator から引き渡された Backlog.md タス
 | `To Do` | 着手が承認された | 人間 |
 | `In Progress` | 作業ブランチに引き渡し済み | improvement-orchestrator |
 | `In Review` | 実装がブランチに乗り、レビュー待ち | **work が動かす** |
-| `Done` | レビューとマージが済んだ | 人間 |
+| `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
+| `Done` | main にマージ済み | improvement-orchestrator |
 
 **承認は既に済んでいる。** 人間が `Proposed` を `To Do` に上げた時点が承認である。
 だから改めて承認を求めない。ただし承認されたのはタスクの受入基準の範囲だけである。そこから外に出るときは中断する（後述）。
