@@ -19,6 +19,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP_SCRIPT="$REPO_ROOT/bin/setup-improvement-loop"
+MERGE_SCRIPT="$REPO_ROOT/bin/merge-reviewed-branch"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
@@ -124,18 +125,30 @@ if bash -n "$SETUP_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
 else
   fail "bash -n bin/setup-improvement-loop: $(cat /tmp/tests-run-sh-syntax-err.$$)"
 fi
+
+if bash -n "$MERGE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n bin/merge-reviewed-branch"
+else
+  fail "bash -n bin/merge-reviewed-branch: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
 if command -v shellcheck >/dev/null 2>&1; then
-  # bin/setup-improvement-loop は bash なので shellcheck が完全サポートする。
-  # install.zsh とまとめて1回の shellcheck 呼び出しで渡すと、zsh は
-  # shellcheck が対応しない shell のため SC1071 で即座に fatal
-  # parse error になり、setup-improvement-loop 側も一切linterされずに
+  # bin/setup-improvement-loop・bin/merge-reviewed-branch は bash なので
+  # shellcheck が完全サポートする。install.zsh とまとめて1回の shellcheck
+  # 呼び出しで渡すと、zsh は shellcheck が対応しない shell のため SC1071 で
+  # 即座に fatal parse error になり、bash スクリプト側も一切linterされずに
   # 巻き添えで FAIL してしまう。そのため個別に実行する。
   if shellcheck "$SETUP_SCRIPT"; then
     pass "shellcheck bin/setup-improvement-loop"
   else
     fail "shellcheck bin/setup-improvement-loop (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$MERGE_SCRIPT"; then
+    pass "shellcheck bin/merge-reviewed-branch"
+  else
+    fail "shellcheck bin/merge-reviewed-branch (指摘あり。上の出力を参照)"
   fi
 
   # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
@@ -676,6 +689,178 @@ if [ "$auto_merge_count" = "1" ]; then
   pass "全キーが揃った後の再実行で auto_merge_reviewed が重複追加されない"
 else
   fail "全キーが揃った後の再実行で auto_merge_reviewed が重複している（${auto_merge_count} 件）"
+fi
+
+echo ""
+echo "=== 7. bin/merge-reviewed-branch の動作確認 ==="
+# improvement-dispatcher 手順3（auto_merge_reviewed: true）のマージ判定を
+# 切り出した bin/merge-reviewed-branch を、一時 git リポジトリに対して
+# 実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
+# 3-way衝突の4パターンを、それぞれ独立した一時リポジトリで確認する
+# （TASK-22 受入基準 #1-#4 に対応）。
+
+echo ""
+echo "--- 7a. 前提条件未達: メインの作業木が汚れている ---"
+TMP_MERGE_DIRTY="$(mktemp -d)"
+cleanup_merge_dirty() { rm -rf "$TMP_MERGE_DIRTY"; }
+trap 'cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_DIRTY" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_DIRTY" && git branch feature-dirty-check)
+echo "uncommitted" > "$TMP_MERGE_DIRTY/dirty.txt"
+
+merge_dirty_output="$(cd "$TMP_MERGE_DIRTY" && "$MERGE_SCRIPT" feature-dirty-check 2>&1)"
+merge_dirty_exit=$?
+if [ "$merge_dirty_exit" -eq 1 ]; then
+  pass "7a: メインの作業木が汚れている場合、終了ステータス 1 (PRECONDITION_NOT_MET) を返す"
+else
+  fail "7a: メインの作業木が汚れている場合の終了ステータスが 1 でない（${merge_dirty_exit}）: $merge_dirty_output"
+fi
+if grep -Fq "RESULT: PRECONDITION_NOT_MET" <<<"$merge_dirty_output"; then
+  pass "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれる"
+else
+  fail "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_dirty_output"
+fi
+if [ -n "$(cd "$TMP_MERGE_DIRTY" && git status --porcelain)" ] \
+  && [ "$(cd "$TMP_MERGE_DIRTY" && git rev-parse --abbrev-ref HEAD)" = "main" ]; then
+  pass "7a: 前提条件未達時、git状態（未コミット変更・ブランチ）が変更されない"
+else
+  fail "7a: 前提条件未達のはずが、メインの作業木の git 状態が変わっている"
+fi
+
+echo ""
+echo "--- 7b. ff-only マージが成功し、対応するワークツリーが片付けられる ---"
+TMP_MERGE_FF="$(mktemp -d)"
+# 対応するワークツリー（$TMP_MERGE_FF-wt）もここで一緒に片付ける。
+# アサーション後の単発 rm -rf に任せると、ワークツリー作成後・その rm
+# 行より前で中断された場合にディレクトリが残ってしまうため、EXIT trap の
+# 中で確実に片付ける。
+cleanup_merge_ff() { rm -rf "$TMP_MERGE_FF" "$TMP_MERGE_FF-wt"; }
+trap 'cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_FF" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_FF" && git worktree add -q -b feature-ff "$TMP_MERGE_FF-wt" main)
+(cd "$TMP_MERGE_FF-wt" && git commit -q --allow-empty -m "feature ff work")
+
+merge_ff_output="$(cd "$TMP_MERGE_FF" && "$MERGE_SCRIPT" feature-ff 2>&1)"
+merge_ff_exit=$?
+if [ "$merge_ff_exit" -eq 0 ]; then
+  pass "7b: ff-only 可能なブランチのマージが終了ステータス 0 (MERGED) で成功する"
+else
+  fail "7b: ff-only 可能なはずのマージが失敗した（${merge_ff_exit}）: $merge_ff_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_ff_output"; then
+  pass "7b: 出力に RESULT: MERGED が含まれる"
+else
+  fail "7b: 出力に RESULT: MERGED が含まれない: $merge_ff_output"
+fi
+if [ "$(cd "$TMP_MERGE_FF" && git log -1 --format=%s main)" = "feature ff work" ]; then
+  pass "7b: main が feature-ff の内容までマージされている"
+else
+  fail "7b: main が feature-ff の内容までマージされていない"
+fi
+if [ -d "$TMP_MERGE_FF-wt" ]; then
+  fail "7b: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7b: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+
+echo ""
+echo "--- 7c. 3-way マージ（衝突無し）が成功し、対応するワークツリーが片付けられる ---"
+TMP_MERGE_3WAY="$(mktemp -d)"
+cleanup_merge_3way() { rm -rf "$TMP_MERGE_3WAY" "$TMP_MERGE_3WAY-wt"; }
+trap 'cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_3WAY" && git init -q -b main)
+printf 'line1\n' > "$TMP_MERGE_3WAY/f1.txt"
+printf 'line2\n' > "$TMP_MERGE_3WAY/f2.txt"
+(cd "$TMP_MERGE_3WAY" && git add -A && git commit -q -m init)
+(cd "$TMP_MERGE_3WAY" && git branch feature-3way)
+printf 'main change\n' >> "$TMP_MERGE_3WAY/f1.txt"
+(cd "$TMP_MERGE_3WAY" && git add -A && git commit -q -m "main advances f1")
+(cd "$TMP_MERGE_3WAY" && git worktree add -q "$TMP_MERGE_3WAY-wt" feature-3way)
+printf 'feature change\n' >> "$TMP_MERGE_3WAY-wt/f2.txt"
+(cd "$TMP_MERGE_3WAY-wt" && git add -A && git commit -q -m "feature-3way advances f2")
+
+merge_3way_output="$(cd "$TMP_MERGE_3WAY" && "$MERGE_SCRIPT" feature-3way 2>&1)"
+merge_3way_exit=$?
+if [ "$merge_3way_exit" -eq 0 ]; then
+  pass "7c: 衝突の無い 3-way マージが終了ステータス 0 (MERGED) で成功する"
+else
+  fail "7c: 衝突が無いはずの 3-way マージが失敗した（${merge_3way_exit}）: $merge_3way_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_3way_output"; then
+  pass "7c: 出力に RESULT: MERGED が含まれる"
+else
+  fail "7c: 出力に RESULT: MERGED が含まれない: $merge_3way_output"
+fi
+merge_3way_parents="$(cd "$TMP_MERGE_3WAY" && git log -1 --format=%P main | wc -w | tr -d ' ')"
+if [ "$merge_3way_parents" = "2" ]; then
+  pass "7c: main の最新コミットが2つの親を持つマージコミットになっている"
+else
+  fail "7c: main の最新コミットがマージコミットになっていない（親の数: ${merge_3way_parents}）"
+fi
+if [ -z "$(cd "$TMP_MERGE_3WAY" && git status --porcelain)" ]; then
+  pass "7c: マージ完了後、メインの作業木がクリーンである"
+else
+  fail "7c: マージ完了後もメインの作業木が汚れている"
+fi
+if [ -d "$TMP_MERGE_3WAY-wt" ]; then
+  fail "7c: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7c: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+
+echo ""
+echo "--- 7d. 3-way マージが衝突する場合、abort して git 状態を復元する ---"
+TMP_MERGE_CONFLICT="$(mktemp -d)"
+cleanup_merge_conflict() { rm -rf "$TMP_MERGE_CONFLICT" "$TMP_MERGE_CONFLICT-wt"; }
+trap 'cleanup_merge_conflict; cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_CONFLICT" && git init -q -b main)
+printf 'original\n' > "$TMP_MERGE_CONFLICT/shared.txt"
+(cd "$TMP_MERGE_CONFLICT" && git add -A && git commit -q -m init)
+(cd "$TMP_MERGE_CONFLICT" && git branch feature-conflict)
+printf 'main version\n' > "$TMP_MERGE_CONFLICT/shared.txt"
+(cd "$TMP_MERGE_CONFLICT" && git add -A && git commit -q -m "main changes shared.txt")
+(cd "$TMP_MERGE_CONFLICT" && git worktree add -q "$TMP_MERGE_CONFLICT-wt" feature-conflict)
+printf 'feature version\n' > "$TMP_MERGE_CONFLICT-wt/shared.txt"
+(cd "$TMP_MERGE_CONFLICT-wt" && git add -A && git commit -q -m "feature-conflict changes shared.txt")
+
+merge_conflict_head_before="$(cd "$TMP_MERGE_CONFLICT" && git rev-parse HEAD)"
+merge_conflict_output="$(cd "$TMP_MERGE_CONFLICT" && "$MERGE_SCRIPT" feature-conflict 2>&1)"
+merge_conflict_exit=$?
+merge_conflict_head_after="$(cd "$TMP_MERGE_CONFLICT" && git rev-parse HEAD)"
+
+if [ "$merge_conflict_exit" -eq 2 ]; then
+  pass "7d: 衝突する 3-way マージが終了ステータス 2 (CONFLICT) を返す"
+else
+  fail "7d: 衝突するはずの 3-way マージの終了ステータスが 2 でない（${merge_conflict_exit}）: $merge_conflict_output"
+fi
+if grep -Fq "RESULT: CONFLICT" <<<"$merge_conflict_output"; then
+  pass "7d: 出力に RESULT: CONFLICT が含まれる"
+else
+  fail "7d: 出力に RESULT: CONFLICT が含まれない: $merge_conflict_output"
+fi
+if grep -Fq "shared.txt" <<<"$merge_conflict_output"; then
+  pass "7d: 衝突したファイル（shared.txt）が出力に報告される"
+else
+  fail "7d: 衝突したファイルが出力に報告されない: $merge_conflict_output"
+fi
+if [ "$merge_conflict_head_before" = "$merge_conflict_head_after" ]; then
+  pass "7d: 衝突後、main の HEAD がマージ前と変わっていない"
+else
+  fail "7d: 衝突後、main の HEAD がマージ前から変わっている"
+fi
+if [ -z "$(cd "$TMP_MERGE_CONFLICT" && git status --porcelain)" ]; then
+  pass "7d: 衝突後、git merge --abort によりメインの作業木がクリーンな状態に戻っている"
+else
+  fail "7d: 衝突後もメインの作業木が汚れたままである（abort されていない）"
+fi
+if [ -d "$TMP_MERGE_CONFLICT-wt" ]; then
+  pass "7d: マージが完了していないため、対応するワークツリーは片付けられず残る"
+else
+  fail "7d: マージが完了していないはずなのに、対応するワークツリーが片付けられている"
 fi
 
 echo ""
