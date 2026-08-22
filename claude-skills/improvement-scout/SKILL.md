@@ -16,7 +16,8 @@ description: コードベースを探索して改善タスクを Backlog.md に 
 | `To Do` | 着手が承認された | 人間 |
 | `In Progress` | 作業ブランチに引き渡し済み | improvement-orchestrator |
 | `In Review` | 実装がブランチに乗り、レビュー待ち | improvement-work |
-| `Done` | レビューとマージが済んだ | 人間 |
+| `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
+| `Done` | main にマージ済み | `auto_merge_reviewed` 次第（orchestrator または人間） |
 
 `Proposed` から先には進めない。人間が内容を確認して `To Do` に上げたものだけが improvement-orchestrator に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。
