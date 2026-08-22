@@ -507,6 +507,89 @@ fi
 assert_statuses_present "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" "statuses: [] からの補完後"
 
 echo ""
+echo "=== 5. statuses の複数行YAMLリスト形式に対する回帰テスト ==="
+# .backlog/config.yml の statuses を複数行YAMLリスト形式
+# （statuses: の次行以降に "  - \"To Do\"" のように列挙する形式）で手動編集する
+# ケースは想定されている（bin/setup-improvement-loop:15-19 の冪等性方針コメント、
+# 各SKILL.mdの手順が config.yml の statuses への直接編集を案内している）。
+# この形式で setup-improvement-loop を（再）実行しても、壊れたYAML
+# （置換し損ねた元の "  - ..." 行が残る等）を生成しないことを確認する。
+
+TMP_REPO_MULTILINE_STATUSES="$(mktemp -d)"
+cleanup_multiline_statuses() {
+  rm -rf "$TMP_REPO_MULTILINE_STATUSES"
+}
+trap 'cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_REPO_MULTILINE_STATUSES" && git init -q)
+mkdir -p "$TMP_REPO_MULTILINE_STATUSES/.backlog"
+cat > "$TMP_REPO_MULTILINE_STATUSES/.backlog/config.yml" <<'YAML'
+project_name: "multiline-statuses-test"
+default_status: "To Do"
+statuses:
+  - "To Do"
+  - "In Progress"
+  - "Done"
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+multiline_statuses_output="$("$SETUP_SCRIPT" "$TMP_REPO_MULTILINE_STATUSES" 2>&1)"
+multiline_statuses_exit=$?
+if [ "$multiline_statuses_exit" -eq 0 ]; then
+  pass "statuses が複数行YAMLリスト形式な config.yml に対しても setup-improvement-loop が成功する（exit 0）"
+else
+  fail "statuses が複数行YAMLリスト形式な config.yml で setup-improvement-loop が失敗した（exit ${multiline_statuses_exit}）:
+$multiline_statuses_output"
+fi
+
+multiline_result_config="$TMP_REPO_MULTILINE_STATUSES/.backlog/config.yml"
+assert_statuses_present "$multiline_result_config" "複数行リスト形式からの補完後"
+
+# statuses: 行の直後に、置換し損ねた元の "  - ..." 行が残っていないことを確認する
+# （壊れたYAMLになっていないことの直接的な検証）。
+orphan_list_lines="$(awk '
+  /^statuses:/ { found=1; next }
+  found && /^[[:space:]]*-/ { print; next }
+  found { exit }
+' "$multiline_result_config")"
+if [ -z "$orphan_list_lines" ]; then
+  pass "statuses: 行の直後に元の複数行リスト項目が残っていない（壊れたYAMLになっていない）"
+else
+  fail "statuses: 行の直後に元の複数行リスト項目が残っている（壊れたYAMLの兆候）: $orphan_list_lines"
+fi
+
+# statuses 以降の他のトップレベルキー（labels 等）が失われていない
+# （置換対象の行範囲を誤って広げ過ぎていない）ことも確認する。
+if grep -Fxq 'labels: []' "$multiline_result_config"; then
+  pass "statuses 以降の他のキー（labels）が保持されている"
+else
+  fail "statuses 以降の他のキー（labels）が失われた、または壊れた"
+fi
+
+# 再実行しても壊れず、冪等であることも確認する（正規化後はインライン形式に
+# なっているはずなので、既存のインライン形式向け経路がそのまま通る）。
+multiline_statuses_output2="$("$SETUP_SCRIPT" "$TMP_REPO_MULTILINE_STATUSES" 2>&1)"
+multiline_statuses_exit2=$?
+if [ "$multiline_statuses_exit2" -eq 0 ]; then
+  pass "複数行リスト形式から正規化された後の再実行も成功する（exit 0）"
+else
+  fail "複数行リスト形式から正規化された後の再実行が失敗した（exit ${multiline_statuses_exit2}）:
+$multiline_statuses_output2"
+fi
+assert_statuses_present "$multiline_result_config" "複数行リスト形式からの正規化後、再実行後"
+
+echo ""
 echo "=== サマリー ==="
 printf 'PASS: %d, FAIL: %d, SKIP: %d\n' "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT"
 

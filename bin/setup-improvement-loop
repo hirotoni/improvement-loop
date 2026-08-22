@@ -61,24 +61,55 @@ array_index_of() {
   printf '%s\n' "-1"
 }
 
-# .backlog/config.yml の statuses（例: statuses: ["To Do", "In Progress", "Done"]）
-# に、REQUIRED_STATUSES のうち欠けているものだけを正準順序の位置に挿入する。
+# .backlog/config.yml の statuses（例: statuses: ["To Do", "In Progress", "Done"]、
+# または複数行YAMLリスト形式 statuses:\n  - "To Do"\n  - "In Progress" ...）に、
+# REQUIRED_STATUSES のうち欠けているものだけを正準順序の位置に挿入する。
 # 既存の要素（ユーザー独自のステータスを含む）は順序も含め一切変更しない。
-# python3 等の追加依存を避け、grep/awk のみで実装する。
+# 複数行リスト形式で検出した場合は、書き戻し時にインライン配列形式へ正規化する
+# （インライン形式のケースの出力は従来通り変更しない）。
+# python3 等の追加依存を避け、grep/sed/awk のみで実装する。
 ensure_backlog_statuses() {
   local config_file="$1"
 
-  local line
-  line="$(grep -m1 '^statuses:' "$config_file" || true)"
-  if [ -z "$line" ]; then
+  local statuses_line_num
+  statuses_line_num="$(grep -n -m1 '^statuses:' "$config_file" | cut -d: -f1 || true)"
+  if [ -z "$statuses_line_num" ]; then
     err "config.yml に statuses 行が見つからない。手動で確認すること: $config_file"
     exit 1
   fi
 
+  local line
+  line="$(sed -n "${statuses_line_num}p" "$config_file")"
+
+  # end_line_num は、statuses の値として置換・削除すべき行範囲の終端行番号。
+  # インライン形式では statuses_line_num 自身のまま（1行のみ置換、従来と同じ）。
+  # 複数行リスト形式では、直後から連続する "  - ..." 行の最後の行番号まで広げる。
+  local end_line_num=$statuses_line_num
   local existing=()
-  while IFS= read -r item; do
-    existing+=("$item")
-  done < <(printf '%s\n' "$line" | grep -o '"[^"]*"' | sed 's/^"//; s/"$//')
+  if [[ "$line" == *'['* ]]; then
+    # インライン配列形式（例: statuses: ["To Do", "Done"]）。従来ロジック。
+    while IFS= read -r item; do
+      existing+=("$item")
+    done < <(printf '%s\n' "$line" | grep -o '"[^"]*"' | sed 's/^"//; s/"$//')
+  else
+    # 複数行YAMLリスト形式（statuses: の次行以降に "  - \"To Do\"" のように列挙）。
+    # statuses: の直後から連続する "- ..." 行を集め、それぞれの値を existing に積む。
+    local total_lines
+    total_lines="$(awk 'END { print NR }' "$config_file")"
+    local next_line_num=$((statuses_line_num + 1))
+    while [ "$next_line_num" -le "$total_lines" ]; do
+      local list_line
+      list_line="$(sed -n "${next_line_num}p" "$config_file")"
+      if ! printf '%s' "$list_line" | grep -Eq '^[[:space:]]*-'; then
+        break
+      fi
+      local item
+      item="$(printf '%s\n' "$list_line" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')"
+      existing+=("$item")
+      end_line_num=$next_line_num
+      next_line_num=$((next_line_num + 1))
+    done
+  fi
 
   # bash 3.2（macOS の既定 /bin/bash）は set -u 下で、空配列を
   # "${arr[@]}" のように無条件展開すると "unbound variable" で落ちる
@@ -128,12 +159,22 @@ ensure_backlog_statuses() {
   done
   new_line+="]"
   # 元の行が `]` の後に何かを持っていた場合（例: 末尾コメント）は保持する。
-  new_line+="${line##*]}"
+  # `]` を含まない行（複数行リスト形式の "statuses:" 行など）ではこの展開は
+  # パターン非マッチのため元の行全体が返ってしまう点に注意し、`]` を含む場合
+  # だけ適用する。
+  if [[ "$line" == *']'* ]]; then
+    new_line+="${line##*]}"
+  fi
 
   local tmp_file
   tmp_file="$(mktemp "${config_file}.XXXXXX")"
-  awk -v newline="$new_line" '
-    /^statuses:/ { print newline; next }
+  # statuses_line_num から end_line_num までの行範囲を新しい1行に丸ごと
+  # 置換する。インライン形式では start == end のため、従来通り1行だけの
+  # 置換になる。複数行リスト形式では、続く "  - ..." 行もまとめて削除する
+  # ことで、置換し損ねた行が残って壊れたYAMLになることを防ぐ。
+  awk -v newline="$new_line" -v start="$statuses_line_num" -v end="$end_line_num" '
+    NR == start { print newline; next }
+    NR > start && NR <= end { next }
     { print }
   ' "$config_file" > "$tmp_file"
   mv "$tmp_file" "$config_file"
