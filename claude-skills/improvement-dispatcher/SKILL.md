@@ -6,7 +6,7 @@ description: Backlog.md のタスク状態を見て improvement ループを制�
 # improvement-orchestrator
 
 Backlog.md の状態を読み、次に何を動かすかを決める。
-1 回の起動でやることは「状態を読む」「レビュー済みをマージする」「必要なら 1 件引き渡す」「次の起動を決める」の 4 つだけである。
+1 回の起動でやることは「状態を読む」「レビュー済みを扱う（設定により main にマージする）」「必要なら 1 件引き渡す」「次の起動を決める」の 4 つだけである。
 
 **自分で実装しない。** コードの編集、テストの修正、リファクタは improvement-work の仕事である。
 引き渡しのために調べる（対象ファイルの特定、依存の確認、リポジトリ規約の抽出）のは構わない。
@@ -20,23 +20,25 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 | `In Progress` | 作業ブランチに引き渡し済み               | **orchestrator が動かす** |
 | `In Review`   | 実装がブランチに乗り、レビュー待ち       | improvement-work          |
 | `Reviewed`    | 人間のレビューが済み、マージを待っている | 人間                      |
-| `Done`        | main にマージ済み                        | **orchestrator が動かす** |
+| `Done`        | main にマージ済み                        | `auto_merge_reviewed` 次第（**orchestrator** または人間） |
 
 `Proposed` を `To Do` に上げるのは人間である。承認を代行しない。
 `In Review` を `Reviewed` に上げるのも人間である。レビューを代行しない。
-`Reviewed` になったものは orchestrator が main にマージし、`Done` にする（手順 3）。
+`Reviewed` になったものの扱いは `auto_merge_reviewed`（調整値、既定 `false`）で分岐する（手順 3）。
 
-このリポジトリは PR を運用していない。ローカルで main にマージし、人間がプッシュする流れである。orchestrator はマージまで進め、`push` はしない。
+- `auto_merge_reviewed: true` のとき。このリポジトリは PR を運用していない前提であり、orchestrator が `Reviewed` を検知するとローカルで main にマージし、`Done` にする。マージまで進め、`push` はしない。
+- `auto_merge_reviewed: false`（既定）のとき。このリポジトリは GitHub 上で PR ベースの開発フローを運用している前提であり、orchestrator は `Reviewed` を検知しても main にマージしない。人間が PR で正規にレビュー・マージし、その後 `Done` にする。
 
 ## 調整値
 
 上限は `.backlog/config.my.yml` の `improvement_loop` で設定する。手順 1 で読み、以降の判断にはこのファイルの値を使う。散文に書かれた数字を根拠にしない。
 
-| キー              | 意味                                                            | 既定値 |
-| ----------------- | --------------------------------------------------------------- | ------ |
-| `max_in_review`   | この件数以上 `In Review` が溜まっていたら新規の引き渡しを止める | 3      |
-| `max_in_progress` | 同時に `In Progress` にできる件数                               | 1      |
-| `max_redispatch`  | 同じタスクを再引き渡しできる回数                                | 2      |
+| キー                   | 意味                                                              | 既定値  |
+| ---------------------- | ----------------------------------------------------------------- | ------- |
+| `max_in_review`        | この件数以上 `In Review` が溜まっていたら新規の引き渡しを止める   | 3       |
+| `max_in_progress`      | 同時に `In Progress` にできる件数                                 | 1       |
+| `max_redispatch`       | 同じタスクを再引き渡しできる回数                                  | 2       |
+| `auto_merge_reviewed`  | `Reviewed` を検知したとき main に自動マージするかどうか（手順 3） | `false` |
 
 ファイルが存在しない場合、`improvement_loop` が無い場合、個別のキーが欠けている場合は、それぞれ既定値を使う。読めなかった旨を報告に 1 行添えること。値の変更は直接編集で行う。`backlog config set` は `config.yml` 側の設定を触るもので、このファイルには効かない。
 
@@ -70,15 +72,40 @@ cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を�
 
 `In Progress` は同時に `max_in_progress` 件までとする。以前はメインの作業木を複数のサブエージェントで共有していたため、この上限がブランチの混線を防ぐ唯一の歯止めだった。手順 5 でタスクごとに独立したワークツリーへ分離した現在、その理由自体は成立しなくなっている。ただし値を引き上げるかどうかはこのタスクのスコープ外として据え置く（レビュー体制や運用実績を見て別途判断する）。
 
-### 3. レビュー済みのものを main にマージする
+### 3. レビュー済みのものを扱う
 
-`Reviewed` は人間のレビューが済み、マージを待っている状態である。手順 4 の選定より先に処理する。ここで main が進めば、後続の引き渡しは新しい main を基点にできる。
+`Reviewed` は人間のレビューが済んだ状態である。手順 4 の選定より先に処理する。
 
 ```bash
 backlog task list --status "Reviewed" --plain
 ```
 
 対象が無ければ手順 4 に進む。
+
+対象があれば、`auto_merge_reviewed`（調整値、既定 `false`）の値で扱いが分かれる。
+
+#### `auto_merge_reviewed: false`（既定）
+
+main へのマージは行わない。このリポジトリは GitHub 上の PR ベースの開発フローを正規のルートとする前提であり、orchestrator がそれを迂回してローカルで main を進めることはしない。
+
+対象タスクは `Reviewed` のまま変更せず、一覧を報告するだけに留めて手順 4 に進む。マージも `Done` への変更も行わない。
+
+`Reviewed` から `Done` への経路は人間が担う。
+
+1. 人間が作業ブランチ（`improvement/task-<n>-<スラッグ>`）から PR を作成し、レビューと CI を経て GitHub 上で main にマージする。
+2. マージ後、人間が次のコマンドで `Done` にする。
+
+   ```bash
+   backlog task edit TASK-<n> -s "Done" --comment 'PR で main にマージ済み' --comment-author @human --plain
+   ```
+
+3. 対応するワークツリー（`<リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>`）の後片付け（`git worktree remove`）も、この設定のときは orchestrator ではなく人間が行う。orchestrator は `auto_merge_reviewed: false` の間、`Reviewed`/`Done` のワークツリーを片付けない。
+
+この設定のとき、手順 7 の「人間に必要な行動」に `Reviewed` の一覧を毎回含めて報告し、ループが `Reviewed` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
+
+#### `auto_merge_reviewed: true`
+
+現在の挙動を維持する。このリポジトリで PR を運用していない前提でのみ使う設定である。ここで main が進めば、後続の引き渡しは新しい main を基点にできる。
 
 マージの前提条件。1 つでも欠けたらマージせず、状況を報告して今回の起動を終える。
 
@@ -249,8 +276,10 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
 - マージした場合は、マージ後の main の位置と、プッシュが未実施であること。
 - 人間に必要な行動：
   - `Proposed` の承認：`backlog task edit TASK-<n> -s "To Do"`
-  - `In Review` のレビュー、済んだら `backlog task edit TASK-<n> -s "Reviewed"`（次の起動で orchestrator が main にマージし `Done` にする）
-  - main のプッシュ（orchestrator は行わない）
+  - `In Review` のレビュー、済んだら `backlog task edit TASK-<n> -s "Reviewed"`
+    - `auto_merge_reviewed: true` の場合：次の起動で orchestrator が main にマージし `Done` にする。
+    - `auto_merge_reviewed: false`（既定）の場合：orchestrator はマージしない。人間が作業ブランチから PR を作成し、レビュー・CI を経て main にマージした後、`backlog task edit TASK-<n> -s "Done"` で `Done` にする。対応するワークツリーの片付けも人間が行う。
+  - main のプッシュ（`auto_merge_reviewed: true` でマージした場合のみ該当。orchestrator は行わない）
   - `blocked:needs-decision` の判断：コメントに書かれた選択肢に答え、`backlog task edit TASK-<n> --remove-label 'blocked:needs-decision'` でループに戻す
 - 作業ブランチ名とワークツリーのパスの一覧（レビュー対象）。
 

@@ -29,3 +29,14 @@ improvement_loop:
   # 満たせない場合は blocked:needs-decision を付けて人間の判断に回す。
   # 既定値: 2
   max_redispatch: 2
+
+  # Reviewed になったタスクを orchestrator が main に自動マージするかどうか。
+  # true: このリポジトリで PR を運用していない前提。Reviewed を検知したら
+  #       ローカルで main に ff-only（または衝突が無ければ no-ff）マージし、
+  #       Done にする（push はしない）。
+  # false: GitHub 上で PR ベースの開発フローを運用している前提。Reviewed を
+  #        検知しても main にはマージせず、そのまま残す。人間が PR で正規に
+  #        レビュー・マージした後、手動で Done にする。
+  # キーが無い場合の既定値も false（マージしない）である。
+  # 既定値: false
+  auto_merge_reviewed: false
