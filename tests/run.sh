@@ -23,7 +23,19 @@ INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
 
-SKILL_NAMES=(improvement-dispatcher improvement-scout improvement-work improvement-add)
+# SKILL_NAMES は claude-skills/ ディレクトリの実体を単一の情報源として動的に
+# 列挙する。bin/setup-improvement-loop 側と同じ方式で導出することで、片方だけ
+# 更新して他方が追随しないという実装依存の同期漏れを構造的に無くす。
+shopt -s nullglob
+SKILL_NAMES=()
+for skill_dir in "$SOURCE_SKILLS_DIR"/*/; do
+  SKILL_NAMES+=("$(basename "$skill_dir")")
+done
+shopt -u nullglob
+if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
+  printf 'FAIL: claude-skills 配下にスキルディレクトリが1つも無い: %s\n' "$SOURCE_SKILLS_DIR"
+  exit 1
+fi
 
 # REQUIRED_STATUSES は bin/setup-improvement-loop 側の定義を単一の情報源として
 # 使う。ここに配列リテラルを複製すると、片方だけ更新されてテストが実体と

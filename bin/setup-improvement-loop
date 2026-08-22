@@ -20,8 +20,6 @@
 
 set -euo pipefail
 
-SKILL_NAMES=(improvement-dispatcher improvement-scout improvement-work improvement-add)
-
 # improvement ループの4スキル（scout/add/dispatcher/work）が前提とする状態遷移。
 # この順序を正準順序として、欠けているものを config.yml の statuses に補う。
 REQUIRED_STATUSES=(Proposed "To Do" "In Progress" "In Review" Reviewed Done)
@@ -175,6 +173,20 @@ if [ ! -d "$SOURCE_SKILLS_DIR" ]; then
 fi
 if [ ! -f "$SOURCE_CONFIG_FILE" ]; then
   err "配布元の config.my.yml が見つからない: $SOURCE_CONFIG_FILE"
+  exit 1
+fi
+
+# SKILL_NAMES は claude-skills/ ディレクトリの実体を単一の情報源として動的に
+# 列挙する。ここをハードコードすると、claude-skills/ に新しいスキルディレクトリ
+# を追加したときに配置漏れが起き、しかもエラーにならない（過去の不具合の原因）。
+shopt -s nullglob
+SKILL_NAMES=()
+for skill_dir in "$SOURCE_SKILLS_DIR"/*/; do
+  SKILL_NAMES+=("$(basename "$skill_dir")")
+done
+shopt -u nullglob
+if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
+  err "配布元の claude-skills 配下にスキルディレクトリが1つも無い: $SOURCE_SKILLS_DIR"
   exit 1
 fi
 
