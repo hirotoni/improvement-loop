@@ -99,7 +99,7 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
    backlog task edit TASK-<n> -s "Done" --comment 'PR で main にマージ済み' --comment-author @human --plain
    ```
 
-3. 対応するワークツリー（`<リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>`）の後片付け（`git worktree remove`）も、この設定のときは orchestrator ではなく人間が行う。orchestrator は `auto_merge_reviewed: false` の間、`Reviewed`/`Done` のワークツリーを片付けない。
+3. 対応するワークツリー（`<リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`）の後片付け（`git worktree remove`）も、この設定のときは orchestrator ではなく人間が行う。orchestrator は `auto_merge_reviewed: false` の間、`Reviewed`/`Done` のワークツリーを片付けない。
 
 この設定のとき、手順 7 の「人間に必要な行動」に `Reviewed` の一覧を毎回含めて報告し、ループが `Reviewed` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
 
@@ -139,7 +139,7 @@ backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<マ�
 マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。一方、ワークツリーのディレクトリはマージが完了すれば役目を終えるので片付ける。
 
 ```bash
-git worktree remove <ワークツリーのパス>   # 例: <リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>
+git worktree remove <ワークツリーのパス>   # 例: <リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>
 ```
 
 サブエージェントが後始末し忘れた未コミットの変更がワークツリー側に残っていて `remove` が失敗する場合は、`--force` で強制削除せず、その旨を報告してそのワークツリーは残す。中身の破棄が必要かどうかの判断は人間に委ねる。
@@ -174,19 +174,20 @@ backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain  # 
 - `In Review` のタスクが `max_in_review` 件以上溜まっている。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告する。
 - `To Do` に対象が無い。手順 7 に進む。
 
-以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でリポジトリの親ディレクトリの `.worktree/` 配下に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
+以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でリポジトリの親ディレクトリの `.worktree/<リポジトリ名>/` 配下に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
 
 ### 5. ワークツリーを作って引き渡す
 
-作業ブランチはメインの作業木の上には作らない。リポジトリの親ディレクトリの `.worktree/` 配下に、タスクごとに独立したワークツリーを作る。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
+作業ブランチはメインの作業木の上には作らない。リポジトリの親ディレクトリの `.worktree/<リポジトリ名>/` 配下に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
 
 このハーネスは Bash 呼び出しごとにカレントディレクトリとシェル変数をリセットする（呼び出しをまたいで保持されない）。そのため、以下は **1 回の Bash 呼び出しにまとめて実行する**。複数回に分けると、後半のコマンドが `$WORKTREE_DIR` や `$BRANCH` を参照できず失敗する。
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
 PARENT_DIR=$(dirname "$REPO_ROOT")
-mkdir -p "$PARENT_DIR/.worktree"
-WORKTREE_DIR="$PARENT_DIR/.worktree/task-<n>-<英小文字のスラッグ>"
+REPO_NAME=$(basename "$REPO_ROOT")
+mkdir -p "$PARENT_DIR/.worktree/$REPO_NAME"
+WORKTREE_DIR="$PARENT_DIR/.worktree/$REPO_NAME/task-<n>-<英小文字のスラッグ>"
 BRANCH="improvement/task-<n>-<英小文字のスラッグ>"
 
 git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
