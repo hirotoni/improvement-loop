@@ -19,7 +19,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP_SCRIPT="$REPO_ROOT/bin/setup-improvement-loop"
-CREATE_WORKTREE_SCRIPT="$REPO_ROOT/bin/create-worktree"
+CREATE_WORKTREE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/create-worktree"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
@@ -127,14 +127,14 @@ else
 fi
 
 if bash -n "$CREATE_WORKTREE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n bin/create-worktree"
+  pass "bash -n claude-skills/improvement-dispatcher/scripts/create-worktree"
 else
-  fail "bash -n bin/create-worktree: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+  fail "bash -n claude-skills/improvement-dispatcher/scripts/create-worktree: $(cat /tmp/tests-run-sh-syntax-err.$$)"
 fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
 if command -v shellcheck >/dev/null 2>&1; then
-  # bin/setup-improvement-loop・bin/create-worktree は bash なので shellcheck が
+  # bin/setup-improvement-loop・claude-skills/improvement-dispatcher/scripts/create-worktree は bash なので shellcheck が
   # 完全サポートする。install.zsh とまとめて1回の shellcheck 呼び出しで渡すと、
   # zsh は shellcheck が対応しない shell のため SC1071 で即座に fatal
   # parse error になり、他のスクリプト側も一切linterされずに巻き添えで FAIL
@@ -146,9 +146,9 @@ if command -v shellcheck >/dev/null 2>&1; then
   fi
 
   if shellcheck "$CREATE_WORKTREE_SCRIPT"; then
-    pass "shellcheck bin/create-worktree"
+    pass "shellcheck claude-skills/improvement-dispatcher/scripts/create-worktree"
   else
-    fail "shellcheck bin/create-worktree (指摘あり。上の出力を参照)"
+    fail "shellcheck claude-skills/improvement-dispatcher/scripts/create-worktree (指摘あり。上の出力を参照)"
   fi
 
   # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
@@ -692,16 +692,16 @@ else
 fi
 
 echo ""
-echo "=== 7. bin/create-worktree の動作確認 ==="
+echo "=== 7. claude-skills/improvement-dispatcher/scripts/create-worktree の動作確認 ==="
 # claude-skills/improvement-dispatcher/SKILL.md 手順5から切り出したワークツリー
 # 作成スクリプトを、実際に一時 git リポジトリに対して実行して検証する。
 # git init の既定ブランチ名は環境（init.defaultBranch）によって異なりうるため、
-# main を明示して作成し、bin/create-worktree 内のデフォルトブランチ判定
+# main を明示して作成し、claude-skills/improvement-dispatcher/scripts/create-worktree 内のデフォルトブランチ判定
 # （フェッチ不可時に main へフォールバック）と整合させる。
 
 TMP_CW_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
-# bin/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
+# claude-skills/improvement-dispatcher/scripts/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
 # 文字列比較が一致しない。ここでも同じ正規化をしておく。
 TMP_CW_REPO="$(cd "$TMP_CW_REPO" && pwd -P)"
 cleanup_cw_repo() {
@@ -718,9 +718,9 @@ CW_EXPECTED_BRANCH="improvement/$CW_TASK_ID"
 cw_output1="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
 cw_exit1=$?
 if [ "$cw_exit1" -eq 0 ]; then
-  pass "1回目の bin/create-worktree 実行が成功する（exit 0）"
+  pass "1回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行が成功する（exit 0）"
 else
-  fail "1回目の bin/create-worktree 実行が失敗した（exit ${cw_exit1}）:
+  fail "1回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行が失敗した（exit ${cw_exit1}）:
 $cw_output1"
 fi
 
@@ -761,9 +761,9 @@ fi
 cw_output2="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
 cw_exit2=$?
 if [ "$cw_exit2" -eq 0 ]; then
-  pass "2回目の bin/create-worktree 実行（同じ task-id）が成功する（exit 0、冪等性）"
+  pass "2回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行（同じ task-id）が成功する（exit 0、冪等性）"
 else
-  fail "2回目の bin/create-worktree 実行が失敗した（exit ${cw_exit2}）:
+  fail "2回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行が失敗した（exit ${cw_exit2}）:
 $cw_output2"
 fi
 
@@ -810,9 +810,9 @@ fi
 
 # ---- 引数の妥当性検証 ----
 if "$CREATE_WORKTREE_SCRIPT" >/dev/null 2>&1; then
-  fail "引数無しで bin/create-worktree を実行してもエラーにならない"
+  fail "引数無しで claude-skills/improvement-dispatcher/scripts/create-worktree を実行してもエラーにならない"
 else
-  pass "引数無しで bin/create-worktree を実行するとエラーになる"
+  pass "引数無しで claude-skills/improvement-dispatcher/scripts/create-worktree を実行するとエラーになる"
 fi
 
 if "$CREATE_WORKTREE_SCRIPT" "Invalid_Task_ID!" >/dev/null 2>&1; then
@@ -822,10 +822,10 @@ else
 fi
 
 echo ""
-echo "=== 8. bin/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
+echo "=== 8. claude-skills/improvement-dispatcher/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
 # （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、
-# bin/create-worktree へ切り出した後も維持されていることを確認する。
+# claude-skills/improvement-dispatcher/scripts/create-worktree へ切り出した後も維持されていることを確認する。
 
 TMP_CW_BASEDIR_REPO="$(mktemp -d)"
 cleanup_cw_basedir_repo() {

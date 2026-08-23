@@ -181,24 +181,24 @@ backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain  # 
 
 作業ブランチはメインの作業木の上には作らない。ワークツリーの作成先ベースディレクトリ（`improvement_loop.worktree_base_dir`。既定ではリポジトリの親ディレクトリの `.worktree/`）配下の `<リポジトリ名>/` に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この名前空間分けは `worktree_base_dir` の値を変えても常に適用される。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
 
-ワークツリー作成の一連の処理（`worktree_base_dir` の解決・正規化、リポジトリ内外判定つき `.git/info/exclude` への追記、デフォルトブランチの判定、`git worktree add`、`.backlog` シンボリックリンクの作成）は `bin/create-worktree` に決定論的なスクリプトとして切り出されている。orchestrator はこれを都度読み取って組み立てる必要は無く、次のように1回実行するだけでよい。
+ワークツリー作成の一連の処理（`worktree_base_dir` の解決・正規化、リポジトリ内外判定つき `.git/info/exclude` への追記、デフォルトブランチの判定、`git worktree add`、`.backlog` シンボリックリンクの作成）は `.claude/skills/improvement-dispatcher/scripts/create-worktree` に決定論的なスクリプトとして切り出されている（`.claude/skills/improvement-dispatcher` は `claude-skills/improvement-dispatcher` ディレクトリ丸ごとへのシンボリックリンクであり、`scripts/` サブディレクトリごと配布される）。orchestrator はこれを都度読み取って組み立てる必要は無く、次のように1回実行するだけでよい。
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)" && \
-"$REPO_ROOT/bin/create-worktree" task-<n>-<英小文字のスラッグ> && \
+"$REPO_ROOT/.claude/skills/improvement-dispatcher/scripts/create-worktree" task-<n>-<英小文字のスラッグ> && \
 backlog task edit TASK-<n> -s "In Progress" -a @improvement-work --plain
 ```
 
-`bin/create-worktree` は `.backlog/config.my.yml` の `improvement_loop.worktree_base_dir` を自分で読み、標準出力の末尾に次の2行を出力する。
+`.claude/skills/improvement-dispatcher/scripts/create-worktree` は `.backlog/config.my.yml` の `improvement_loop.worktree_base_dir` を自分で読み、標準出力の末尾に次の2行を出力する。
 
 ```
 WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
 BRANCH=<割り当てた作業ブランチ名>
 ```
 
-`&&` でつないでいるため、`create-worktree` が失敗（非ゼロ終了）した場合は後続の `backlog task edit` は実行されない。同じタスク番号・スラッグで再実行しても、既存のワークツリー・ブランチ・exclude の記述を再利用し、エラーにならない（冪等性は `bin/create-worktree` 内で保証されている）。
+`&&` でつないでいるため、`create-worktree` が失敗（非ゼロ終了）した場合は後続の `backlog task edit` は実行されない。同じタスク番号・スラッグで再実行しても、既存のワークツリー・ブランチ・exclude の記述を再利用し、エラーにならない（冪等性は `.claude/skills/improvement-dispatcher/scripts/create-worktree` 内で保証されている）。
 
-デフォルトブランチ名の判定は `git symbolic-ref --short refs/remotes/origin/HEAD` に依存する。この参照が設定されていないリモート環境では `bin/create-worktree` 内部で `main` にフォールバックする。実際のデフォルトブランチが `main` 以外の場合は、`bin/create-worktree` 側のこのフォールバック値を書き換える。
+デフォルトブランチ名の判定は `git symbolic-ref --short refs/remotes/origin/HEAD` に依存する。この参照が設定されていないリモート環境では `.claude/skills/improvement-dispatcher/scripts/create-worktree` 内部で `main` にフォールバックする。実際のデフォルトブランチが `main` 以外の場合は、`.claude/skills/improvement-dispatcher/scripts/create-worktree` 側のこのフォールバック値を書き換える。
 
 出力された `WORKTREE_DIR` と `BRANCH` の値は、以降の手順（サブエージェントへの引き渡しプロンプト、`--append-notes` への記録）でリテラルな文字列として使う。シェル変数として次の呼び出しに持ち越そうとしない。
 
