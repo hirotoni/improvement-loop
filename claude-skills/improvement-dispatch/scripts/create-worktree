@@ -165,7 +165,15 @@ elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   # 再引き渡し等で既にブランチが存在する場合は、新規作成せずそのブランチを割り当てる
   git worktree add "$WORKTREE_DIR" "$BRANCH"
 else
-  git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF"
+  # BASE_REF はフェッチ失敗時に "main" へフォールバックした値（140-145行目）であり、
+  # ローカルのデフォルトブランチが "main" 以外の場合は実在しない参照になりうる。
+  # その場合に git worktree add の生のエラーでスクリプトが異常終了しないよう、
+  # 他の失敗経路と同様に err() で診断してから明示的な exit code で終了する（TASK-38）。
+  if ! git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF" 2>/dev/null; then
+    err "BASE_REF ($BASE_REF) の解決に失敗し、ワークツリーを作成できなかった"
+    err "リモート 'origin' が設定されているか、ローカルのデフォルトブランチ名が \"main\" と一致するか確認すること。一致しない場合は create-worktree 内の main フォールバック値を実際のデフォルトブランチ名に書き換える必要がある。"
+    exit 1
+  fi
 fi
 
 # .backlog/ は git 管理外（.git/info/exclude で除外）なので、
