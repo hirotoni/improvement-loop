@@ -374,7 +374,7 @@ done
 
 # ---- .backlog/config.yml の statuses の検証 ----
 # backlog init --defaults の既定 statuses は To Do / In Progress / Done の3種のみで、
-# improvement ループの4スキルが前提とする Proposed / In Review / Reviewed が無いと
+# improvement ループの4スキルが前提とする Proposed / In Review / Approved が無いと
 # improvement-work が最初に In Review へ上げようとした時点で Invalid status で失敗する。
 assert_statuses_present "$TMP_REPO/.backlog/config.yml" "1回目実行後"
 
