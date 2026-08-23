@@ -28,6 +28,16 @@ echo "=== 14. claude-skills/improvement-dispatch/scripts/check-forbidden-allowed
 #   14g. 両方設定されている場合、allowed範囲内でもforbidden一致なら違反
 #   14h. 変更ファイルを1件も渡さない場合 -> OK
 #   14i. 対象リポジトリの外（gitリポジトリでない場所）で実行すると ERROR
+#   14j. forbidden_paths を複数行YAMLリスト形式で書いた場合、インライン配列
+#        形式と同じ判定結果（VIOLATION）になる（TASK-56 AC#1）
+#   14k. allowed_paths を複数行YAMLリスト形式で書いた場合、インライン配列
+#        形式と同じ判定結果（範囲外はVIOLATION、範囲内はOK）になる（TASK-56 AC#1）
+#   14l. forbidden_paths を複数行YAMLリスト形式かつ空（次行に "-" 項目が
+#        続かない）で書いた場合、キー自体が無い場合と同じく制限なし（OK）に
+#        なる（既存の空配列＝無制限という意味論を壊さない）
+#   14m. forbidden_paths の値が配列でもスカラーでもない壊れたYAML/サポート
+#        対象外の記法（例: クォートされていない単一のパス文字列）のとき、
+#        RESULT: ERROR（exit 2）になる（TASK-56 AC#3）
 
 TMP_CFA_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
@@ -47,6 +57,26 @@ improvement_loop:
   forbidden_paths: $1
   allowed_paths: $2
 EOF
+}
+
+# 複数行YAMLリスト形式で config.my.yml を書く。$1/$2 は改行区切りの要素
+# （空文字なら「次行に "-" 項目が続かない」＝空のキーとして書く）。
+write_cfa_config_multiline() {
+  {
+    printf 'improvement_loop:\n'
+    printf '  forbidden_paths:\n'
+    if [ -n "$1" ]; then
+      printf '%s\n' "$1" | while IFS= read -r item; do
+        printf '    - "%s"\n' "$item"
+      done
+    fi
+    printf '  allowed_paths:\n'
+    if [ -n "$2" ]; then
+      printf '%s\n' "$2" | while IFS= read -r item; do
+        printf '    - "%s"\n' "$item"
+      done
+    fi
+  } >"$CFA_CONFIG"
 }
 
 echo ""
@@ -170,5 +200,84 @@ else
   fail "14i: 期待した結果と異なる（exit ${cfa_exit_i}）:
 $cfa_out_i"
 fi
+
+echo ""
+echo "--- 14j. forbidden_paths を複数行YAMLリスト形式で書いた場合、インライン配列形式と同じ判定結果（VIOLATION）になる（TASK-56 AC#1） ---"
+write_cfa_config_multiline "$(printf 'secrets/\nvendor/')" ""
+cfa_out_j="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
+cfa_exit_j=$?
+if [ "$cfa_exit_j" -eq 1 ] && printf '%s\n' "$cfa_out_j" | grep -Fxq 'RESULT: VIOLATION' \
+    && printf '%s\n' "$cfa_out_j" | grep -Fxq 'VIOLATION_COUNT: 1' \
+    && printf '%s\n' "$cfa_out_j" | grep -Fxq 'secrets/token.txt'; then
+  pass "14j: forbidden_paths を複数行YAMLリスト形式で書いた場合も、インライン配列形式と同じ RESULT: VIOLATION（TASK-56 AC#1）"
+else
+  fail "14j: 期待した結果と異なる（exit ${cfa_exit_j}）:
+$cfa_out_j"
+fi
+cfa_out_j2="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
+cfa_exit_j2=$?
+if [ "$cfa_exit_j2" -eq 0 ] && printf '%s\n' "$cfa_out_j2" | grep -Fxq 'RESULT: OK'; then
+  pass "14j: 複数行YAMLリスト形式の forbidden_paths に一致しない変更ファイルのときは RESULT: OK"
+else
+  fail "14j: 期待した結果と異なる（exit ${cfa_exit_j2}）:
+$cfa_out_j2"
+fi
+
+echo ""
+echo "--- 14k. allowed_paths を複数行YAMLリスト形式で書いた場合、インライン配列形式と同じ判定結果になる（TASK-56 AC#1） ---"
+write_cfa_config_multiline "" "$(printf 'src/\ntests/')"
+cfa_out_k1="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
+cfa_exit_k1=$?
+if [ "$cfa_exit_k1" -eq 1 ] && printf '%s\n' "$cfa_out_k1" | grep -Fxq 'RESULT: VIOLATION' \
+    && printf '%s\n' "$cfa_out_k1" | grep -Fxq 'docs/readme.md'; then
+  pass "14k: 複数行YAMLリスト形式の allowed_paths の範囲外の変更ファイルがあるとき、RESULT: VIOLATION"
+else
+  fail "14k: 期待した結果と異なる（exit ${cfa_exit_k1}）:
+$cfa_out_k1"
+fi
+cfa_out_k2="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "tests/b.txt" 2>&1)"
+cfa_exit_k2=$?
+if [ "$cfa_exit_k2" -eq 0 ] && printf '%s\n' "$cfa_out_k2" | grep -Fxq 'RESULT: OK'; then
+  pass "14k: 複数行YAMLリスト形式の allowed_paths の範囲内のみのとき、RESULT: OK"
+else
+  fail "14k: 期待した結果と異なる（exit ${cfa_exit_k2}）:
+$cfa_out_k2"
+fi
+
+echo ""
+echo "--- 14l. forbidden_paths が複数行YAMLリスト形式かつ空（次行に \"-\" 項目が続かない）のとき、制限なし（OK）になる ---"
+cat >"$CFA_CONFIG" <<'EOF'
+improvement_loop:
+  forbidden_paths:
+  allowed_paths: []
+EOF
+cfa_out_l="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "secrets/x.txt" 2>&1)"
+cfa_exit_l=$?
+if [ "$cfa_exit_l" -eq 0 ] && printf '%s\n' "$cfa_out_l" | grep -Fxq 'RESULT: OK'; then
+  pass "14l: forbidden_paths: の後に複数行リスト項目が続かないとき、キー自体が無い場合と同様に RESULT: OK"
+else
+  fail "14l: 期待した結果と異なる（exit ${cfa_exit_l}）:
+$cfa_out_l"
+fi
+
+echo ""
+echo "--- 14m. forbidden_paths の値が配列でもスカラーでもない壊れたYAML/サポート対象外の記法のとき、RESULT: ERROR（exit 2）になる（TASK-56 AC#3） ---"
+cat >"$CFA_CONFIG" <<'EOF'
+improvement_loop:
+  forbidden_paths: secrets/
+  allowed_paths: []
+EOF
+cfa_out_m="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "secrets/x.txt" 2>&1)"
+cfa_exit_m=$?
+if [ "$cfa_exit_m" -eq 2 ] && printf '%s\n' "$cfa_out_m" | grep -Fxq 'RESULT: ERROR'; then
+  pass "14m: forbidden_paths がサポート対象外の記法（インライン配列でも複数行YAMLリストでもない）のとき、RESULT: ERROR（exit 2）（TASK-56 AC#3）"
+else
+  fail "14m: 期待した結果と異なる（exit ${cfa_exit_m}）:
+$cfa_out_m"
+fi
+
+# 後片付け: write_cfa_config で使う想定のインライン配列形式に戻しておく
+# （このファイル内で以降のテストが追加された場合の事故を防ぐ）。
+write_cfa_config '[]' '[]'
 
 finish_tests
