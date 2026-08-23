@@ -258,9 +258,25 @@ ensure_config_my_yml_keys() {
   CREATED+=(".backlog/config.my.yml (不足していたキーを追加: ${missing_keys[*]})")
 }
 
-# realpath があればそれを使う。無い環境向けのフォールバックも用意する
-# （シンボリックリンクの多段解決はしないが、対象は最終的に絶対パスの実体に還元される）。
-resolve_path() {
+# ---- 0. このスクリプト自身の場所から、配布元リポジトリのルートを解決する ----
+# install.zsh が $HOME/.local/bin にシンボリックリンクを張る運用のため、
+# BASH_SOURCE をそのまま使うとリンク先ではなくリンク自身の場所（~/.local/bin）を
+# 基準にしてしまう。シンボリックリンクを解決してから使う必要がある。
+#
+# 注意（TASK-18）: resolve_path() の唯一の定義は bin/lib/resolve_path.sh に
+# あり、本来はそれを source して使う（後述）。しかしこのブートストラップの
+# 1回だけは、その bin/lib/resolve_path.sh を source できない。symlink 経由
+# で実行された場合、この時点ではまだ自分の実体の場所（例: ~/.local/bin。
+# 単一ファイルの symlink のみが置かれ、隣に lib/ は無い）しか分かっておらず、
+# bin/lib/resolve_path.sh を source するための正しいパス（配布元リポジトリの
+# ルート）はまだ求まっていない。つまり「symlink を解決してリポジトリの場所を
+# 知る」ためにこそこのロジックが要るのに、それを外部ファイルの source に
+# 頼ると、その外部ファイルの場所自体が symlink 解決前には分からないという
+# 循環になる。そのためこの1箇所だけ、同じフォールバック判定のコピーを
+# ブートストラップ専用の別名関数として残す。以降の呼び出し（本体側の
+# resolve_path、シンボリックリンク解決の再検証で使用）は、ここでリポジトリの
+# ルートが判明した後に bin/lib/resolve_path.sh を source した単一の定義を使う。
+_bootstrap_resolve_own_path() {
   if command -v realpath >/dev/null 2>&1; then
     realpath "$1"
   elif readlink -f "$1" >/dev/null 2>&1; then
@@ -272,16 +288,16 @@ resolve_path() {
     printf '%s/%s\n' "$dir" "$base"
   fi
 }
-
-# ---- 0. このスクリプト自身の場所から、配布元リポジトリのルートを解決する ----
-# install.zsh が $HOME/.local/bin にシンボリックリンクを張る運用のため、
-# BASH_SOURCE をそのまま使うとリンク先ではなくリンク自身の場所（~/.local/bin）を
-# 基準にしてしまう。resolve_path でシンボリックリンクを解決してから使う。
-SCRIPT_SOURCE="$(resolve_path "${BASH_SOURCE[0]}")"
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 SOURCE_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_SKILLS_DIR="$SOURCE_REPO_ROOT/claude-skills"
 SOURCE_CONFIG_FILE="$SOURCE_REPO_ROOT/backlogmd-custom-config/config.my.yml"
+
+# resolve_path() の唯一の定義を source する。以降（シンボリックリンクの
+# 既存リンク先が期待通りか検証する箇所）はここから供給される定義を使う。
+# shellcheck source=lib/resolve_path.sh
+source "$SCRIPT_DIR/lib/resolve_path.sh"
 
 if [ ! -d "$SOURCE_SKILLS_DIR" ]; then
   err "配布元の claude-skills ディレクトリが見つからない: $SOURCE_SKILLS_DIR"
