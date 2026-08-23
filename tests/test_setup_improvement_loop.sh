@@ -496,7 +496,7 @@ if grep -Fq '  auto_merge_reviewed: false' "$migration_config"; then
 else
   fail "欠けていたキー auto_merge_reviewed が補われなかった"
 fi
-if grep -Fq '  # Reviewed になったタスクを dispatch が main に自動マージするかどうか。' "$migration_config"; then
+if grep -Fq '  # Approved になったタスクを dispatch が main に自動マージするかどうか。' "$migration_config"; then
   pass "補われた auto_merge_reviewed にテンプレート側のコメントが付いている"
 else
   fail "補われた auto_merge_reviewed にテンプレート側のコメントが付いていない"
