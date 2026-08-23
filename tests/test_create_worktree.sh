@@ -183,6 +183,64 @@ else
 $(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
 fi
 
+# ---- TASK-55 回帰: リポジトリのパスに半角スペースを含む場合でも、
+# 同一 task-id での2回目の実行が冪等に成功する ----
+# git worktree list --porcelain のパース（既存ワークツリーの割り当てブランチ
+# 検出）が awk のデフォルトフィールド分割（$2）に頼っていると、パスに
+# 半角スペースを含む場合に2語目以降が切り捨てられ、2回目の実行が
+# 「ワークツリーが既に別の内容で存在する」エラー（exit 1）に誤って落ちる
+# （TASK-55）。リポジトリ名自体に半角スペースを含む構成で再現する。
+TMP_CW_SPACE_PARENT="$(mktemp -d)"
+TMP_CW_SPACE_PARENT="$(cd "$TMP_CW_SPACE_PARENT" && pwd -P)"
+TMP_CW_SPACE_REPO="$TMP_CW_SPACE_PARENT/il space repo"
+mkdir -p "$TMP_CW_SPACE_REPO"
+register_tmp_cleanup "$TMP_CW_SPACE_PARENT"
+
+(cd "$TMP_CW_SPACE_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+
+CW_SPACE_TASK_ID="task-66-space-path-idempotency"
+CW_SPACE_EXPECTED_WORKTREE_DIR="$TMP_CW_SPACE_REPO/.worktree/$(basename "$TMP_CW_SPACE_REPO")/$CW_SPACE_TASK_ID"
+CW_SPACE_EXPECTED_BRANCH="improvement/$CW_SPACE_TASK_ID"
+
+cw_space_output1="$(cd "$TMP_CW_SPACE_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_SPACE_TASK_ID" 2>&1)"
+cw_space_exit1=$?
+if [ "$cw_space_exit1" -eq 0 ]; then
+  pass "パスに半角スペースを含むリポジトリでの1回目の claude-skills/improvement-dispatch/scripts/create-worktree 実行が成功する（exit 0）（TASK-55 回帰）"
+else
+  fail "パスに半角スペースを含むリポジトリでの1回目の実行が失敗した（exit ${cw_space_exit1}）（TASK-55 回帰）:
+$cw_space_output1"
+fi
+
+if [ -d "$CW_SPACE_EXPECTED_WORKTREE_DIR" ]; then
+  pass "パスに半角スペースを含むリポジトリで想定パスにワークツリーが作成される（TASK-55 回帰）"
+else
+  fail "パスに半角スペースを含むリポジトリで想定パスにワークツリーが作成されていない: $CW_SPACE_EXPECTED_WORKTREE_DIR（TASK-55 回帰）"
+fi
+
+cw_space_output2="$(cd "$TMP_CW_SPACE_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_SPACE_TASK_ID" 2>&1)"
+cw_space_exit2=$?
+if [ "$cw_space_exit2" -eq 0 ]; then
+  pass "パスに半角スペースを含むリポジトリで同一 task-id の2回目の実行が成功する（exit 0、AC#1）"
+else
+  fail "パスに半角スペースを含むリポジトリで2回目の実行が失敗した（exit ${cw_space_exit2}、AC#1）:
+$cw_space_output2"
+fi
+
+if printf '%s\n' "$cw_space_output2" | grep -Fxq "WORKTREE_DIR=$CW_SPACE_EXPECTED_WORKTREE_DIR" && \
+   printf '%s\n' "$cw_space_output2" | grep -Fxq "BRANCH=$CW_SPACE_EXPECTED_BRANCH"; then
+  pass "パスに半角スペースを含むリポジトリで2回目の実行でも既存のワークツリー/ブランチが再利用される（AC#1）"
+else
+  fail "パスに半角スペースを含むリポジトリで2回目の実行時に WORKTREE_DIR/BRANCH の出力が変わった（AC#1）:
+$cw_space_output2"
+fi
+
+cw_space_worktree_count="$(git -C "$TMP_CW_SPACE_REPO" worktree list --porcelain | grep -Fxc "worktree $CW_SPACE_EXPECTED_WORKTREE_DIR")"
+if [ "$cw_space_worktree_count" = "1" ]; then
+  pass "パスに半角スペースを含むリポジトリで2回目の実行後もワークツリーが重複登録されていない（AC#1）"
+else
+  fail "パスに半角スペースを含むリポジトリで2回目の実行後、ワークツリーが重複登録されている（${cw_space_worktree_count} 件）（AC#1）"
+fi
+
 # ---- 復旧シナリオ: ワークツリーのディレクトリだけ消え、ブランチは残っている
 # 場合、新規作成せず既存ブランチを割り当てて再作成する ----
 rm -rf "$CW_EXPECTED_WORKTREE_DIR"
