@@ -41,3 +41,15 @@ https://creators.bengo4.com/entry/2026/07/22/095159
 ## 運用
 
 個人でローカルで運用する場合、関連ファイルは全て`.git/info/exclude`に登録されているため、リポジトリを汚染することなく改善ループを行うことができる。
+
+## このリポジトリ自身の開発（pre-commit フック）
+
+このリポジトリ（improvement-loop 自身）を開発する人向けの設定。`bin/setup-improvement-loop`や`install.zsh`が配布する対象には含まれない。
+
+`tests/run.sh`を`git commit`時に自動実行し、失敗時はコミットをブロックするフックを`githooks/pre-commit`として用意している。`.git/hooks/`は git 管理外のため、このリポジトリを clone した人が最初に一度だけ以下を実行して有効化する。
+
+```sh
+git config core.hooksPath githooks
+```
+
+有効化すると、以降このリポジトリで行う`git commit`のたびに`tests/run.sh`が実行され、FAILがあればコミットが中断される。GitHub Actions等のCIはこのリポジトリでは対象外とする。

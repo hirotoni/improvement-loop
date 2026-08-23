@@ -25,6 +25,7 @@ CREATE_WORKTREE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/cr
 MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/merge-reviewed-branch"
 SELECT_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/select-next-task"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
+PRECOMMIT_HOOK="$REPO_ROOT/githooks/pre-commit"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
 
@@ -151,6 +152,13 @@ else
 fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
+if bash -n "$PRECOMMIT_HOOK" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n githooks/pre-commit"
+else
+  fail "bash -n githooks/pre-commit: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
 if command -v shellcheck >/dev/null 2>&1; then
   # bin/setup-improvement-loop・claude-skills/improvement-dispatch/scripts/create-worktree・
   # claude-skills/improvement-dispatch/scripts/merge-reviewed-branch・
@@ -181,6 +189,12 @@ if command -v shellcheck >/dev/null 2>&1; then
     pass "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task"
   else
     fail "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$PRECOMMIT_HOOK"; then
+    pass "shellcheck githooks/pre-commit"
+  else
+    fail "shellcheck githooks/pre-commit (指摘あり。上の出力を参照)"
   fi
 
   # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
@@ -1275,6 +1289,93 @@ if grep -Fxq ".worktree-custom" "$TMP_CW_BASEDIR_REPO/.git/info/exclude" 2>/dev/
   pass "リポジトリ内を指す worktree_base_dir が .git/info/exclude に追記される"
 else
   fail "worktree_base_dir（.worktree-custom）が .git/info/exclude に追記されていない"
+fi
+
+echo ""
+echo "=== 11. githooks/pre-commit の動作確認 ==="
+# TASK-17: tests/run.sh を pre-commit フックから自動実行し、FAIL 時はコミットを
+# ブロックする（受入基準 #1・#3）。githooks/pre-commit 自体は
+# `git rev-parse --show-toplevel` で解決したリポジトリルート直下の
+# tests/run.sh を実行するだけの薄いラッパーなので、一時リポジトリの直下に
+# tests/run.sh という名前でスタブを置けば、実運用と同じ経路
+# （core.hooksPath 経由のフック起動 → リポジトリルートの tests/run.sh 実行）
+# を保ったまま、外部依存無しに高速に動作確認できる。
+
+if [ ! -f "$PRECOMMIT_HOOK" ]; then
+  fail "githooks/pre-commit が存在しない: $PRECOMMIT_HOOK"
+elif [ ! -x "$PRECOMMIT_HOOK" ]; then
+  fail "githooks/pre-commit に実行ビットが無い"
+else
+  pass "githooks/pre-commit が実行可能ファイルとして存在する"
+fi
+
+TMP_HOOK_REPO="$(mktemp -d)"
+cleanup_hook_repo() {
+  rm -rf "$TMP_HOOK_REPO"
+}
+trap 'cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_HOOK_REPO" && git init -q -b main)
+git -C "$TMP_HOOK_REPO" config user.email "test@example.com"
+git -C "$TMP_HOOK_REPO" config user.name "Test"
+
+mkdir -p "$TMP_HOOK_REPO/githooks"
+cp "$PRECOMMIT_HOOK" "$TMP_HOOK_REPO/githooks/pre-commit"
+chmod +x "$TMP_HOOK_REPO/githooks/pre-commit"
+git -C "$TMP_HOOK_REPO" config core.hooksPath githooks
+
+mkdir -p "$TMP_HOOK_REPO/tests"
+
+# ---- FAIL するスタブ: コミットが阻止されることを確認する ----
+cat > "$TMP_HOOK_REPO/tests/run.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "PASS: 0, FAIL: 1, SKIP: 0"
+exit 1
+STUB
+chmod +x "$TMP_HOOK_REPO/tests/run.sh"
+
+git -C "$TMP_HOOK_REPO" add -A
+head_before_fail="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+hook_fail_output="$(cd "$TMP_HOOK_REPO" && git commit -q -m "should be blocked" 2>&1)"
+hook_fail_exit=$?
+head_after_fail="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+
+if [ "$hook_fail_exit" -ne 0 ]; then
+  pass "tests/run.sh が FAIL するとき、git commit が非ゼロで終了する（pre-commit フックがブロックする）"
+else
+  fail "tests/run.sh が FAIL しても git commit が成功してしまった（exit 0）: $hook_fail_output"
+fi
+
+if [ "$head_before_fail" = "$head_after_fail" ]; then
+  pass "tests/run.sh が FAIL するとき、コミットが実際には作成されない（HEAD が進まない）"
+else
+  fail "tests/run.sh が FAIL したのにコミットが作成されてしまった（HEAD が進んだ）"
+fi
+
+# ---- PASS するスタブ: コミットが成功することを確認する ----
+cat > "$TMP_HOOK_REPO/tests/run.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "PASS: 1, FAIL: 0, SKIP: 0"
+exit 0
+STUB
+chmod +x "$TMP_HOOK_REPO/tests/run.sh"
+
+git -C "$TMP_HOOK_REPO" add -A
+head_before_pass="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+hook_pass_output="$(cd "$TMP_HOOK_REPO" && git commit -q -m "should succeed" 2>&1)"
+hook_pass_exit=$?
+head_after_pass="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+
+if [ "$hook_pass_exit" -eq 0 ]; then
+  pass "tests/run.sh が成功するとき、git commit が成功する（exit 0）"
+else
+  fail "tests/run.sh が成功しても git commit が失敗した: $hook_pass_output"
+fi
+
+if [ "$head_before_pass" != "$head_after_pass" ] && [ "$head_after_pass" != "NONE" ]; then
+  pass "tests/run.sh が成功するとき、コミットが実際に作成される（HEAD が進む）"
+else
+  fail "tests/run.sh が成功したのにコミットが作成されなかった（HEAD が進んでいない）"
 fi
 
 echo ""
