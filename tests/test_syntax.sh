@@ -25,7 +25,8 @@ echo "=== 1. 構文チェック ==="
 # select-next-task の直接呼び出し等）でも同じ変数を使い回すため）。
 #
 # 各要素はパイプ区切りの1行で「<パス変数>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
-# - 追加フラグが必要なのは bin/setup-improvement-loop と install.zsh のみ:
+# - 追加フラグが必要なのは bin/setup-improvement-loop・install.zsh・
+#   bin/lib/resolve_path.sh の3つ:
 #   -x -P SCRIPTDIR は、TASK-18 で bin/setup-improvement-loop が
 #   bin/lib/resolve_path.sh を source するようになったため、source 先を実際に
 #   追って検査させる指定（無いと常に SC1091 で誤って失敗する）。install.zsh も
@@ -33,9 +34,19 @@ echo "=== 1. 構文チェック ==="
 # - install.zsh だけ hard failure にしない（4フィールド目が true）。zsh 専用
 #   スクリプトで、shellcheck は zsh を直接サポートしないため（下のshellcheck
 #   ループのコメントを参照）。
+# - bin/lib/resolve_path.sh は bash/zsh 両方から source される前提でシバンを
+#   持たない（同ファイル冒頭コメント参照）。そのため shellcheck にシバン無し
+#   のまま渡すと、対象シェルが不明として SC2148 (error) になり必ず失敗する
+#   （resolve_path.sh 自体にシバンや shellcheck ディレクティブを足すのは対象
+#   スクリプトへの変更になるため、CHECK_SCRIPTS 側のフラグだけで解決する）。
+#   `--shell=bash` を渡すことで、実際に bash からも source される実態に沿って
+#   解析させ、クリーンに通ることを確認済み。TASK-18 で参照されている install.zsh/
+#   bin/setup-improvement-loop の `-x -P SCRIPTDIR` 経由の間接チェックとは独立に、
+#   ここでは resolve_path.sh 自身を直接の対象として shellcheck にかける。
 CHECK_SCRIPTS=(
   "$INSTALL_SCRIPT|install.zsh|-x -P SCRIPTDIR|true"
   "$SETUP_SCRIPT|bin/setup-improvement-loop|-x -P SCRIPTDIR|false"
+  "$RESOLVE_PATH_SCRIPT|bin/lib/resolve_path.sh|--shell=bash|false"
   "$CREATE_WORKTREE_SCRIPT|claude-skills/improvement-dispatch/scripts/create-worktree||false"
   "$MERGE_SCRIPT|claude-skills/improvement-dispatch/scripts/merge-reviewed-branch||false"
   "$SELECT_SCRIPT|claude-skills/improvement-dispatch/scripts/select-next-task||false"
