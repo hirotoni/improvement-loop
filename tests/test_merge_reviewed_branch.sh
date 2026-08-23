@@ -247,4 +247,85 @@ else
   fail "7e: ブランチ削除が失敗するはずが、作業ブランチが削除されている（-D 相当の強制削除が疑われる）"
 fi
 
+echo ""
+echo "--- 7f. マージ済み（main との差分が無い）だが片付けが未完了の状態からの再実行で片付けが再試行される（TASK-57） ---"
+# 7e と同様に、まず1回目の呼び出しでワークツリーを dirty にしたまま
+# マージを成功させ、片付け（worktree remove・branch -d）を失敗させる。
+# その後、ワークツリーを clean な状態に戻してから同じブランチに対して
+# もう一度スクリプトを呼び出す。main との差分は既に無い
+# （PRECONDITION_NOT_MET）が、対応するワークツリー・ブランチの片付けが
+# まだ残っているため、この2回目の呼び出しでその片付けだけが再試行され
+# 成功することを確認する（AC#1）。
+TMP_MERGE_RECOVER="$(mktemp -d)"
+register_tmp_cleanup "$TMP_MERGE_RECOVER" "$TMP_MERGE_RECOVER-wt"
+
+(cd "$TMP_MERGE_RECOVER" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_RECOVER" && git worktree add -q -b feature-recover "$TMP_MERGE_RECOVER-wt" main)
+(cd "$TMP_MERGE_RECOVER-wt" && git commit -q --allow-empty -m "feature recover work")
+echo "uncommitted in worktree" > "$TMP_MERGE_RECOVER-wt/uncommitted.txt"
+
+# 1回目: マージは成功するが、ワークツリーが dirty なため片付けは失敗する
+# （7e と同じ状況を作るだけで、ここではアサーションしない）。
+(cd "$TMP_MERGE_RECOVER" && "$MERGE_SCRIPT" feature-recover >/dev/null 2>&1)
+
+if [ -d "$TMP_MERGE_RECOVER-wt" ] && [ -n "$(cd "$TMP_MERGE_RECOVER" && git branch --list feature-recover)" ]; then
+  pass "7f: 前提として、1回目の呼び出し後もワークツリー・ブランチが片付かず残っている"
+else
+  fail "7f: 前提が崩れている（1回目の呼び出し後にワークツリー・ブランチが残っていない）"
+fi
+
+# ワークツリーを clean にする（人間が dirty なファイルを整理した状況を模する）。
+rm -f "$TMP_MERGE_RECOVER-wt/uncommitted.txt"
+
+merge_recover_head_before="$(cd "$TMP_MERGE_RECOVER" && git rev-parse HEAD)"
+merge_recover_output="$(cd "$TMP_MERGE_RECOVER" && "$MERGE_SCRIPT" feature-recover 2>&1)"
+merge_recover_exit=$?
+merge_recover_head_after="$(cd "$TMP_MERGE_RECOVER" && git rev-parse HEAD)"
+
+if [ "$merge_recover_exit" -eq 1 ]; then
+  pass "7f: 2回目の呼び出し（差分無し）は終了ステータス 1 (PRECONDITION_NOT_MET) のまま変わらない（AC#2）"
+else
+  fail "7f: 2回目の呼び出しの終了ステータスが 1 でない（${merge_recover_exit}）: $merge_recover_output"
+fi
+if grep -Fq "RESULT: PRECONDITION_NOT_MET" <<<"$merge_recover_output"; then
+  pass "7f: 出力に RESULT: PRECONDITION_NOT_MET が含まれる（AC#2）"
+else
+  fail "7f: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_recover_output"
+fi
+if [ "$merge_recover_head_before" = "$merge_recover_head_after" ]; then
+  pass "7f: 2回目の呼び出しで main の HEAD が動いていない（新規マージは発生していない）"
+else
+  fail "7f: 2回目の呼び出しで main の HEAD が動いている（新規マージが発生してしまっている）"
+fi
+if [ -d "$TMP_MERGE_RECOVER-wt" ]; then
+  fail "7f: 片付けが未完了の状態から再実行しても、対応するワークツリーが片付けられない（AC#1）"
+else
+  pass "7f: 片付けが未完了の状態から再実行すると、対応するワークツリーの片付けが再試行され成功する（AC#1）"
+fi
+if [ -z "$(cd "$TMP_MERGE_RECOVER" && git branch --list feature-recover)" ]; then
+  pass "7f: 片付けが未完了の状態から再実行すると、対応する作業ブランチの削除が再試行され成功する（AC#1）"
+else
+  fail "7f: 片付けが未完了の状態から再実行しても、対応する作業ブランチが削除されない（AC#1）"
+fi
+
+echo ""
+echo "--- 7g. 片付け済みの通常の PRECONDITION_NOT_MET（対象ブランチが存在しない）は挙動が変わらない（AC#2） ---"
+TMP_MERGE_NOBRANCH="$(mktemp -d)"
+register_tmp_cleanup "$TMP_MERGE_NOBRANCH"
+
+(cd "$TMP_MERGE_NOBRANCH" && git init -q -b main && git commit -q --allow-empty -m init)
+
+merge_nobranch_output="$(cd "$TMP_MERGE_NOBRANCH" && "$MERGE_SCRIPT" feature-does-not-exist 2>&1)"
+merge_nobranch_exit=$?
+if [ "$merge_nobranch_exit" -eq 1 ]; then
+  pass "7g: 対象ブランチが存在しない場合、終了ステータス 1 (PRECONDITION_NOT_MET) を返す（AC#2）"
+else
+  fail "7g: 対象ブランチが存在しない場合の終了ステータスが 1 でない（${merge_nobranch_exit}）: $merge_nobranch_output"
+fi
+if grep -Fq "RESULT: PRECONDITION_NOT_MET" <<<"$merge_nobranch_output"; then
+  pass "7g: 出力に RESULT: PRECONDITION_NOT_MET が含まれる（AC#2）"
+else
+  fail "7g: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_nobranch_output"
+fi
+
 finish_tests
