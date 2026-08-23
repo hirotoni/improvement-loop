@@ -42,6 +42,7 @@ CHECK_SCRIPTS=(
   "$CHECK_HANDOFF_SCRIPT|claude-skills/improvement-work/scripts/check-handoff||false"
   "$PRECOMMIT_HOOK|githooks/pre-commit||false"
   "$CHECK_RECOVERY_SCRIPT|claude-skills/improvement-dispatch/scripts/check-progress-recovery||false"
+  "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths||false"
 )
 
 SYNTAX_ERR_FILE="/tmp/tests-run-sh-syntax-err.$$"

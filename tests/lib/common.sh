@@ -30,6 +30,7 @@ MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/merge-review
 SELECT_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/select-next-task"
 CHECK_RECOVERY_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/check-progress-recovery"
 CHECK_HANDOFF_SCRIPT="$REPO_ROOT/claude-skills/improvement-work/scripts/check-handoff"
+CHECK_FORBIDDEN_ALLOWED_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 PRECOMMIT_HOOK="$REPO_ROOT/githooks/pre-commit"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"

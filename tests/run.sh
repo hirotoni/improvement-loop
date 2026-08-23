@@ -33,6 +33,7 @@ TEST_FILES=(
   "test_pre_commit_hook.sh"
   "test_check_handoff.sh"
   "test_check_progress_recovery.sh"
+  "test_check_forbidden_allowed_paths.sh"
 )
 
 TOTAL_PASS=0

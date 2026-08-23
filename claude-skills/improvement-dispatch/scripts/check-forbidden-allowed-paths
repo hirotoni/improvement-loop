@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths
+#
+# .backlog/config.my.yml の improvement_loop.forbidden_paths /
+# improvement_loop.allowed_paths と、変更されたファイルパスの一覧を突き合わせ、
+# 違反の有無を決定論的に判定する。claude-skills/improvement-dispatch/SKILL.md
+# 36-41行目・253行目にはこの設定の仕様が書かれているが、これまでは
+# 「AIエージェントへの指示としてのみ機能し、変更を機械的に拒否・検知する
+# 仕組みではない」ものだった（強制の実装はTASK-44の範囲外と明記されている）。
+# このスクリプトは、その機械的な突き合わせ判定だけを切り出したものであり、
+# 判定結果をどう使うか（差し戻す・警告する等、improvement-work・
+# improvement-dispatch への組み込み）は別タスクの範囲である。
+#
+# 使い方:
+#   claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths \
+#     <changed-file>...
+#
+#   例（変更ファイル一覧を git diff から渡す）:
+#     claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths \
+#       $(git diff --name-only main...HEAD)
+#
+# 引数:
+#   <changed-file>...  変更されたファイルパス（リポジトリルート相対、
+#                       git diff --name-only と同じ形式）を0個以上並べる。
+#                       各パスの先頭の "./" は取り除いてから判定する。0個の
+#                       場合は突き合わせ対象が無いため常に無違反（RESULT: OK）
+#                       で終わる。
+#
+# 前提: カレントディレクトリが対象リポジトリの中であること（git
+# rev-parse --show-toplevel で解決できること）。.backlog/config.my.yml は
+# そのリポジトリルート直下から読む（ワークツリーの場合は .backlog
+# シンボリックリンク経由でメインの作業木の実体ファイルを指すため、
+# ワークツリー内から実行しても同じ設定を読む）。
+#
+# 判定ロジック（.backlog/config.my.yml の forbidden_paths / allowed_paths の
+# コメントに記載されている仕様どおり）:
+#   - forbidden_paths が1件以上あり、変更ファイルがそのいずれかに前方一致
+#     すれば違反。
+#   - allowed_paths が1件以上あり、変更ファイルがそのいずれにも前方一致
+#     しなければ違反。
+#   - 両方設定されている場合は上記の両方の条件を適用する
+#     （＝「allowed_paths の範囲内、かつ forbidden_paths に無いパス」だけを
+#     許可する）。
+#   - forbidden_paths / allowed_paths が両方とも空、キー自体が無い、または
+#     .backlog/config.my.yml 自体が無い場合は、常に許可（違反なし）とする。
+#   - forbidden_paths / allowed_paths の値は、config.my.yml のコメントに
+#     従いインライン配列（例: ["secrets/", "vendor/"]）としてのみ書かれる
+#     前提でパースする。複数行のYAMLリスト記法はサポート対象外
+#     （config.my.yml のキー補完処理が単一行のキー検出のみに対応している
+#     ことと同じ前提を踏襲する）。
+#
+# 出力: 標準出力に次の行を出す（最終行が RESULT）。
+#   RESULT: OK         -> 違反なし
+#   RESULT: VIOLATION  -> 1件以上違反あり。その手前に以下を出す:
+#     VIOLATION_COUNT: <件数>
+#     VIOLATING_FILES:
+#     <違反ファイルパス>（1行1件、件数分）
+#   RESULT: ERROR      -> 対象リポジトリでない等の環境不備
+#                         （詳細は標準エラーに出す）
+#
+# 終了ステータス: 0=OK, 1=VIOLATION, 2=ERROR
+#
+# 責務外: 判定結果に基づく実際の対応（差し戻す・警告する・引き渡しプロンプトに
+# 反映する等）はこのスクリプトの外（呼び出し元）が行う。backlog タスクの
+# 状態変更もこのスクリプトの範囲外。
+
+set -uo pipefail
+
+err() {
+  printf 'エラー: %s\n' "$*" >&2
+}
+
+result_error() {
+  err "$1"
+  printf 'RESULT: ERROR\n'
+  exit 2
+}
+
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
+  result_error "カレントディレクトリが git リポジトリの中ではない: $REPO_ROOT"
+fi
+
+CONFIG_FILE="$REPO_ROOT/.backlog/config.my.yml"
+
+# $1 = 配列要素の生文字列（前後に空白・引用符を含みうる）。前後の空白と、
+# それを囲む引用符（シングル/ダブル、両端が対になっている場合のみ）を
+# 取り除いた結果を標準出力に出す。sed 等の外部コマンドを使わず純粋な
+# bash 展開のみで行う（local宣言とコマンド置換代入を同時に行うのを避ける
+# 規約（SC2155 対策）に、この関数自体も従っている）。
+trim_and_unquote() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  if [ "${#s}" -ge 2 ]; then
+    case "$s" in
+      \"*\") s="${s:1:${#s}-2}" ;;
+      \'*\') s="${s:1:${#s}-2}" ;;
+    esac
+  fi
+  printf '%s' "$s"
+}
+
+# $1 = YAML のキー名（forbidden_paths | allowed_paths）。CONFIG_FILE から
+# 該当キーのインライン配列を読み、要素を1行1件で標準出力に出す。キーが無い、
+# 空配列、または CONFIG_FILE 自体が無い場合は何も出力しない
+# （＝呼び出し側で空配列として扱われる）。
+parse_path_list() {
+  local key="$1"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 0
+  fi
+  local line
+  line="$(grep -m1 -E "^[[:space:]]*${key}:" "$CONFIG_FILE" || true)"
+  if [ -z "$line" ]; then
+    return 0
+  fi
+  local rest="${line#*:}"
+  rest="${rest%%#*}"
+  if [[ ! "$rest" =~ \[(.*)\] ]]; then
+    return 0
+  fi
+  local inner="${BASH_REMATCH[1]}"
+  if [ -z "${inner//[[:space:]]/}" ]; then
+    return 0
+  fi
+  local items=()
+  IFS=',' read -ra items <<<"$inner"
+  local raw_item trimmed
+  for raw_item in "${items[@]}"; do
+    trimmed="$(trim_and_unquote "$raw_item")"
+    if [ -n "$trimmed" ]; then
+      printf '%s\n' "$trimmed"
+    fi
+  done
+}
+
+FORBIDDEN=()
+while IFS= read -r p; do
+  FORBIDDEN+=("$p")
+done < <(parse_path_list forbidden_paths)
+
+ALLOWED=()
+while IFS= read -r p; do
+  ALLOWED+=("$p")
+done < <(parse_path_list allowed_paths)
+
+# $1 = 判定対象パス、以降 = プレフィックスの列。いずれか1つにでも前方一致
+# すれば真を返す。
+matches_any_prefix() {
+  local path="$1"
+  shift
+  local prefix
+  for prefix in "$@"; do
+    case "$path" in
+      "$prefix"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+VIOLATING_FILES=()
+for raw_file in "$@"; do
+  file="${raw_file#./}"
+  if [ -z "$file" ]; then
+    continue
+  fi
+  is_violation=0
+  if [ "${#FORBIDDEN[@]}" -gt 0 ] && matches_any_prefix "$file" "${FORBIDDEN[@]}"; then
+    is_violation=1
+  fi
+  if [ "$is_violation" -eq 0 ] && [ "${#ALLOWED[@]}" -gt 0 ] && ! matches_any_prefix "$file" "${ALLOWED[@]}"; then
+    is_violation=1
+  fi
+  if [ "$is_violation" -eq 1 ]; then
+    VIOLATING_FILES+=("$file")
+  fi
+done
+
+if [ "${#VIOLATING_FILES[@]}" -eq 0 ]; then
+  printf 'RESULT: OK\n'
+  exit 0
+fi
+
+printf 'VIOLATION_COUNT: %s\n' "${#VIOLATING_FILES[@]}"
+printf 'VIOLATING_FILES:\n'
+for f in "${VIOLATING_FILES[@]}"; do
+  printf '%s\n' "$f"
+done
+printf 'RESULT: VIOLATION\n'
+exit 1
