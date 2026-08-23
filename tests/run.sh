@@ -13,6 +13,9 @@
 #   3. 同じ一時リポジトリに対して再実行し、冪等性とユーザー所有ファイル保護を検証する。
 #   7. claude-skills/improvement-dispatch/scripts/select-next-task（improvement-dispatch 手順4の選定ロジック）の
 #      動作確認テスト（通常選定・ラベル除外・依存除外・各種GATED・NO_CANDIDATE）。
+#  11. claude-skills/improvement-dispatch/scripts/check-progress-recovery（improvement-dispatch 手順2-3の
+#      復旧診断ロジック）の動作確認テスト（既存ワークツリー再利用・ワークツリー
+#      作り直し・To Doへの差し戻しの3パターン、および引数の妥当性検証）。
 #
 # 1 件でも失敗すれば非ゼロで終了する。
 
@@ -24,6 +27,7 @@ SETUP_SCRIPT="$REPO_ROOT/bin/setup-improvement-loop"
 CREATE_WORKTREE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/create-worktree"
 MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/merge-reviewed-branch"
 SELECT_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/select-next-task"
+CHECK_RECOVERY_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/check-progress-recovery"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
@@ -151,6 +155,13 @@ else
 fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
+if bash -n "$CHECK_RECOVERY_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n claude-skills/improvement-dispatch/scripts/check-progress-recovery"
+else
+  fail "bash -n claude-skills/improvement-dispatch/scripts/check-progress-recovery: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
 if command -v shellcheck >/dev/null 2>&1; then
   # bin/setup-improvement-loop・claude-skills/improvement-dispatch/scripts/create-worktree・
   # claude-skills/improvement-dispatch/scripts/merge-reviewed-branch・
@@ -181,6 +192,12 @@ if command -v shellcheck >/dev/null 2>&1; then
     pass "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task"
   else
     fail "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$CHECK_RECOVERY_SCRIPT"; then
+    pass "shellcheck claude-skills/improvement-dispatch/scripts/check-progress-recovery"
+  else
+    fail "shellcheck claude-skills/improvement-dispatch/scripts/check-progress-recovery (指摘あり。上の出力を参照)"
   fi
 
   # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
@@ -1275,6 +1292,124 @@ if grep -Fxq ".worktree-custom" "$TMP_CW_BASEDIR_REPO/.git/info/exclude" 2>/dev/
   pass "リポジトリ内を指す worktree_base_dir が .git/info/exclude に追記される"
 else
   fail "worktree_base_dir（.worktree-custom）が .git/info/exclude に追記されていない"
+fi
+
+echo ""
+echo "=== 11. claude-skills/improvement-dispatch/scripts/check-progress-recovery の動作確認 ==="
+# improvement-dispatch 手順2-3（In Progress タスクの引き渡し先が失われたと
+# 確定した後の復旧診断）を切り出した claude-skills/improvement-dispatch/scripts/check-progress-recovery を、
+# 一時 git リポジトリに対して実際に実行して検証する（TASK-21 受入基準 #1-#3 に対応）。
+#   11a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH（AC#1）
+#   11b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH（AC#2）
+#   11c. ブランチが存在しない -> REVERT_TO_TODO（AC#3）
+#   11d. ブランチは存在するが新しいコミットが無い -> REVERT_TO_TODO（AC#3）
+#   11e. 引数の妥当性検証（引数不足・base_branch が解決できない）
+
+TMP_CR_REPO="$(mktemp -d)"
+# macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
+# claude-skills/improvement-dispatch/scripts/check-progress-recovery 内部の pwd -P による正規化後
+# （/private/var/...）と文字列比較が一致しない。ここでも同じ正規化をしておく。
+TMP_CR_REPO="$(cd "$TMP_CR_REPO" && pwd -P)"
+CR_WORKTREE_DIR="${TMP_CR_REPO}-wt"
+cleanup_cr_repo() {
+  rm -rf "$TMP_CR_REPO" "$CR_WORKTREE_DIR"
+}
+trap 'cleanup_cr_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_CR_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_CR_REPO" && git worktree add -q -b feature-recovery-a "$CR_WORKTREE_DIR" main)
+(cd "$CR_WORKTREE_DIR" && git commit -q --allow-empty -m "in-progress work")
+
+echo ""
+echo "--- 11a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH ---"
+cr_out_a="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a main 2>&1)"
+cr_exit_a=$?
+if [ "$cr_exit_a" -eq 0 ] && printf '%s\n' "$cr_out_a" | grep -Fxq 'RESULT: REUSE_WORKTREE_REDISPATCH'; then
+  pass "11a: ワークツリー・ブランチともに存在し新しいコミットがある場合、RESULT: REUSE_WORKTREE_REDISPATCH（exit 0）（AC#1）"
+else
+  fail "11a: 期待した結果と異なる（exit ${cr_exit_a}）:
+$cr_out_a"
+fi
+if printf '%s\n' "$cr_out_a" | grep -Fxq 'WORKTREE_EXISTS: true' \
+    && printf '%s\n' "$cr_out_a" | grep -Fxq 'BRANCH_EXISTS: true' \
+    && printf '%s\n' "$cr_out_a" | grep -Fxq 'NEW_COMMITS: 1'; then
+  pass "11a: WORKTREE_EXISTS/BRANCH_EXISTS/NEW_COMMITS の内訳が期待通り出力される"
+else
+  fail "11a: 診断内訳の出力が期待と異なる:
+$cr_out_a"
+fi
+
+echo ""
+echo "--- 11b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH ---"
+(cd "$TMP_CR_REPO" && git worktree remove "$CR_WORKTREE_DIR")
+cr_out_b="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a main 2>&1)"
+cr_exit_b=$?
+if [ "$cr_exit_b" -eq 1 ] && printf '%s\n' "$cr_out_b" | grep -Fxq 'RESULT: RECREATE_WORKTREE_REDISPATCH'; then
+  pass "11b: ワークツリーが無く、ブランチに新しいコミットがある場合、RESULT: RECREATE_WORKTREE_REDISPATCH（exit 1）（AC#2）"
+else
+  fail "11b: 期待した結果と異なる（exit ${cr_exit_b}）:
+$cr_out_b"
+fi
+if printf '%s\n' "$cr_out_b" | grep -Fxq 'WORKTREE_EXISTS: false' \
+    && printf '%s\n' "$cr_out_b" | grep -Fxq 'BRANCH_EXISTS: true'; then
+  pass "11b: WORKTREE_EXISTS: false / BRANCH_EXISTS: true が出力される"
+else
+  fail "11b: 診断内訳の出力が期待と異なる:
+$cr_out_b"
+fi
+
+echo ""
+echo "--- 11c. ブランチが存在しない -> REVERT_TO_TODO ---"
+cr_out_c="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" no-such-branch main 2>&1)"
+cr_exit_c=$?
+if [ "$cr_exit_c" -eq 2 ] && printf '%s\n' "$cr_out_c" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
+  pass "11c: ブランチが存在しない場合、RESULT: REVERT_TO_TODO（exit 2）（AC#3）"
+else
+  fail "11c: 期待した結果と異なる（exit ${cr_exit_c}）:
+$cr_out_c"
+fi
+if printf '%s\n' "$cr_out_c" | grep -Fxq 'BRANCH_EXISTS: false' \
+    && printf '%s\n' "$cr_out_c" | grep -Fxq 'NEW_COMMITS: N/A'; then
+  pass "11c: BRANCH_EXISTS: false / NEW_COMMITS: N/A が出力される"
+else
+  fail "11c: 診断内訳の出力が期待と異なる:
+$cr_out_c"
+fi
+
+echo ""
+echo "--- 11d. ブランチは存在するが base_branch から見て新しいコミットが無い -> REVERT_TO_TODO ---"
+(cd "$TMP_CR_REPO" && git branch feature-recovery-no-progress)
+cr_out_d="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-no-progress main 2>&1)"
+cr_exit_d=$?
+if [ "$cr_exit_d" -eq 2 ] && printf '%s\n' "$cr_out_d" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
+  pass "11d: ブランチはあるが新しいコミットが無い場合、RESULT: REVERT_TO_TODO（exit 2）（AC#3）"
+else
+  fail "11d: 期待した結果と異なる（exit ${cr_exit_d}）:
+$cr_out_d"
+fi
+if printf '%s\n' "$cr_out_d" | grep -Fxq 'BRANCH_EXISTS: true' \
+    && printf '%s\n' "$cr_out_d" | grep -Fxq 'NEW_COMMITS: 0'; then
+  pass "11d: BRANCH_EXISTS: true / NEW_COMMITS: 0 が出力される"
+else
+  fail "11d: 診断内訳の出力が期待と異なる:
+$cr_out_d"
+fi
+
+echo ""
+echo "--- 11e. 引数の妥当性検証 ---"
+if (cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a >/dev/null 2>&1); then
+  fail "11e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行してもエラーにならない"
+else
+  pass "11e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行するとエラーになる"
+fi
+
+cr_out_badbase="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a no-such-base 2>&1)"
+cr_exit_badbase=$?
+if [ "$cr_exit_badbase" -eq 3 ] && printf '%s\n' "$cr_out_badbase" | grep -Fxq 'RESULT: ERROR'; then
+  pass "11e: base_branch が解決できない場合、RESULT: ERROR（exit 3）"
+else
+  fail "11e: base_branch が解決できない場合の結果が期待と異なる（exit ${cr_exit_badbase}）:
+$cr_out_badbase"
 fi
 
 echo ""

@@ -103,10 +103,23 @@ backlog task view TASK-<n> --plain                       # 前回この手順で
 - 直近の記録があり、かつコミットハッシュと `git status --porcelain` の内容が完全に一致する（＝直近の観測から変化が無い）→ その記録の観測時刻からの経過時間を見る。
   - 経過が 30 分未満 → まだ「存在しない」と断定しない。記録は上書きせずそのまま残し、判断を持ち越して手順 7 に進む。
   - 経過が 30 分以上 → ここで初めて「サブエージェントが存在しない（前回のセッションが落ちた、中断された）」と確定し、復旧する。
-    1. `backlog task view TASK-<n> --plain` で notes と plan を読む。notes には引き渡し時のワークツリーのパスが残っているはずである。
-    2. `git worktree list` でそのワークツリーが残っているか確認する。残っていれば `git -C <ワークツリーのパス> log --oneline` で到達点を確認する。ワークツリーが無くなっていても、そのブランチ自体（`improvement/task-<n>-<スラッグ>`）は `git branch` の一覧に残る。`git worktree remove` はワークツリーのディレクトリを片付けるだけでブランチは削除しない。ブランチが残っていれば、メインの作業木から `git log <作業ブランチ> --oneline` で到達点を確認できる（ワークツリーに入る必要はない）。
-    3. 実装が途中まで進んでいるなら、その到達点を引き渡し情報に含めて再度引き渡す（手順 5）。ワークツリーが残っていればそのまま再利用する。無くなっていれば、まず `git worktree prune` で古い管理情報を掃除してから、既存の作業ブランチを起点にワークツリーを作り直す（手順 5 の「既存ブランチの再利用」分岐を使う）。
-    4. 何も進んでいないなら、`backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @dispatch` で戻す。ワークツリーが残っていれば `git worktree remove <ワークツリーのパス>` で片付ける。
+
+    1. `backlog task view TASK-<n> --plain` で notes と plan を読む。notes には引き渡し時のワークツリーのパス（`WORKTREE_DIR`）と作業ブランチ名（`BRANCH`）が残っているはずである。
+
+    2. 復旧診断（ワークツリー・ブランチの有無、デフォルトブランチから見て新しいコミットがあるかの判定）は `.claude/skills/improvement-dispatch/scripts/check-progress-recovery` に切り出されている。散文を読んで毎回 `git worktree list` や `git log` を手で組み立てない。メインの作業木（このディレクトリ）から実行する。
+
+       ```bash
+       .claude/skills/improvement-dispatch/scripts/check-progress-recovery <ワークツリーのパス> <作業ブランチ> <デフォルトブランチ>
+       ```
+
+       標準出力の最後の行 `RESULT: <値>` で結果を判別する（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
+
+       | `RESULT` | 意味 | dispatch が行うこと |
+       | --- | --- | --- |
+       | `REUSE_WORKTREE_REDISPATCH` | ワークツリー・ブランチともに存在し、デフォルトブランチから見て新しいコミットがある（＝実装が途中まで進んでいる） | 既存のワークツリーをそのまま再利用し、その到達点を引き渡し情報に含めて手順 5 で再度引き渡す。 |
+       | `RECREATE_WORKTREE_REDISPATCH` | ワークツリーは無いがブランチが存在し、新しいコミットがある | `git worktree prune` で古い管理情報を掃除した後、手順 5（`.claude/skills/improvement-dispatch/scripts/create-worktree`。ワークツリーは無くブランチだけ存在する場合、新規作成せず既存の作業ブランチを割り当てる）で作り直し、到達点を引き渡し情報に含めて再度引き渡す。 |
+       | `REVERT_TO_TODO` | ブランチが存在しない、またはデフォルトブランチから見て新しいコミットが無い（＝何も進んでいない） | `backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @dispatch` で戻す。出力の `WORKTREE_EXISTS: true` でワークツリーが残っていると分かれば `git worktree remove <ワークツリーのパス>` で片付ける。 |
+       | `ERROR` | 引数不正、対象リポジトリでない、デフォルトブランチが解決できない等 | 標準エラー出力の内容を確認する。 |
 
 この 30 分という目安の根拠は手順 7 の起動間隔である。手順 7 では、サブエージェント稼働中の次回起動を保険として 1800 秒以上後に、承認待ち・レビュー待ちで動けないときは 1200〜1800 秒後にそれぞれ設定する目安を定めている。1 回の起動間隔が概ね 20〜30 分であることを踏まえ、記録した観測から 30 分以上が経過していれば、その間に少なくとも 1 回以上は別の起動を挟んでいる（＝複数回の起動にわたって同じ状態を確認した）とみなせる。
 
