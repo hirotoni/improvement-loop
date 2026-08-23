@@ -78,6 +78,40 @@ else
   fail ".git/info/exclude に .backlog が追記されていない"
 fi
 
+# ---- TASK-40 AC#1: 新規ワークツリー作成時に、割り当てタスクIDと実行時刻を
+# 含む占有記録（.worktree-occupancy）が作成される ----
+CW_OCCUPANCY_FILE="$CW_EXPECTED_WORKTREE_DIR/.worktree-occupancy"
+if [ -f "$CW_OCCUPANCY_FILE" ]; then
+  pass "占有記録ファイル(.worktree-occupancy)がワークツリー直下に作成される（AC#1）"
+else
+  fail "占有記録ファイルが作成されていない: $CW_OCCUPANCY_FILE"
+fi
+
+if grep -Fxq "TASK_ID=$CW_TASK_ID" "$CW_OCCUPANCY_FILE" 2>/dev/null; then
+  pass "占有記録に割り当てタスクIDが記録される（AC#1）"
+else
+  fail "占有記録に想定したTASK_IDが記録されていない: $(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
+fi
+
+if grep -Eq '^ASSIGNED_AT_EPOCH=[0-9]+$' "$CW_OCCUPANCY_FILE" 2>/dev/null; then
+  pass "占有記録に実行時刻(ASSIGNED_AT_EPOCH)が数値として記録される（AC#1）"
+else
+  fail "占有記録にASSIGNED_AT_EPOCHが記録されていない: $(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
+fi
+
+if grep -Eq '^ASSIGNED_AT=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$CW_OCCUPANCY_FILE" 2>/dev/null; then
+  pass "占有記録に実行時刻(ASSIGNED_AT)がISO8601形式で記録される（AC#1）"
+else
+  fail "占有記録にASSIGNED_AT(ISO8601)が想定形式で記録されていない: $(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
+fi
+
+# ---- TASK-40 AC#3: 占有記録に対応するパスが .git/info/exclude に登録される ----
+if grep -Fxq ".worktree-occupancy" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null; then
+  pass ".git/info/exclude に .worktree-occupancy が追記されている（AC#3）"
+else
+  fail ".git/info/exclude に .worktree-occupancy が追記されていない（AC#3）"
+fi
+
 # ---- AC#2: 既定の worktree_base_dir（リポジトリルート配下の .worktree/）は
 # リポジトリ内を指すため、.git/info/exclude に .worktree が自動追記され、
 # git status に汚れとして現れないこと ----
@@ -96,6 +130,10 @@ fi
 
 # ---- 冪等性（AC#3）: 同じ task-id で2回目を実行しても、エラーにならず
 # 既存のワークツリー/ブランチを再利用する ----
+# TASK-40 AC#2 の検証用に、2回目実行前の占有記録の ASSIGNED_AT_EPOCH を控えておく。
+# epoch秒（1秒単位）の解像度で「更新された」ことを判別できるよう、1秒待つ。
+CW_FIRST_EPOCH="$(grep '^ASSIGNED_AT_EPOCH=' "$CW_OCCUPANCY_FILE" 2>/dev/null | cut -d= -f2)"
+sleep 1
 cw_output2="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
 cw_exit2=$?
 if [ "$cw_exit2" -eq 0 ]; then
@@ -127,6 +165,24 @@ else
   fail "2回目の実行後、.git/info/exclude の .backlog 行が重複している（${cw_exclude_count} 件）"
 fi
 
+# ---- TASK-40 AC#2: 既存ワークツリーの再利用時（同じ task-id での再実行）に、
+# 占有記録のタイムスタンプが更新され、記録が壊れない ----
+CW_SECOND_EPOCH="$(grep '^ASSIGNED_AT_EPOCH=' "$CW_OCCUPANCY_FILE" 2>/dev/null | cut -d= -f2)"
+if [ -n "$CW_FIRST_EPOCH" ] && [ -n "$CW_SECOND_EPOCH" ] && [ "$CW_SECOND_EPOCH" -gt "$CW_FIRST_EPOCH" ]; then
+  pass "2回目の実行（同じ task-id での再利用）で占有記録のタイムスタンプが更新される（AC#2）"
+else
+  fail "2回目の実行で占有記録のタイムスタンプが更新されていない: 1回目=${CW_FIRST_EPOCH:-なし}, 2回目=${CW_SECOND_EPOCH:-なし}"
+fi
+
+cw_occupancy_taskid_count="$(grep -Fxc "TASK_ID=$CW_TASK_ID" "$CW_OCCUPANCY_FILE" 2>/dev/null || true)"
+cw_occupancy_line_count="$(wc -l < "$CW_OCCUPANCY_FILE" 2>/dev/null | tr -d ' ')"
+if [ "$cw_occupancy_taskid_count" = "1" ] && [ "$cw_occupancy_line_count" = "3" ]; then
+  pass "2回目の実行後も占有記録が壊れていない（TASK_ID行が重複せず、3行のまま）（AC#2）"
+else
+  fail "2回目の実行後、占有記録が壊れている（TASK_ID行: ${cw_occupancy_taskid_count}件, 総行数: ${cw_occupancy_line_count}）:
+$(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
+fi
+
 # ---- 復旧シナリオ: ワークツリーのディレクトリだけ消え、ブランチは残っている
 # 場合、新規作成せず既存ブランチを割り当てて再作成する ----
 rm -rf "$CW_EXPECTED_WORKTREE_DIR"
@@ -144,6 +200,13 @@ if [ "$cw_branch_count" = "1" ]; then
   pass "復旧後もブランチ $CW_EXPECTED_BRANCH が重複作成されていない"
 else
   fail "復旧後、ブランチ $CW_EXPECTED_BRANCH が重複している（${cw_branch_count} 件）"
+fi
+
+# ---- TASK-40: ディレクトリ消失からの復旧経路でも占有記録が作り直される ----
+if [ -f "$CW_OCCUPANCY_FILE" ] && grep -Fxq "TASK_ID=$CW_TASK_ID" "$CW_OCCUPANCY_FILE" 2>/dev/null; then
+  pass "ディレクトリ消失からの復旧後も占有記録が作り直される"
+else
+  fail "ディレクトリ消失からの復旧後、占有記録が再作成されていない: $CW_OCCUPANCY_FILE"
 fi
 
 # ---- 引数の妥当性検証 ----
