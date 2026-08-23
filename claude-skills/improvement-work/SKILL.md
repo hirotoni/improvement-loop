@@ -1,6 +1,6 @@
 ---
 name: improvement-work
-description: improvement-orchestrator から引き渡された Backlog.md タスクを、interview-dev-loop の型で遂行する。サブエージェントとして起動される前提のため人間に質問できず、曖昧さは repo の根拠から自分で解決し、判断が必要な点だけ中断して差し戻す。作業ブランチ上で実装・検証・コミットし、タスクを In Review にして報告する。単独のタスク実装依頼で、人間と対話できる場合は interview-dev-loop を直接使う。
+description: improvement-dispatch から引き渡された Backlog.md タスクを、interview-dev-loop の型で遂行する。サブエージェントとして起動される前提のため人間に質問できず、曖昧さは repo の根拠から自分で解決し、判断が必要な点だけ中断して差し戻す。作業ブランチ上で実装・検証・コミットし、タスクを In Review にして報告する。単独のタスク実装依頼で、人間と対話できる場合は interview-dev-loop を直接使う。
 ---
 
 # improvement-work
@@ -14,10 +14,10 @@ description: improvement-orchestrator から引き渡された Backlog.md タス
 | --- | --- | --- |
 | `Proposed` | 起票された改善候補。未承認 | improvement-scout が起票 |
 | `To Do` | 着手が承認された | 人間 |
-| `In Progress` | 作業ブランチに引き渡し済み | improvement-orchestrator |
+| `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatch |
 | `In Review` | 実装がブランチに乗り、レビュー待ち | **work が動かす** |
 | `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
-| `Done` | main にマージ済み | improvement-orchestrator |
+| `Done` | main にマージ済み | improvement-dispatch |
 
 **承認は既に済んでいる。** 人間が `Proposed` を `To Do` に上げた時点が承認である。
 だから改めて承認を求めない。ただし承認されたのはタスクの受入基準の範囲だけである。そこから外に出るときは中断する（後述）。
@@ -35,9 +35,9 @@ git branch --show-current
 git status --porcelain
 ```
 
-- 指定された作業ディレクトリ（ワークツリー、例: `<リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>`）に `cd` し、`pwd` の出力が一致することを確認する。自分でブランチを作成・切り替え（`git switch`、`git checkout` 等）しない。ワークツリーは引き渡し時点で既に指定のブランチを checkout 済みであり、`git branch --show-current` はその確認にのみ使う。作業ディレクトリが存在しない、または `git worktree list` に出てこない場合は orchestrator の引き渡しが不完全なので、その旨を報告して止まる。
+- 指定された作業ディレクトリ（ワークツリー、例: `<リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>`）に `cd` し、`pwd` の出力が一致することを確認する。自分でブランチを作成・切り替え（`git switch`、`git checkout` 等）しない。ワークツリーは引き渡し時点で既に指定のブランチを checkout 済みであり、`git branch --show-current` はその確認にのみ使う。作業ディレクトリが存在しない、または `git worktree list` に出てこない場合は dispatch の引き渡しが不完全なので、その旨を報告して止まる。
 - **重要:** このハーネスは Bash 呼び出しごとにカレントディレクトリをリセットする。一度 `cd` しても次の Bash 呼び出しには引き継がれない。したがって、これ以降タスクが終わるまでの**すべての** Bash 呼び出しで、各コマンドの前に必ずこの作業ディレクトリへ `cd` してから続きを実行する（例: `cd "<作業ディレクトリ>" && git status --porcelain`、あるいは 1 回の呼び出し内に複数行の一連の作業をまとめて書く）。以降の手順の bash 例ではこの `cd` を省略して書くが、実行時には必ず補うこと。
-- `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。orchestrator が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している（`ls -la .backlog` で確認できる）。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。もし `.backlog/` が見当たらない、またはシンボリックリンクになっていない場合は orchestrator の引き渡しが不完全なので、その旨を報告して止まる。
+- `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。dispatch が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している（`ls -la .backlog` で確認できる）。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。もし `.backlog/` が見当たらない、またはシンボリックリンクになっていない場合は dispatch の引き渡しが不完全なので、その旨を報告して止まる。
 - このディレクトリはメインの作業木（人間が普段作業する場所）とは別の独立したワークツリーである。メインの作業木のファイルには一切触れない。
 - 自分を担当者にする：`backlog task edit TASK-<n> -a @improvement-work --plain`。status は既に `In Progress` になっている。
 - リポジトリの規約（`CLAUDE.md`、`AGENTS.md`、lint 設定）を読む。backlog の操作は必ず CLI 経由で行う。
@@ -108,7 +108,7 @@ backlog task edit TASK-<n> \
   --comment-author @improvement-work --plain
 ```
 
-そのうえで、報告に `blocked` であることと必要な判断を書いて終わる。`blocked:needs-decision` が付いたタスクは orchestrator の選択対象から外れ、人間が判断してラベルを外すまで動かない。
+そのうえで、報告に `blocked` であることと必要な判断を書いて終わる。`blocked:needs-decision` が付いたタスクは dispatch の選択対象から外れ、人間が判断してラベルを外すまで動かない。
 
 ## 4. 計画を記録する（Plan gate の読み替え）
 
@@ -164,7 +164,7 @@ git commit
 
 - 作業ディレクトリ（ワークツリー）内でコミットする。このディレクトリのブランチはこのタスクのために作られている。メインの作業木には一切コミットしない。
 - コミットメッセージはリポジトリの既存の書式に合わせる。ハーネスがトレーラを要求している場合はそれに従う。
-- `push` しない。`merge` しない。PR を作らない。リモートに触らない。`git worktree remove` もしない。ワークツリーの片付けは orchestrator がマージ後に行う。
+- `push` しない。`merge` しない。PR を作らない。リモートに触らない。`git worktree remove` もしない。ワークツリーの片付けは dispatch がマージ後に行う。
 - 作業ディレクトリ（ワークツリー）を汚したまま終わらない。一時ファイルは消す。`git status --porcelain` が空になる状態にする。
 
 ## 9. 完了させて報告する
@@ -181,7 +181,7 @@ backlog task edit TASK-<n> -s "In Review" --plain
 - 満たせなかった基準があるなら、チェックせずに理由を notes に書く。
 - 最後に `In Review` にする。`Done` にはしない。
 
-報告（orchestrator が読む）に含めるもの：
+報告（dispatch が読む）に含めるもの：
 
 1. タスク ID と最終 status。
 2. 作業ブランチ名・作業ディレクトリ（ワークツリーのパス）とコミットの一覧。
@@ -197,7 +197,7 @@ backlog task edit TASK-<n> -s "In Review" --plain
 ## 禁止事項
 
 - `push`、`merge`、PR 作成、リモート操作をしない。
-- 自分の作業ディレクトリ（ワークツリー）の外、特にメインの作業木には触れない。`git worktree remove` もしない（片付けは orchestrator がマージ後に行う）。
+- 自分の作業ディレクトリ（ワークツリー）の外、特にメインの作業木には触れない。`git worktree remove` もしない（片付けは dispatch がマージ後に行う）。
 - タスクを `Done` にしない。終端は `In Review` である。
 - 受入基準の外に手を広げない。見つけた問題は記録して報告する。
 - 人間に質問して待たない。答えを得られないので、解決するか差し戻すかの二択にする。

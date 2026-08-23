@@ -5,7 +5,7 @@ https://creators.bengo4.com/entry/2026/07/22/095159
 
 ## claude skills
 
-- improvement-dispatcher
+- improvement-dispatch
 - improvement-scout
 - improvement-scout-major
 - improvement-work
@@ -32,7 +32,7 @@ https://creators.bengo4.com/entry/2026/07/22/095159
 │   └── config.my.yml
 └── .claude/
     └── skills/
-        ├── improvement-dispatcher/**
+        ├── improvement-dispatch/**
         ├── improvement-scout/**
         ├── improvement-work/**
         └── improvement-add/**

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# claude-skills/improvement-dispatcher/scripts/create-worktree
+# claude-skills/improvement-dispatch/scripts/create-worktree
 #
-# claude-skills/improvement-dispatcher/SKILL.md 手順5（ワークツリーを作って引き渡す）
+# claude-skills/improvement-dispatch/SKILL.md 手順5（ワークツリーを作って引き渡す）
 # が行うワークツリー作成の一連の処理を、決定論的な単一のスクリプトとして実行する。
 # 以前はこの処理が SKILL.md に埋め込まれた bash ブロックとして書かれており、
-# orchestrator（AI）が起動のたびに読み取って組み立てて実行していた。
+# dispatch（AI）が起動のたびに読み取って組み立てて実行していた。
 #
 # 使い方:
-#   .claude/skills/improvement-dispatcher/scripts/create-worktree <task-id>
+#   .claude/skills/improvement-dispatch/scripts/create-worktree <task-id>
 #
 # <task-id> の例: task-14-worktree-script-extraction
 #   （backlog のタスク番号と英小文字スラッグをハイフンで連結したもの）

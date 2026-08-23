@@ -28,14 +28,14 @@ description: コードベースを探索し、アーキテクチャ級の大き�
 | --- | --- | --- |
 | `Proposed` | 起票された改善候補。未承認 | **scout-major が起票する** |
 | `To Do` | 着手が承認された | 人間 |
-| `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatcher |
+| `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatch |
 | `In Review` | 実装がブランチに乗り、レビュー待ち | improvement-work |
 | `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
-| `Done` | main にマージ済み | `auto_merge_reviewed` 次第（orchestrator または人間） |
+| `Done` | main にマージ済み | `auto_merge_reviewed` 次第（dispatch または人間） |
 
-`Proposed` から先には進めない。人間が milestone とタスクの内容を確認して個々のタスクを `To Do` に上げたものだけが improvement-dispatcher に拾われる。
+`Proposed` から先には進めない。人間が milestone とタスクの内容を確認して個々のタスクを `To Do` に上げたものだけが improvement-dispatch に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。
-`improvement-dispatcher` は `Dependencies` が `Done` になっていない `To Do` タスクを既に自動的に除外する仕組みを持つため、依存関係を付けて起票するだけで実行順は dispatcher 側が守る。dispatcher・work・既存 scout に変更は要らない。
+`improvement-dispatch` は `Dependencies` が `Done` になっていない `To Do` タスクを既に自動的に除外する仕組みを持つため、依存関係を付けて起票するだけで実行順は dispatch 側が守る。dispatch・work・既存 scout に変更は要らない。
 
 使わない場面：
 
@@ -209,4 +209,4 @@ milestone・タスク本文と報告の言語は会話の言語に合わせる�
 - 依存グラフに循環を作らない。起票前に依存の向きを確認する。
 - 監査の中でコードを変更しない。修正は起票したタスクの実行として行われる。
 - 未確認の推測を起票しない。根拠のない指摘は、起票しないより悪い。
-- `improvement-scout`・`improvement-dispatcher`・`improvement-work` を変更しない。既存の依存解決ロジックのみでこのスキルの出力を消化できる。
+- `improvement-scout`・`improvement-dispatch`・`improvement-work` を変更しない。既存の依存解決ロジックのみでこのスキルの出力を消化できる。

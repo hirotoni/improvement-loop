@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-# improvement ループの4スキル（scout/add/dispatcher/work）が前提とする状態遷移。
+# improvement ループの4スキル（scout/add/dispatch/work）が前提とする状態遷移。
 # この順序を正準順序として、欠けているものを config.yml の statuses に補う。
 REQUIRED_STATUSES=(Proposed "To Do" "In Progress" "In Review" Reviewed Done)
 
