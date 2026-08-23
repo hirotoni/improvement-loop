@@ -6,7 +6,7 @@
 # パートに対応する）。
 #
 # 使い方:
-#   bin/merge-reviewed-branch <作業ブランチ名>
+#   .claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch <作業ブランチ名>
 #
 # 呼び出し元のカレントディレクトリ（の属する git リポジトリ）を
 # メインの作業木として扱う。ブランチの切り替え・マージはそのリポジトリに

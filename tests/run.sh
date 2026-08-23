@@ -19,7 +19,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP_SCRIPT="$REPO_ROOT/bin/setup-improvement-loop"
-MERGE_SCRIPT="$REPO_ROOT/bin/merge-reviewed-branch"
+MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
@@ -127,14 +127,14 @@ else
 fi
 
 if bash -n "$MERGE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n bin/merge-reviewed-branch"
+  pass "bash -n claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
 else
-  fail "bash -n bin/merge-reviewed-branch: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+  fail "bash -n claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch: $(cat /tmp/tests-run-sh-syntax-err.$$)"
 fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
 if command -v shellcheck >/dev/null 2>&1; then
-  # bin/setup-improvement-loop・bin/merge-reviewed-branch は bash なので
+  # bin/setup-improvement-loop・claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch は bash なので
   # shellcheck が完全サポートする。install.zsh とまとめて1回の shellcheck
   # 呼び出しで渡すと、zsh は shellcheck が対応しない shell のため SC1071 で
   # 即座に fatal parse error になり、bash スクリプト側も一切linterされずに
@@ -146,9 +146,9 @@ if command -v shellcheck >/dev/null 2>&1; then
   fi
 
   if shellcheck "$MERGE_SCRIPT"; then
-    pass "shellcheck bin/merge-reviewed-branch"
+    pass "shellcheck claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
   else
-    fail "shellcheck bin/merge-reviewed-branch (指摘あり。上の出力を参照)"
+    fail "shellcheck claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch (指摘あり。上の出力を参照)"
   fi
 
   # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
@@ -692,10 +692,10 @@ else
 fi
 
 echo ""
-echo "=== 7. bin/merge-reviewed-branch の動作確認 ==="
+echo "=== 7. claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch の動作確認 ==="
 # improvement-dispatcher 手順3（auto_merge_reviewed: true）のマージ判定を
-# 切り出した bin/merge-reviewed-branch を、一時 git リポジトリに対して
-# 実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
+# 切り出した claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch を、
+# 一時 git リポジトリに対して実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
 # 3-way衝突の4パターンを、それぞれ独立した一時リポジトリで確認する
 # （TASK-22 受入基準 #1-#4 に対応）。
 

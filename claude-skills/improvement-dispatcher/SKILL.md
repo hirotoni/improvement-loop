@@ -108,10 +108,10 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 
 現在の挙動を維持する。このリポジトリで PR を運用していない前提でのみ使う設定である。ここで main が進めば、後続の引き渡しは新しい main を基点にできる。
 
-マージ判定（前提条件確認・ff-only 試行・3-way ドライラン・衝突判定・commit/abort・ワークツリーの片付け）は `bin/merge-reviewed-branch` に切り出されている。散文を読んで毎回 git コマンドを組み立てない。対象は 1 件ずつ処理する。メインの作業木（人間や orchestrator がいるこのディレクトリ）から実行する。
+マージ判定（前提条件確認・ff-only 試行・3-way ドライラン・衝突判定・commit/abort・ワークツリーの片付け）は `.claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch` に切り出されている。散文を読んで毎回 git コマンドを組み立てない。対象は 1 件ずつ処理する。メインの作業木（人間や orchestrator がいるこのディレクトリ）から実行する。
 
 ```bash
-bin/merge-reviewed-branch <作業ブランチ>
+.claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch <作業ブランチ>
 ```
 
 終了ステータスと、標準出力に現れる `RESULT: <値>` の行で結果を判別する。backlog タスクのステータス変更はスクリプトの責務外であり、次の対応表の通り orchestrator が行う。
