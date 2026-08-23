@@ -28,10 +28,28 @@
 #   5. .backlog/ を git 管理外のシンボリックリンクとしてワークツリーへ張る
 #      （メインの作業木の .backlog/ を指す。既に存在すれば何もしない）。
 #   6. .git/info/exclude に .backlog の除外パターンを追記する（無ければ）。
+#   7. ワークツリー直下に占有記録（.worktree-occupancy）を書き込む/上書きする
+#      （新規作成・既存ワークツリー再利用のどちらの経路でも実行する。
+#      形式は下記「占有記録の形式」を参照）。
+#   8. .git/info/exclude に .worktree-occupancy の除外パターンを追記する（無ければ）。
 #
 # 冪等性: 同じ <task-id> で複数回実行しても、既存のブランチ・ワークツリー・
 # シンボリックリンク・.git/info/exclude の記述を再利用/スキップし、
-# エラーにならない。
+# エラーにならない。占有記録（.worktree-occupancy）は実行のたびに上書きされ、
+# タイムスタンプ系フィールドが最新の実行時刻に更新される。
+#
+# 占有記録の形式（TASK-40）:
+#   場所: <WORKTREE_DIR>/.worktree-occupancy（ワークツリー直下、git 管理外）
+#   形式: KEY=VALUE の行が3行（シェルの代入文としてもそのまま source 可能）。
+#     TASK_ID=<task-id>              例: task-40-worktree-occupancy-record
+#     ASSIGNED_AT=<ISO8601 UTC>      例: 2026-08-23T12:34:56Z
+#                                    （date -u +%FT%TZ と同じ書式。人間可読用）
+#     ASSIGNED_AT_EPOCH=<UNIX秒>     例: 1755937696（date -u +%s）
+#                                    鮮度判定など数値比較に使う場合はこちらを使うこと。
+#                                    ISO8601文字列はGNU date（-d解析可）とBSD date
+#                                    （macOS、-d非対応）で扱いが割れるため。
+#   更新契機: create-worktree の実行のたびに丸ごと上書きする
+#   （新規作成・既存ワークツリー再利用のどちらでも同じ）。追記はしない。
 #
 # 責務外: backlog タスクのステータス変更（In Progress への遷移）はこの
 # スクリプトの外（呼び出し側）で行う。このスクリプトは git ワークツリーの
@@ -189,6 +207,22 @@ fi
 EXCLUDE_FILE="$GIT_COMMON_DIR/info/exclude"
 mkdir -p "$(dirname "$EXCLUDE_FILE")"
 grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE_FILE"
+
+# ---- 占有記録（TASK-40） ----
+# このワークツリーが「いつ・どのタスクに割り当てられたか」を記録する。
+# 新規作成・既存ワークツリー再利用のどちらの経路でもここを通るため、
+# 常に最新の実行時刻で上書きする（形式はスクリプト冒頭のコメントを参照）。
+OCCUPANCY_FILE="$WORKTREE_DIR/.worktree-occupancy"
+ASSIGNED_AT="$(date -u +%FT%TZ)"
+ASSIGNED_AT_EPOCH="$(date -u +%s)"
+{
+  printf 'TASK_ID=%s\n' "$TASK_ID"
+  printf 'ASSIGNED_AT=%s\n' "$ASSIGNED_AT"
+  printf 'ASSIGNED_AT_EPOCH=%s\n' "$ASSIGNED_AT_EPOCH"
+} > "$OCCUPANCY_FILE"
+
+# .worktree-occupancy も .backlog と同様に git 管理外にする。
+grep -Fxq ".worktree-occupancy" "$EXCLUDE_FILE" 2>/dev/null || echo ".worktree-occupancy" >> "$EXCLUDE_FILE"
 
 echo "WORKTREE_DIR=$WORKTREE_DIR"
 echo "BRANCH=$BRANCH"
