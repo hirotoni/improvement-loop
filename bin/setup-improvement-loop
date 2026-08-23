@@ -65,54 +65,101 @@ array_index_of() {
 }
 
 # .backlog/config.yml の statuses（例: statuses: ["To Do", "In Progress", "Done"]、
-# または複数行YAMLリスト形式 statuses:\n  - "To Do"\n  - "In Progress" ...）に、
-# REQUIRED_STATUSES のうち欠けているものだけを正準順序の位置に挿入する。
-# 既存の要素（ユーザー独自のステータスを含む）は順序も含め一切変更しない。
-# 複数行リスト形式で検出した場合は、書き戻し時にインライン配列形式へ正規化する
-# （インライン形式のケースの出力は従来通り変更しない）。
+# または複数行YAMLリスト形式 statuses:\n  - "To Do"\n  - "In Progress" ...）を
+# 解析する。ensure_backlog_statuses と migrate_reviewed_status_in_config（TASK-48）
+# の両方が使う共通ヘルパー。呼び出し元のシェル変数を書き換える方式（サブシェル化
+# すると呼び出し元に結果が伝わらないため、コマンド置換 $(...) 経由で呼ばないこと）:
+#   PARSED_STATUSES_LINE_NUM     statuses 行の開始行番号
+#   PARSED_STATUSES_END_LINE_NUM 置換・削除すべき行範囲の終端行番号
+#     （インライン形式では PARSED_STATUSES_LINE_NUM と同じ。複数行リスト形式では
+#     直後から連続する "  - ..." 行の最後の行番号まで広げる）
+#   PARSED_STATUSES_LINE_RAW     statuses 行そのものの生テキスト
+#   PARSED_STATUSES_ITEMS        既存要素の配列（順序保持、ユーザー独自ステータス含む）
 # python3 等の追加依存を避け、grep/sed/awk のみで実装する。
-ensure_backlog_statuses() {
+parse_statuses_block() {
   local config_file="$1"
 
-  local statuses_line_num
-  statuses_line_num="$(grep -n -m1 '^statuses:' "$config_file" | cut -d: -f1 || true)"
-  if [ -z "$statuses_line_num" ]; then
+  PARSED_STATUSES_LINE_NUM="$(grep -n -m1 '^statuses:' "$config_file" | cut -d: -f1 || true)"
+  if [ -z "$PARSED_STATUSES_LINE_NUM" ]; then
     err "config.yml に statuses 行が見つからない。手動で確認すること: $config_file"
     exit 1
   fi
 
-  local line
-  line="$(sed -n "${statuses_line_num}p" "$config_file")"
+  PARSED_STATUSES_LINE_RAW="$(sed -n "${PARSED_STATUSES_LINE_NUM}p" "$config_file")"
+  PARSED_STATUSES_END_LINE_NUM=$PARSED_STATUSES_LINE_NUM
+  PARSED_STATUSES_ITEMS=()
 
-  # end_line_num は、statuses の値として置換・削除すべき行範囲の終端行番号。
-  # インライン形式では statuses_line_num 自身のまま（1行のみ置換、従来と同じ）。
-  # 複数行リスト形式では、直後から連続する "  - ..." 行の最後の行番号まで広げる。
-  local end_line_num=$statuses_line_num
-  local existing=()
-  if [[ "$line" == *'['* ]]; then
+  if [[ "$PARSED_STATUSES_LINE_RAW" == *'['* ]]; then
     # インライン配列形式（例: statuses: ["To Do", "Done"]）。従来ロジック。
     while IFS= read -r item; do
-      existing+=("$item")
-    done < <(printf '%s\n' "$line" | grep -o '"[^"]*"' | sed 's/^"//; s/"$//')
+      PARSED_STATUSES_ITEMS+=("$item")
+    done < <(printf '%s\n' "$PARSED_STATUSES_LINE_RAW" | grep -o '"[^"]*"' | sed 's/^"//; s/"$//')
   else
     # 複数行YAMLリスト形式（statuses: の次行以降に "  - \"To Do\"" のように列挙）。
-    # statuses: の直後から連続する "- ..." 行を集め、それぞれの値を existing に積む。
-    local total_lines
+    # statuses: の直後から連続する "- ..." 行を集め、それぞれの値を積む。
+    local total_lines next_line_num list_line item
     total_lines="$(awk 'END { print NR }' "$config_file")"
-    local next_line_num=$((statuses_line_num + 1))
+    next_line_num=$((PARSED_STATUSES_LINE_NUM + 1))
     while [ "$next_line_num" -le "$total_lines" ]; do
-      local list_line
       list_line="$(sed -n "${next_line_num}p" "$config_file")"
       if ! printf '%s' "$list_line" | grep -Eq '^[[:space:]]*-'; then
         break
       fi
-      local item
       item="$(printf '%s\n' "$list_line" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')"
-      existing+=("$item")
-      end_line_num=$next_line_num
+      PARSED_STATUSES_ITEMS+=("$item")
+      PARSED_STATUSES_END_LINE_NUM=$next_line_num
       next_line_num=$((next_line_num + 1))
     done
   fi
+}
+
+# parse_statuses_block で読み取った行範囲を、渡された要素列でインライン配列形式
+# 1行に丸ごと置換して書き戻す。呼び出し前に対象 config_file で parse_statuses_block
+# を実行済みであること（PARSED_STATUSES_* を使う）。書き戻した新しい行を標準出力に返す。
+# 引数: config_file, item1, item2, ...（0個も可）
+write_statuses_block() {
+  local config_file="$1"
+  shift
+  local -a items=(${1+"$@"})
+
+  local new_line="statuses: ["
+  local i
+  for i in "${!items[@]}"; do
+    if [ "$i" -gt 0 ]; then
+      new_line+=", "
+    fi
+    new_line+="\"${items[$i]}\""
+  done
+  new_line+="]"
+  # 元の行が `]` の後に何かを持っていた場合（例: 末尾コメント）は保持する。
+  # `]` を含まない行（複数行リスト形式の "statuses:" 行など）ではこの展開は
+  # パターン非マッチのため元の行全体が返ってしまう点に注意し、`]` を含む場合
+  # だけ適用する。
+  if [[ "$PARSED_STATUSES_LINE_RAW" == *']'* ]]; then
+    new_line+="${PARSED_STATUSES_LINE_RAW##*]}"
+  fi
+
+  local tmp_file
+  tmp_file="$(mktemp "${config_file}.XXXXXX")"
+  awk -v newline="$new_line" -v start="$PARSED_STATUSES_LINE_NUM" -v end="$PARSED_STATUSES_END_LINE_NUM" '
+    NR == start { print newline; next }
+    NR > start && NR <= end { next }
+    { print }
+  ' "$config_file" > "$tmp_file"
+  mv "$tmp_file" "$config_file"
+
+  printf '%s\n' "$new_line"
+}
+
+# REQUIRED_STATUSES のうち欠けているものだけを正準順序の位置に挿入する。
+# 既存の要素（ユーザー独自のステータスを含む）は順序も含め一切変更しない。
+# 複数行リスト形式で検出した場合は、書き戻し時にインライン配列形式へ正規化する
+# （インライン形式のケースの出力は従来通り変更しない）。
+ensure_backlog_statuses() {
+  local config_file="$1"
+
+  parse_statuses_block "$config_file"
+  local existing=(${PARSED_STATUSES_ITEMS[@]+"${PARSED_STATUSES_ITEMS[@]}"})
 
   # bash 3.2（macOS の既定 /bin/bash）は set -u 下で、空配列を
   # "${arr[@]}" のように無条件展開すると "unbound variable" で落ちる
@@ -152,38 +199,108 @@ ensure_backlog_statuses() {
     return 0
   fi
 
-  local new_line="statuses: ["
-  local i
-  for i in "${!working[@]}"; do
-    if [ "$i" -gt 0 ]; then
-      new_line+=", "
-    fi
-    new_line+="\"${working[$i]}\""
-  done
-  new_line+="]"
-  # 元の行が `]` の後に何かを持っていた場合（例: 末尾コメント）は保持する。
-  # `]` を含まない行（複数行リスト形式の "statuses:" 行など）ではこの展開は
-  # パターン非マッチのため元の行全体が返ってしまう点に注意し、`]` を含む場合
-  # だけ適用する。
-  if [[ "$line" == *']'* ]]; then
-    new_line+="${line##*]}"
-  fi
-
-  local tmp_file
-  tmp_file="$(mktemp "${config_file}.XXXXXX")"
-  # statuses_line_num から end_line_num までの行範囲を新しい1行に丸ごと
-  # 置換する。インライン形式では start == end のため、従来通り1行だけの
-  # 置換になる。複数行リスト形式では、続く "  - ..." 行もまとめて削除する
-  # ことで、置換し損ねた行が残って壊れたYAMLになることを防ぐ。
-  awk -v newline="$new_line" -v start="$statuses_line_num" -v end="$end_line_num" '
-    NR == start { print newline; next }
-    NR > start && NR <= end { next }
-    { print }
-  ' "$config_file" > "$tmp_file"
-  mv "$tmp_file" "$config_file"
+  local new_line
+  new_line="$(write_statuses_block "$config_file" ${working[@]+"${working[@]}"})"
 
   log "[fix]  .backlog/config.yml の statuses を更新した: $new_line"
   CREATED+=(".backlog/config.yml statuses (不足していた improvement ループの既定ステータスを追加)")
+}
+
+# .backlog/config.yml の statuses に残る旧名 "Reviewed" を検知し、"Approved" へ
+# 安全に統合する（TASK-48）。TASK-8 で "Reviewed" は "Approved" にリネームされたが、
+# この移行は本リポジトリ自身の .backlog/config.yml のみを対象に行われ、
+# setup-improvement-loop（配布ロジック）自体には反映されていなかった。TASK-8 以前に
+# このツールをセットアップした既存 consumer リポジトリでは、ensure_backlog_statuses
+# が欠けている "Approved" を末尾側に追加挿入するだけで、旧名 "Reviewed" が重複して
+# 残り続ける。
+# 呼び出しは、対象タスクの移行（migrate_reviewed_tasks）より後に行うこと。
+# "Reviewed" を config.yml の有効なステータス値から先に外してしまうと、
+# 将来の backlog CLI バージョンが `--status`/`-s` の値を configured statuses に
+# 対して厳格に検証するようになった場合に、旧ステータスのタスクを検出・移行
+# できなくなるおそれがあるため（現行の backlog CLI 1.48.0 ではこの検証は行われず、
+# 順序に関係なく動作することを実機で確認済みだが、安全側に倒す）。
+# "Reviewed" が既に存在しなければ何もしない（AC#3）。
+migrate_reviewed_status_in_config() {
+  local config_file="$1"
+
+  parse_statuses_block "$config_file"
+  local existing=(${PARSED_STATUSES_ITEMS[@]+"${PARSED_STATUSES_ITEMS[@]}"})
+
+  if ! array_contains "Reviewed" ${existing[@]+"${existing[@]}"}; then
+    log "[skip] .backlog/config.yml の statuses に旧名 'Reviewed' は残っていない。"
+    SKIPPED+=(".backlog/config.yml statuses (Reviewed の移行は不要)")
+    return 0
+  fi
+
+  # "Reviewed" だけを取り除き、他の要素の順序・値は一切変更しない
+  # （ユーザー独自のステータスを含む）。
+  local working=()
+  local item
+  for item in ${existing[@]+"${existing[@]}"}; do
+    if [ "$item" = "Reviewed" ]; then
+      continue
+    fi
+    working+=("$item")
+  done
+
+  local new_line
+  new_line="$(write_statuses_block "$config_file" ${working[@]+"${working[@]}"})"
+
+  log "[fix]  .backlog/config.yml の statuses から旧名 'Reviewed' を除去した: $new_line"
+  CREATED+=(".backlog/config.yml statuses (旧名 Reviewed を Approved に統合)")
+}
+
+# 対象リポジトリに status: Reviewed の既存タスクがあれば、backlog CLI 経由で
+# Approved へ移行する（TASK-48）。.backlog/ 配下の md ファイルを直接書き換えない。
+# `backlog task list --status "Reviewed" --plain` は "Reviewed" が config.yml の
+# statuses に無くてもエラーにならず該当タスクが無ければ "No tasks found." を返す
+# ことを実機で確認済みのため、事前の存在チェックは行わず常に呼び出す。
+# 候補が無ければ何もしない（AC#3）。
+migrate_reviewed_tasks() {
+  local target_repo_root="$1"
+
+  local list_output
+  if ! list_output="$(cd "$target_repo_root" && backlog task list --status "Reviewed" --plain 2>&1)"; then
+    err "対象リポジトリで 'backlog task list --status \"Reviewed\"' が失敗した: $list_output"
+    exit 1
+  fi
+
+  # `backlog task list --plain` の各タスク行は "  <ID> - <title>" または
+  # "  [PRIORITY] [type] <ID> - <title>" の形式（先頭に0個以上の "[...] "
+  # タグが付く）。<ID> は config.yml の task_prefix に応じて "TASK-<n>" とは
+  # 限らない（例: task_prefix: "issue" なら "ISSUE-<n>"）ため、"TASK-" 固定の
+  # パターンで抽出すると task_prefix をカスタマイズしたリポジトリで該当タスクを
+  # 一切検出できず、statuses からだけ "Reviewed" が消えてタスク側が永久に
+  # 取り残される。また、タスクの title 自体に "TASK-999" のような文字列が
+  # 含まれるケースもあるため、行のどこかに現れる ID らしき文字列を無条件に拾うと
+  # （grep -oE '[A-Za-z]+-[0-9]+' のような素朴な実装だと）title 中の偽陽性まで
+  # ID として誤検出してしまう。行頭の空白・タグ群を取り除いた直後に来る
+  # "<接頭辞>-<n> - " の形のものだけを ID として採用することで、prefix 非依存かつ
+  # title 中の偽陽性を避けて抽出する。
+  local task_ids=()
+  while IFS= read -r id; do
+    [ -n "$id" ] && task_ids+=("$id")
+  done < <(printf '%s\n' "$list_output" \
+    | sed -E 's/^[[:space:]]+(\[[^]]*\][[:space:]]*)*//' \
+    | grep -E '^[A-Za-z][A-Za-z0-9_-]*-[0-9]+ - ' \
+    | sed -E 's/^([A-Za-z][A-Za-z0-9_-]*-[0-9]+) - .*/\1/' \
+    | sort -u)
+
+  if [ "${#task_ids[@]}" -eq 0 ]; then
+    log "[skip] status: Reviewed の既存タスクは見つからなかった。"
+    SKIPPED+=("status: Reviewed の既存タスク移行 (対象タスクなし)")
+    return 0
+  fi
+
+  local id
+  for id in "${task_ids[@]}"; do
+    if ! (cd "$target_repo_root" && backlog task edit "$id" -s "Approved" --plain) >/dev/null; then
+      err "対象リポジトリでタスク $id を Approved へ移行できなかった。手動で確認すること。"
+      exit 1
+    fi
+    log "[fix]  $id の status を Reviewed から Approved へ移行した。"
+  done
+  CREATED+=("status: Reviewed の既存タスク移行 (${#task_ids[@]} 件を Approved へ: ${task_ids[*]})")
 }
 
 # .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
@@ -389,6 +506,16 @@ fi
 # ループの4スキルが前提とする Proposed / In Review / Approved が無い。
 # 新規作成・既存スキップのどちらの場合も、欠けていれば補う。
 ensure_backlog_statuses "$BACKLOG_CONFIG_YML"
+
+# ---- 3b. 旧ステータス名 "Reviewed" が残る既存タスク・statuses の移行（TASK-48） ----
+# TASK-8 で "Reviewed" は "Approved" にリネームされたが、この移行は本リポジトリ
+# 自身にしか反映されておらず、それ以前にこのツールをセットアップした既存
+# consumer リポジトリでは "Reviewed" が statuses に残り、status: Reviewed の
+# 既存タスクも残ったままになりうる。タスクの移行を、config.yml の statuses から
+# "Reviewed" を外すより先に行う（順序の理由は migrate_reviewed_status_in_config
+# のコメントを参照）。
+migrate_reviewed_tasks "$TARGET_REPO_ROOT"
+migrate_reviewed_status_in_config "$BACKLOG_CONFIG_YML"
 
 # ---- 4. スキルのシンボリックリンク配置 ----
 TARGET_SKILLS_DIR="$TARGET_REPO_ROOT/.claude/skills"
