@@ -532,4 +532,72 @@ else
   fail "全キーが揃った後の再実行で auto_merge_reviewed が重複している（${auto_merge_count} 件）"
 fi
 
+echo ""
+echo "=== 6b. コメントアウトされたキーの誤認・重複追記の回帰テスト（TASK-37） ==="
+# ensure_config_my_yml_keys は、既存キーの検出に "^  key:" という正規表現しか
+# 使っていなかったため、ユーザーが値を一時的に無効化する目的で行頭に "#" を
+# 付けてコメントアウトしたキー（例: "  # max_in_review: 3"）を「未設定」と
+# 誤認し、次回実行時にテンプレート側の既定値付きで有効な形で再追記していた
+# （同名キーがコメント化された行と有効な行の2箇所に重複する）。
+# コメントアウトされたキーはユーザーが意図的に無効化した状態として扱い、
+# 有効な重複キーとして再追記されないことを検証する。
+
+TMP_REPO_COMMENTED="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_COMMENTED"
+
+(cd "$TMP_REPO_COMMENTED" && git init -q)
+mkdir -p "$TMP_REPO_COMMENTED/.backlog"
+
+commented_config="$TMP_REPO_COMMENTED/.backlog/config.my.yml"
+cp "$SOURCE_CONFIG" "$commented_config"
+
+# 既存キー max_in_review を、ユーザーが一時的に無効化した想定でコメントアウトする。
+commented_config_tmp="$(mktemp)"
+sed -E 's/^(  )max_in_review: 3$/\1# max_in_review: 3/' "$commented_config" > "$commented_config_tmp"
+mv "$commented_config_tmp" "$commented_config"
+
+if ! grep -Fq '  # max_in_review: 3' "$commented_config"; then
+  fail "テスト前提が壊れている: max_in_review のコメントアウトに失敗した"
+fi
+
+commented_output="$("$SETUP_SCRIPT" "$TMP_REPO_COMMENTED" 2>&1)"
+commented_exit=$?
+if [ "$commented_exit" -eq 0 ]; then
+  pass "コメントアウトされたキーを含む config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
+else
+  fail "コメントアウトされたキーを含む config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${commented_exit}）:
+$commented_output"
+fi
+
+# AC#1: コメントアウトされたキーが有効な形で重複追記されない
+commented_active_count="$(grep -Ec '^  max_in_review:' "$commented_config" || true)"
+if [ "$commented_active_count" = "0" ]; then
+  pass "コメントアウトされたキー max_in_review が有効な形で重複追記されない"
+else
+  fail "コメントアウトされたキー max_in_review が有効な形で重複追記された（${commented_active_count} 件）:
+$(grep -n 'max_in_review' "$commented_config")"
+fi
+
+if grep -Fq '  # max_in_review: 3' "$commented_config"; then
+  pass "コメントアウトされた max_in_review の行がそのまま保持されている"
+else
+  fail "コメントアウトされた max_in_review の行が変更・消失した"
+fi
+
+# 再実行しても結果が変わらない（冪等性）ことを確認する。
+commented_output2="$("$SETUP_SCRIPT" "$TMP_REPO_COMMENTED" 2>&1)"
+commented_exit2=$?
+if [ "$commented_exit2" -eq 0 ]; then
+  pass "コメントアウトされたキーを含む config.my.yml への再実行も成功する（exit 0）"
+else
+  fail "コメントアウトされたキーを含む config.my.yml への再実行が失敗した（exit ${commented_exit2}）:
+$commented_output2"
+fi
+commented_active_count2="$(grep -Ec '^  max_in_review:' "$commented_config" || true)"
+if [ "$commented_active_count2" = "0" ]; then
+  pass "再実行後もコメントアウトされたキー max_in_review が有効な形で重複追記されない"
+else
+  fail "再実行後にコメントアウトされたキー max_in_review が有効な形で重複追記された（${commented_active_count2} 件）"
+fi
+
 finish_tests

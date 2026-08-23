@@ -193,6 +193,9 @@ ensure_backlog_statuses() {
 # 対応するのはキーの新規追加の検出・追記のみ。キーの rename・削除・意味変更には
 # 対応しない。導入先に既にあるキーの値・コメントは一切変更せず、テンプレートに
 # 無いユーザー独自のキーもそのまま保持する。
+# 導入先で当該キーがコメントアウトされている場合（例: "  # max_in_review: 3"）は
+# 「未設定」ではなく「ユーザーが意図的に無効化した」状態として扱い、有効な重複
+# キーとして再追記しない（TASK-37）。
 # python3 等の追加依存を避け、grep/sed/awk のみで実装する。
 ensure_config_my_yml_keys() {
   local target_file="$1"
@@ -211,15 +214,32 @@ ensure_config_my_yml_keys() {
   done < <(grep -E "$key_re" "$target_file" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/')
 
   local missing_keys=()
+  local commented_keys=()
   local key
   for key in "${source_keys[@]}"; do
-    if ! array_contains "$key" ${target_keys[@]+"${target_keys[@]}"}; then
-      missing_keys+=("$key")
+    if array_contains "$key" ${target_keys[@]+"${target_keys[@]}"}; then
+      continue
     fi
+    # 有効なキーとしては見つからなかったが、同名キーがコメントアウトされた形で
+    # 既に存在するなら、ユーザーが意図的に無効化した状態とみなし「不足」扱いに
+    # しない。インデント・"#" と値の間の空白は問わず、キー名の完全一致のみを見る
+    # ため、テンプレートの説明文コメント（例: "# 既定値: 3"）には誤爆しない。
+    if grep -Eq "^[[:space:]]*#[[:space:]]*${key}:" "$target_file"; then
+      commented_keys+=("$key")
+      continue
+    fi
+    missing_keys+=("$key")
   done
 
+  if [ "${#commented_keys[@]}" -gt 0 ]; then
+    for key in "${commented_keys[@]}"; do
+      log "[skip] .backlog/config.my.yml のキー '$key' はコメントアウトされている。ユーザーが意図的に無効化したとみなし、有効な形では追記しない。"
+    done
+    SKIPPED+=(".backlog/config.my.yml (コメントアウトされたキーのため追記をスキップ: ${commented_keys[*]})")
+  fi
+
   if [ "${#missing_keys[@]}" -eq 0 ]; then
-    log "[skip] .backlog/config.my.yml は既にテンプレートの全キーを含む。"
+    log "[skip] .backlog/config.my.yml は既にテンプレートの全キーを含む（コメントアウトされたキーを除く）。"
     SKIPPED+=(".backlog/config.my.yml (既にテンプレートの全キーを含む)")
     return 0
   fi
