@@ -108,44 +108,26 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 
 現在の挙動を維持する。このリポジトリで PR を運用していない前提でのみ使う設定である。ここで main が進めば、後続の引き渡しは新しい main を基点にできる。
 
-マージの前提条件。1 つでも欠けたらマージせず、状況を報告して今回の起動を終える。
-
-- **メインの作業木**（人間や orchestrator がいるこのディレクトリ）の `git status --porcelain` が空である。汚れているときはそこでブランチを切り替えない。stash も reset もしない。作業ブランチはワークツリーで分離されているため、この条件はメインの作業木自身の汚れ（人間の手元の変更）にのみ関する。他のサブエージェントが別のワークツリーで稼働中かどうかはこの条件に影響しない。
-- 対応する作業ブランチが存在し、`git log main..<作業ブランチ>` にコミットがある。ブランチさえ存在すればよく、対応するワークツリーがまだ残っているかは問わない。
-
-対象は 1 件ずつ処理する。マージ操作自体はメインの作業木（main を checkout しているディレクトリ）で行い、ワークツリー側のディレクトリに入る必要はない。まず早送りを試す。
+マージ判定（前提条件確認・ff-only 試行・3-way ドライラン・衝突判定・commit/abort・ワークツリーの片付け）は `.claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch` に切り出されている。散文を読んで毎回 git コマンドを組み立てない。対象は 1 件ずつ処理する。メインの作業木（人間や orchestrator がいるこのディレクトリ）から実行する。
 
 ```bash
-git switch main
-git merge --ff-only <作業ブランチ>
+.claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch <作業ブランチ>
 ```
 
-早送りできない場合（main が先に進んでいる）は、衝突の有無を先に確かめる。
+終了ステータスと、標準出力に現れる `RESULT: <値>` の行で結果を判別する。backlog タスクのステータス変更はスクリプトの責務外であり、次の対応表の通り orchestrator が行う。
 
-```bash
-git merge --no-commit --no-ff <作業ブランチ>
-```
+| 終了ステータス | `RESULT` | 意味 | orchestrator が行うこと |
+| --- | --- | --- | --- |
+| `0` | `MERGED` | ff-only、または衝突のない 3-way でマージが完了した | `backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<出力中の main の短縮ハッシュ>）' --comment-author @orchestrator` で `Done` にする。次の対象へ進む。 |
+| `1` | `PRECONDITION_NOT_MET` | メインの作業木が汚れている／対象ブランチが存在しない／main との差分が無い、のいずれか | タスクは `Reviewed` のまま変更しない。標準エラー出力の内容を報告に含める。メインの作業木の汚れが原因の場合は他の対象を試しても同じ結果になるため、次の対象には進まず今回の起動を終える。 |
+| `2` | `CONFLICT` | 3-way マージが衝突した（スクリプトが `git merge --abort` 済みで、git 状態はマージ前と同じ） | タスクは `Reviewed` のまま残し、標準エラー出力に列挙された衝突ファイルを報告する。解消は人間に委ねる。次の対象には進まない。 |
+| `3` | `ERROR` | 想定外のエラー（引数不足、main への切り替え失敗、マージコミット自体の失敗等） | タスクは `Reviewed` のまま残し、標準エラー出力を報告する。次の対象には進まない。 |
 
-- 衝突した → `git merge --abort` で元に戻す。タスクは `Reviewed` のまま残し、衝突したファイルを報告する。解消は人間に委ねる。次の対象には進まない。
-- 衝突しない → そのままコミットしてマージを完了する。
+`rebase` は使わない。人間がレビューしたコミットの同一性が変わるためである。`--force` を伴う操作もこのスクリプトでは行わない。
 
-`rebase` は使わない。人間がレビューしたコミットの同一性が変わるためである。`--force` を伴う操作もしない。
+マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。マージが完了した場合（`RESULT: MERGED`）のみ、スクリプトが対応するワークツリーのディレクトリを自動で片付ける。未コミットの変更が残っている等で片付けに失敗した場合、スクリプトは `--force` せずその旨を出力するので、そのまま報告に含める（中身の破棄が必要かどうかの判断は人間に委ねる）。
 
-マージが完了したタスクだけ `Done` にする。
-
-```bash
-backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<マージ後の main の短縮ハッシュ>）' --comment-author @orchestrator
-```
-
-マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。一方、ワークツリーのディレクトリはマージが完了すれば役目を終えるので片付ける。
-
-```bash
-git worktree remove <ワークツリーのパス>   # 例（既定の worktree_base_dir の場合）: <リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>
-```
-
-サブエージェントが後始末し忘れた未コミットの変更がワークツリー側に残っていて `remove` が失敗する場合は、`--force` で強制削除せず、その旨を報告してそのワークツリーは残す。中身の破棄が必要かどうかの判断は人間に委ねる。
-
-処理後に `git log --oneline -1 main` で main の位置を確認し、報告に含める。
+処理後に `git log --oneline -1 main` で main の位置を確認し、報告に含める（スクリプトの出力にも短縮ハッシュが含まれる）。
 
 ### 4. 次に引き渡すタスクを選ぶ
 
@@ -169,109 +151,30 @@ git worktree remove <ワークツリーのパス>   # 例（既定の worktree_b
 
 作業ブランチはメインの作業木の上には作らない。ワークツリーの作成先ベースディレクトリ（`improvement_loop.worktree_base_dir`。既定ではリポジトリの親ディレクトリの `.worktree/`）配下の `<リポジトリ名>/` に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この名前空間分けは `worktree_base_dir` の値を変えても常に適用される。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
 
-このハーネスは Bash 呼び出しごとにカレントディレクトリとシェル変数をリセットする（呼び出しをまたいで保持されない）。そのため、以下は **1 回の Bash 呼び出しにまとめて実行する**。複数回に分けると、後半のコマンドが `$WORKTREE_DIR` や `$BRANCH` を参照できず失敗する。
+ワークツリー作成の一連の処理（`worktree_base_dir` の解決・正規化、リポジトリ内外判定つき `.git/info/exclude` への追記、デフォルトブランチの判定、`git worktree add`、`.backlog` シンボリックリンクの作成）は `.claude/skills/improvement-dispatcher/scripts/create-worktree` に決定論的なスクリプトとして切り出されている（`.claude/skills/improvement-dispatcher` は `claude-skills/improvement-dispatcher` ディレクトリ丸ごとへのシンボリックリンクであり、`scripts/` サブディレクトリごと配布される）。orchestrator はこれを都度読み取って組み立てる必要は無く、次のように1回実行するだけでよい。
 
 ```bash
-REPO_ROOT=$(git rev-parse --show-toplevel)
-REPO_NAME=$(basename "$REPO_ROOT")
-
-# improvement_loop.worktree_base_dir（.backlog/config.my.yml、手順 1 で cat した値。
-# キーが無い、または空文字なら既定値 <リポジトリの親ディレクトリ>/.worktree を使う）。
-# 絶対パス、またはリポジトリルート起点の相対パスを指定できる。実際の作成先は
-# この配下にさらにリポジトリ名で名前空間分けされる（BASE_DIR/$REPO_NAME/task-<n>-<スラッグ>）。
-WORKTREE_BASE_DIR_CONFIG="<config.my.yml の improvement_loop.worktree_base_dir の値。無ければ空文字>"
-
-if [ -z "$WORKTREE_BASE_DIR_CONFIG" ]; then
-  BASE_DIR="$(dirname "$REPO_ROOT")/.worktree"
-elif [[ "$WORKTREE_BASE_DIR_CONFIG" = /* ]]; then
-  BASE_DIR="$WORKTREE_BASE_DIR_CONFIG"
-else
-  BASE_DIR="$REPO_ROOT/$WORKTREE_BASE_DIR_CONFIG"
-fi
-
-# 相対パス・末尾スラッシュ・".." などの表記ゆれを解決してから使う。
-# 解決前の文字列のまま次のリポジトリ内外判定（case 文）を行うと、
-# 例えば末尾スラッシュ付きでリポジトリ内判定を素通りしたり、".." で
-# 実際にはリポジトリ外なのに内側だと誤判定したりする恐れがある。
-mkdir -p "$BASE_DIR"
-BASE_DIR="$(cd "$BASE_DIR" && pwd -P)"
-if [ -z "$BASE_DIR" ]; then
-  echo "worktree_base_dir の解決に失敗した: $WORKTREE_BASE_DIR_CONFIG" >&2
-  exit 1
-fi
-
-mkdir -p "$BASE_DIR/$REPO_NAME"
-WORKTREE_DIR="$BASE_DIR/$REPO_NAME/task-<n>-<英小文字のスラッグ>"
-BRANCH="improvement/task-<n>-<英小文字のスラッグ>"
-
-# BASE_DIR（正規化済み）がリポジトリルート内を指す場合だけ、.git/info/exclude
-# （git rev-parse --git-common-dir 起点）に除外パターンを追加し、git の
-# 追跡対象に入らないようにする。リポジトリ外を指す場合は追記しない
-# （既にリポジトリの外なので対象外であり、追記の必要が無い）。
-case "$BASE_DIR" in
-  "$REPO_ROOT")
-    # BASE_DIR がリポジトリルートそのものと一致する退行的な設定値の場合、
-    # "." を除外パターンにするとリポジトリ全体が git status から隠れてしまう
-    # ため、代わりにリポジトリ名のディレクトリ単位で除外する。
-    REL_BASE_DIR="$REPO_NAME"
-    ;;
-  "$REPO_ROOT"/*)
-    REL_BASE_DIR="${BASE_DIR#"$REPO_ROOT"/}"
-    ;;
-  *)
-    REL_BASE_DIR=""
-    ;;
-esac
-
-if [ -n "$REL_BASE_DIR" ]; then
-  BASE_DIR_EXCLUDE_FILE="$(git rev-parse --git-common-dir)/info/exclude"
-  mkdir -p "$(dirname "$BASE_DIR_EXCLUDE_FILE")"
-  grep -Fxq "$REL_BASE_DIR" "$BASE_DIR_EXCLUDE_FILE" 2>/dev/null || echo "$REL_BASE_DIR" >> "$BASE_DIR_EXCLUDE_FILE"
-fi
-
-git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
-
-if git fetch origin 2>/dev/null; then
-  DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
-  BASE_REF="origin/${DEFAULT_BRANCH:-main}"
-else
-  BASE_REF="main"   # デフォルトブランチが判定できない/リモートが無い場合は main を使う
-fi
-
-if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  # 再引き渡し等で既にブランチが存在する場合は、新規作成せずそのブランチを割り当てる
-  git worktree add "$WORKTREE_DIR" "$BRANCH"
-else
-  git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF"
-fi
-
-# .backlog/ は git 管理外（.git/info/exclude で除外）なので、
-# git worktree add では新しいワークツリーに作られない。
-# メインの作業木の .backlog/ へのシンボリックリンクにして、タスクデータを共有する。
-if [ -e "$REPO_ROOT/.backlog" ] && [ ! -e "$WORKTREE_DIR/.backlog" ]; then
-  ln -s "$REPO_ROOT/.backlog" "$WORKTREE_DIR/.backlog"
-fi
-
-# 古いインストール（.git/info/exclude が末尾スラッシュ付きの ".backlog/" のまま）だと、
-# 上のシンボリックリンクは除外パターンにマッチせず、ワークツリー内で git status が
-# 常に汚れて見える。スラッシュ無しの ".backlog" は両方にマッチするので、無ければ足す。
-EXCLUDE_FILE="$(git rev-parse --git-common-dir)/info/exclude"
-mkdir -p "$(dirname "$EXCLUDE_FILE")"
-grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE_FILE"
-
+REPO_ROOT="$(git rev-parse --show-toplevel)" && \
+"$REPO_ROOT/.claude/skills/improvement-dispatcher/scripts/create-worktree" task-<n>-<英小文字のスラッグ> && \
 backlog task edit TASK-<n> -s "In Progress" -a @improvement-work --plain
-
-echo "WORKTREE_DIR=$WORKTREE_DIR"
-echo "BRANCH=$BRANCH"
 ```
 
-デフォルトブランチ名の判定は `git symbolic-ref --short refs/remotes/origin/HEAD` に依存する。この参照が設定されていないリモート環境では `DEFAULT_BRANCH` が空になり、上のスクリプトは `main` にフォールバックする。実際のデフォルトブランチが `main` 以外の場合は、このフォールバック値を書き換える。
+`.claude/skills/improvement-dispatcher/scripts/create-worktree` は `.backlog/config.my.yml` の `improvement_loop.worktree_base_dir` を自分で読み、標準出力の末尾に次の2行を出力する。
+
+```
+WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
+BRANCH=<割り当てた作業ブランチ名>
+```
+
+`&&` でつないでいるため、`create-worktree` が失敗（非ゼロ終了）した場合は後続の `backlog task edit` は実行されない。同じタスク番号・スラッグで再実行しても、既存のワークツリー・ブランチ・exclude の記述を再利用し、エラーにならない（冪等性は `.claude/skills/improvement-dispatcher/scripts/create-worktree` 内で保証されている）。
+
+デフォルトブランチ名の判定は `git symbolic-ref --short refs/remotes/origin/HEAD` に依存する。この参照が設定されていないリモート環境では `.claude/skills/improvement-dispatcher/scripts/create-worktree` 内部で `main` にフォールバックする。実際のデフォルトブランチが `main` 以外の場合は、`.claude/skills/improvement-dispatcher/scripts/create-worktree` 側のこのフォールバック値を書き換える。
 
 出力された `WORKTREE_DIR` と `BRANCH` の値は、以降の手順（サブエージェントへの引き渡しプロンプト、`--append-notes` への記録）でリテラルな文字列として使う。シェル変数として次の呼び出しに持ち越そうとしない。
 
 新しいワークツリーはフェッチできれば `origin/<デフォルトブランチ>` を起点にするため、ローカルの `main` 自体が古くても最新の内容から分岐する。一方でローカルの `main` は、以前のように毎回 `pull` されるわけではなく、手順 3 の ff-only マージで進む分だけ更新される。ローカル `main` と `origin/main` がしばらく乖離しても、次の分岐や手順 3 のマージには支障が無い。
 
-`$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`git worktree add` は失敗する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
+`$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`create-worktree` はエラーを報告して非ゼロで終了する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
 
 引き渡しはサブエージェント（`Agent`、`subagent_type: general-purpose`）に対して行う。背景実行のままにする。完了時に通知が返るので、待ち合わせのための短い間隔での起動は入れない。
 

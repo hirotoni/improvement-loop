@@ -21,6 +21,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP_SCRIPT="$REPO_ROOT/bin/setup-improvement-loop"
+CREATE_WORKTREE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/create-worktree"
+MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
 SELECT_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/select-next-task"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
@@ -128,6 +130,20 @@ else
   fail "bash -n bin/setup-improvement-loop: $(cat /tmp/tests-run-sh-syntax-err.$$)"
 fi
 
+if bash -n "$CREATE_WORKTREE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n claude-skills/improvement-dispatcher/scripts/create-worktree"
+else
+  fail "bash -n claude-skills/improvement-dispatcher/scripts/create-worktree: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
+if bash -n "$MERGE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
+else
+  fail "bash -n claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
 if bash -n "$SELECT_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
   pass "bash -n claude-skills/improvement-dispatcher/scripts/select-next-task"
 else
@@ -136,18 +152,31 @@ fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
 if command -v shellcheck >/dev/null 2>&1; then
-  # bin/setup-improvement-loop は bash なので shellcheck が完全サポートする。
-  # install.zsh とまとめて1回の shellcheck 呼び出しで渡すと、zsh は
-  # shellcheck が対応しない shell のため SC1071 で即座に fatal
-  # parse error になり、setup-improvement-loop 側も一切linterされずに
-  # 巻き添えで FAIL してしまう。そのため個別に実行する。
+  # bin/setup-improvement-loop・claude-skills/improvement-dispatcher/scripts/create-worktree・
+  # claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch・
+  # claude-skills/improvement-dispatcher/scripts/select-next-task は bash なので shellcheck が
+  # 完全サポートする。install.zsh とまとめて1回の shellcheck 呼び出しで渡すと、
+  # zsh は shellcheck が対応しない shell のため SC1071 で即座に fatal
+  # parse error になり、他のスクリプト側も一切linterされずに巻き添えで FAIL
+  # してしまう。そのため個別に実行する。
   if shellcheck "$SETUP_SCRIPT"; then
     pass "shellcheck bin/setup-improvement-loop"
   else
     fail "shellcheck bin/setup-improvement-loop (指摘あり。上の出力を参照)"
   fi
 
-  # claude-skills/improvement-dispatcher/scripts/select-next-task も bash なので shellcheck が完全サポートする。
+  if shellcheck "$CREATE_WORKTREE_SCRIPT"; then
+    pass "shellcheck claude-skills/improvement-dispatcher/scripts/create-worktree"
+  else
+    fail "shellcheck claude-skills/improvement-dispatcher/scripts/create-worktree (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$MERGE_SCRIPT"; then
+    pass "shellcheck claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
+  else
+    fail "shellcheck claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch (指摘あり。上の出力を参照)"
+  fi
+
   if shellcheck "$SELECT_SCRIPT"; then
     pass "shellcheck claude-skills/improvement-dispatcher/scripts/select-next-task"
   else
@@ -804,6 +833,351 @@ if [ "$select_exit" -eq 1 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: 
 else
   fail "claude-skills/improvement-dispatcher/scripts/select-next-task: max_in_review ゲートの結果が期待と異なる（exit ${select_exit}）:
 $select_out"
+fi
+
+echo ""
+echo "=== 8. claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch の動作確認 ==="
+# improvement-dispatcher 手順3（auto_merge_reviewed: true）のマージ判定を
+# 切り出した claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch を、
+# 一時 git リポジトリに対して実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
+# 3-way衝突の4パターンを、それぞれ独立した一時リポジトリで確認する
+# （TASK-22 受入基準 #1-#4 に対応）。
+
+echo ""
+echo "--- 7a. 前提条件未達: メインの作業木が汚れている ---"
+TMP_MERGE_DIRTY="$(mktemp -d)"
+cleanup_merge_dirty() { rm -rf "$TMP_MERGE_DIRTY"; }
+trap 'cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_DIRTY" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_DIRTY" && git branch feature-dirty-check)
+echo "uncommitted" > "$TMP_MERGE_DIRTY/dirty.txt"
+
+merge_dirty_output="$(cd "$TMP_MERGE_DIRTY" && "$MERGE_SCRIPT" feature-dirty-check 2>&1)"
+merge_dirty_exit=$?
+if [ "$merge_dirty_exit" -eq 1 ]; then
+  pass "7a: メインの作業木が汚れている場合、終了ステータス 1 (PRECONDITION_NOT_MET) を返す"
+else
+  fail "7a: メインの作業木が汚れている場合の終了ステータスが 1 でない（${merge_dirty_exit}）: $merge_dirty_output"
+fi
+if grep -Fq "RESULT: PRECONDITION_NOT_MET" <<<"$merge_dirty_output"; then
+  pass "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれる"
+else
+  fail "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_dirty_output"
+fi
+if [ -n "$(cd "$TMP_MERGE_DIRTY" && git status --porcelain)" ] \
+  && [ "$(cd "$TMP_MERGE_DIRTY" && git rev-parse --abbrev-ref HEAD)" = "main" ]; then
+  pass "7a: 前提条件未達時、git状態（未コミット変更・ブランチ）が変更されない"
+else
+  fail "7a: 前提条件未達のはずが、メインの作業木の git 状態が変わっている"
+fi
+
+echo ""
+echo "--- 7b. ff-only マージが成功し、対応するワークツリーが片付けられる ---"
+TMP_MERGE_FF="$(mktemp -d)"
+# 対応するワークツリー（$TMP_MERGE_FF-wt）もここで一緒に片付ける。
+# アサーション後の単発 rm -rf に任せると、ワークツリー作成後・その rm
+# 行より前で中断された場合にディレクトリが残ってしまうため、EXIT trap の
+# 中で確実に片付ける。
+cleanup_merge_ff() { rm -rf "$TMP_MERGE_FF" "$TMP_MERGE_FF-wt"; }
+trap 'cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_FF" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_FF" && git worktree add -q -b feature-ff "$TMP_MERGE_FF-wt" main)
+(cd "$TMP_MERGE_FF-wt" && git commit -q --allow-empty -m "feature ff work")
+
+merge_ff_output="$(cd "$TMP_MERGE_FF" && "$MERGE_SCRIPT" feature-ff 2>&1)"
+merge_ff_exit=$?
+if [ "$merge_ff_exit" -eq 0 ]; then
+  pass "7b: ff-only 可能なブランチのマージが終了ステータス 0 (MERGED) で成功する"
+else
+  fail "7b: ff-only 可能なはずのマージが失敗した（${merge_ff_exit}）: $merge_ff_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_ff_output"; then
+  pass "7b: 出力に RESULT: MERGED が含まれる"
+else
+  fail "7b: 出力に RESULT: MERGED が含まれない: $merge_ff_output"
+fi
+if [ "$(cd "$TMP_MERGE_FF" && git log -1 --format=%s main)" = "feature ff work" ]; then
+  pass "7b: main が feature-ff の内容までマージされている"
+else
+  fail "7b: main が feature-ff の内容までマージされていない"
+fi
+if [ -d "$TMP_MERGE_FF-wt" ]; then
+  fail "7b: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7b: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+
+echo ""
+echo "--- 7c. 3-way マージ（衝突無し）が成功し、対応するワークツリーが片付けられる ---"
+TMP_MERGE_3WAY="$(mktemp -d)"
+cleanup_merge_3way() { rm -rf "$TMP_MERGE_3WAY" "$TMP_MERGE_3WAY-wt"; }
+trap 'cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_3WAY" && git init -q -b main)
+printf 'line1\n' > "$TMP_MERGE_3WAY/f1.txt"
+printf 'line2\n' > "$TMP_MERGE_3WAY/f2.txt"
+(cd "$TMP_MERGE_3WAY" && git add -A && git commit -q -m init)
+(cd "$TMP_MERGE_3WAY" && git branch feature-3way)
+printf 'main change\n' >> "$TMP_MERGE_3WAY/f1.txt"
+(cd "$TMP_MERGE_3WAY" && git add -A && git commit -q -m "main advances f1")
+(cd "$TMP_MERGE_3WAY" && git worktree add -q "$TMP_MERGE_3WAY-wt" feature-3way)
+printf 'feature change\n' >> "$TMP_MERGE_3WAY-wt/f2.txt"
+(cd "$TMP_MERGE_3WAY-wt" && git add -A && git commit -q -m "feature-3way advances f2")
+
+merge_3way_output="$(cd "$TMP_MERGE_3WAY" && "$MERGE_SCRIPT" feature-3way 2>&1)"
+merge_3way_exit=$?
+if [ "$merge_3way_exit" -eq 0 ]; then
+  pass "7c: 衝突の無い 3-way マージが終了ステータス 0 (MERGED) で成功する"
+else
+  fail "7c: 衝突が無いはずの 3-way マージが失敗した（${merge_3way_exit}）: $merge_3way_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_3way_output"; then
+  pass "7c: 出力に RESULT: MERGED が含まれる"
+else
+  fail "7c: 出力に RESULT: MERGED が含まれない: $merge_3way_output"
+fi
+merge_3way_parents="$(cd "$TMP_MERGE_3WAY" && git log -1 --format=%P main | wc -w | tr -d ' ')"
+if [ "$merge_3way_parents" = "2" ]; then
+  pass "7c: main の最新コミットが2つの親を持つマージコミットになっている"
+else
+  fail "7c: main の最新コミットがマージコミットになっていない（親の数: ${merge_3way_parents}）"
+fi
+if [ -z "$(cd "$TMP_MERGE_3WAY" && git status --porcelain)" ]; then
+  pass "7c: マージ完了後、メインの作業木がクリーンである"
+else
+  fail "7c: マージ完了後もメインの作業木が汚れている"
+fi
+if [ -d "$TMP_MERGE_3WAY-wt" ]; then
+  fail "7c: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7c: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+
+echo ""
+echo "--- 7d. 3-way マージが衝突する場合、abort して git 状態を復元する ---"
+TMP_MERGE_CONFLICT="$(mktemp -d)"
+cleanup_merge_conflict() { rm -rf "$TMP_MERGE_CONFLICT" "$TMP_MERGE_CONFLICT-wt"; }
+trap 'cleanup_merge_conflict; cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_CONFLICT" && git init -q -b main)
+printf 'original\n' > "$TMP_MERGE_CONFLICT/shared.txt"
+(cd "$TMP_MERGE_CONFLICT" && git add -A && git commit -q -m init)
+(cd "$TMP_MERGE_CONFLICT" && git branch feature-conflict)
+printf 'main version\n' > "$TMP_MERGE_CONFLICT/shared.txt"
+(cd "$TMP_MERGE_CONFLICT" && git add -A && git commit -q -m "main changes shared.txt")
+(cd "$TMP_MERGE_CONFLICT" && git worktree add -q "$TMP_MERGE_CONFLICT-wt" feature-conflict)
+printf 'feature version\n' > "$TMP_MERGE_CONFLICT-wt/shared.txt"
+(cd "$TMP_MERGE_CONFLICT-wt" && git add -A && git commit -q -m "feature-conflict changes shared.txt")
+
+merge_conflict_head_before="$(cd "$TMP_MERGE_CONFLICT" && git rev-parse HEAD)"
+merge_conflict_output="$(cd "$TMP_MERGE_CONFLICT" && "$MERGE_SCRIPT" feature-conflict 2>&1)"
+merge_conflict_exit=$?
+merge_conflict_head_after="$(cd "$TMP_MERGE_CONFLICT" && git rev-parse HEAD)"
+
+if [ "$merge_conflict_exit" -eq 2 ]; then
+  pass "7d: 衝突する 3-way マージが終了ステータス 2 (CONFLICT) を返す"
+else
+  fail "7d: 衝突するはずの 3-way マージの終了ステータスが 2 でない（${merge_conflict_exit}）: $merge_conflict_output"
+fi
+if grep -Fq "RESULT: CONFLICT" <<<"$merge_conflict_output"; then
+  pass "7d: 出力に RESULT: CONFLICT が含まれる"
+else
+  fail "7d: 出力に RESULT: CONFLICT が含まれない: $merge_conflict_output"
+fi
+if grep -Fq "shared.txt" <<<"$merge_conflict_output"; then
+  pass "7d: 衝突したファイル（shared.txt）が出力に報告される"
+else
+  fail "7d: 衝突したファイルが出力に報告されない: $merge_conflict_output"
+fi
+if [ "$merge_conflict_head_before" = "$merge_conflict_head_after" ]; then
+  pass "7d: 衝突後、main の HEAD がマージ前と変わっていない"
+else
+  fail "7d: 衝突後、main の HEAD がマージ前から変わっている"
+fi
+if [ -z "$(cd "$TMP_MERGE_CONFLICT" && git status --porcelain)" ]; then
+  pass "7d: 衝突後、git merge --abort によりメインの作業木がクリーンな状態に戻っている"
+else
+  fail "7d: 衝突後もメインの作業木が汚れたままである（abort されていない）"
+fi
+if [ -d "$TMP_MERGE_CONFLICT-wt" ]; then
+  pass "7d: マージが完了していないため、対応するワークツリーは片付けられず残る"
+else
+  fail "7d: マージが完了していないはずなのに、対応するワークツリーが片付けられている"
+fi
+
+echo ""
+echo "=== 9. claude-skills/improvement-dispatcher/scripts/create-worktree の動作確認 ==="
+# claude-skills/improvement-dispatcher/SKILL.md 手順5から切り出したワークツリー
+# 作成スクリプトを、実際に一時 git リポジトリに対して実行して検証する。
+# git init の既定ブランチ名は環境（init.defaultBranch）によって異なりうるため、
+# main を明示して作成し、claude-skills/improvement-dispatcher/scripts/create-worktree 内のデフォルトブランチ判定
+# （フェッチ不可時に main へフォールバック）と整合させる。
+
+TMP_CW_REPO="$(mktemp -d)"
+# macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
+# claude-skills/improvement-dispatcher/scripts/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
+# 文字列比較が一致しない。ここでも同じ正規化をしておく。
+TMP_CW_REPO="$(cd "$TMP_CW_REPO" && pwd -P)"
+cleanup_cw_repo() {
+  rm -rf "$TMP_CW_REPO"
+}
+trap 'cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_CW_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+
+CW_TASK_ID="task-77-worktree-check"
+CW_EXPECTED_WORKTREE_DIR="$(dirname "$TMP_CW_REPO")/.worktree/$(basename "$TMP_CW_REPO")/$CW_TASK_ID"
+CW_EXPECTED_BRANCH="improvement/$CW_TASK_ID"
+
+cw_output1="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
+cw_exit1=$?
+if [ "$cw_exit1" -eq 0 ]; then
+  pass "1回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行が成功する（exit 0）"
+else
+  fail "1回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行が失敗した（exit ${cw_exit1}）:
+$cw_output1"
+fi
+
+if printf '%s\n' "$cw_output1" | grep -Fxq "WORKTREE_DIR=$CW_EXPECTED_WORKTREE_DIR"; then
+  pass "既定の worktree_base_dir（リポジトリの親ディレクトリの .worktree/、リポジトリ名で名前空間分け）配下に想定通りのパスが出力される"
+else
+  fail "WORKTREE_DIR の出力が想定と異なる。期待: WORKTREE_DIR=$CW_EXPECTED_WORKTREE_DIR, 実際の出力:
+$cw_output1"
+fi
+
+if printf '%s\n' "$cw_output1" | grep -Fxq "BRANCH=$CW_EXPECTED_BRANCH"; then
+  pass "BRANCH が想定通り出力される（${CW_EXPECTED_BRANCH}）"
+else
+  fail "BRANCH の出力が想定と異なる。期待: BRANCH=$CW_EXPECTED_BRANCH, 実際の出力:
+$cw_output1"
+fi
+
+if [ -d "$CW_EXPECTED_WORKTREE_DIR" ]; then
+  pass "想定したパスにワークツリーディレクトリが実在する"
+else
+  fail "想定したパスにワークツリーディレクトリが存在しない: $CW_EXPECTED_WORKTREE_DIR"
+fi
+
+if git -C "$TMP_CW_REPO" worktree list --porcelain | grep -Fxq "worktree $CW_EXPECTED_WORKTREE_DIR"; then
+  pass "git worktree list にワークツリーが登録されている"
+else
+  fail "git worktree list にワークツリーが登録されていない"
+fi
+
+if grep -Fxq ".backlog" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null; then
+  pass ".git/info/exclude に .backlog が追記されている"
+else
+  fail ".git/info/exclude に .backlog が追記されていない"
+fi
+
+# ---- 冪等性（AC#3）: 同じ task-id で2回目を実行しても、エラーにならず
+# 既存のワークツリー/ブランチを再利用する ----
+cw_output2="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
+cw_exit2=$?
+if [ "$cw_exit2" -eq 0 ]; then
+  pass "2回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行（同じ task-id）が成功する（exit 0、冪等性）"
+else
+  fail "2回目の claude-skills/improvement-dispatcher/scripts/create-worktree 実行が失敗した（exit ${cw_exit2}）:
+$cw_output2"
+fi
+
+if printf '%s\n' "$cw_output2" | grep -Fxq "WORKTREE_DIR=$CW_EXPECTED_WORKTREE_DIR" && \
+   printf '%s\n' "$cw_output2" | grep -Fxq "BRANCH=$CW_EXPECTED_BRANCH"; then
+  pass "2回目の実行でも同じ WORKTREE_DIR/BRANCH が出力される（既存のワークツリー/ブランチを再利用）"
+else
+  fail "2回目の実行で WORKTREE_DIR/BRANCH の出力が変わった:
+$cw_output2"
+fi
+
+cw_worktree_count="$(git -C "$TMP_CW_REPO" worktree list --porcelain | grep -Fxc "worktree $CW_EXPECTED_WORKTREE_DIR")"
+if [ "$cw_worktree_count" = "1" ]; then
+  pass "2回目の実行後もワークツリーが重複登録されていない"
+else
+  fail "2回目の実行後、ワークツリーが重複登録されている（${cw_worktree_count} 件）"
+fi
+
+cw_exclude_count="$(grep -Fxc ".backlog" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null || true)"
+if [ "$cw_exclude_count" = "1" ]; then
+  pass "2回目の実行後も .git/info/exclude の .backlog 行が重複していない"
+else
+  fail "2回目の実行後、.git/info/exclude の .backlog 行が重複している（${cw_exclude_count} 件）"
+fi
+
+# ---- 復旧シナリオ: ワークツリーのディレクトリだけ消え、ブランチは残っている
+# 場合、新規作成せず既存ブランチを割り当てて再作成する ----
+rm -rf "$CW_EXPECTED_WORKTREE_DIR"
+cw_output3="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
+cw_exit3=$?
+if [ "$cw_exit3" -eq 0 ] && [ -d "$CW_EXPECTED_WORKTREE_DIR" ]; then
+  pass "ワークツリーのディレクトリのみ消えた状態からの再実行が成功し、既存ブランチで再作成される"
+else
+  fail "ワークツリーのディレクトリのみ消えた状態からの再実行が失敗した（exit ${cw_exit3}）:
+$cw_output3"
+fi
+
+cw_branch_count="$(git -C "$TMP_CW_REPO" branch --list "$CW_EXPECTED_BRANCH" | wc -l | tr -d ' ')"
+if [ "$cw_branch_count" = "1" ]; then
+  pass "復旧後もブランチ $CW_EXPECTED_BRANCH が重複作成されていない"
+else
+  fail "復旧後、ブランチ $CW_EXPECTED_BRANCH が重複している（${cw_branch_count} 件）"
+fi
+
+# ---- 引数の妥当性検証 ----
+if "$CREATE_WORKTREE_SCRIPT" >/dev/null 2>&1; then
+  fail "引数無しで claude-skills/improvement-dispatcher/scripts/create-worktree を実行してもエラーにならない"
+else
+  pass "引数無しで claude-skills/improvement-dispatcher/scripts/create-worktree を実行するとエラーになる"
+fi
+
+if "$CREATE_WORKTREE_SCRIPT" "Invalid_Task_ID!" >/dev/null 2>&1; then
+  fail "不正な形式の task-id を渡してもエラーにならない"
+else
+  pass "不正な形式の task-id を渡すとエラーになる"
+fi
+
+echo ""
+echo "=== 10. claude-skills/improvement-dispatcher/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
+# TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
+# （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、
+# claude-skills/improvement-dispatcher/scripts/create-worktree へ切り出した後も維持されていることを確認する。
+
+TMP_CW_BASEDIR_REPO="$(mktemp -d)"
+cleanup_cw_basedir_repo() {
+  rm -rf "$TMP_CW_BASEDIR_REPO"
+}
+trap 'cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_CW_BASEDIR_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+mkdir -p "$TMP_CW_BASEDIR_REPO/.backlog"
+cat > "$TMP_CW_BASEDIR_REPO/.backlog/config.my.yml" <<'YAML'
+improvement_loop:
+  worktree_base_dir: ".worktree-custom"
+YAML
+
+CW_BASEDIR_TASK_ID="task-88-custom-basedir"
+CW_BASEDIR_EXPECTED_DIR="$TMP_CW_BASEDIR_REPO/.worktree-custom/$(basename "$TMP_CW_BASEDIR_REPO")/$CW_BASEDIR_TASK_ID"
+
+cw_basedir_output="$(cd "$TMP_CW_BASEDIR_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_BASEDIR_TASK_ID" 2>&1)"
+cw_basedir_exit=$?
+if [ "$cw_basedir_exit" -eq 0 ]; then
+  pass "worktree_base_dir をリポジトリ内の相対パスに設定した状態での実行が成功する（exit 0）"
+else
+  fail "worktree_base_dir をリポジトリ内の相対パスに設定した状態での実行が失敗した（exit ${cw_basedir_exit}）:
+$cw_basedir_output"
+fi
+
+if [ -d "$CW_BASEDIR_EXPECTED_DIR" ]; then
+  pass "worktree_base_dir で指定したリポジトリ内相対パス配下にワークツリーが作成される"
+else
+  fail "worktree_base_dir で指定したパス配下にワークツリーが作成されていない: $CW_BASEDIR_EXPECTED_DIR"
+fi
+
+if grep -Fxq ".worktree-custom" "$TMP_CW_BASEDIR_REPO/.git/info/exclude" 2>/dev/null; then
+  pass "リポジトリ内を指す worktree_base_dir が .git/info/exclude に追記される"
+else
+  fail "worktree_base_dir（.worktree-custom）が .git/info/exclude に追記されていない"
 fi
 
 echo ""
