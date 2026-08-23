@@ -420,6 +420,19 @@ for name in "${SKILL_NAMES[@]}"; do
   EXCLUDE_LINES+=(".claude/skills/$name")
 done
 
+# 追記する行群の由来を示す見出しコメント。既存の `# interview-dev-loop plan docs`
+# や `# claude-code-runtime` と同じ書式（対象行の直前に置く1行コメント）に倣う。
+# grep -Fxq で完全一致を見るため、EXCLUDE_LINES の重複検知には影響しない。
+EXCLUDE_HEADER="# improvement-loop"
+if grep -Fxq "$EXCLUDE_HEADER" "$EXCLUDE_FILE" 2>/dev/null; then
+  log "[skip] .git/info/exclude には既に見出しコメント '$EXCLUDE_HEADER' がある。"
+  SKIPPED+=(".git/info/exclude: $EXCLUDE_HEADER")
+else
+  printf '%s\n' "$EXCLUDE_HEADER" >> "$EXCLUDE_FILE"
+  log "[new]  .git/info/exclude に見出しコメント '$EXCLUDE_HEADER' を追記した。"
+  CREATED+=(".git/info/exclude: $EXCLUDE_HEADER")
+fi
+
 for line in "${EXCLUDE_LINES[@]}"; do
   if grep -Fxq "$line" "$EXCLUDE_FILE" 2>/dev/null; then
     log "[skip] .git/info/exclude には既に '$line' がある。"

@@ -380,6 +380,14 @@ else
   fail ".git/info/exclude が存在しない"
 fi
 
+# ---- .git/info/exclude の見出しコメントの検証 ----
+EXCLUDE_HEADER="# improvement-loop"
+if grep -Fxq "$EXCLUDE_HEADER" "$exclude_file" 2>/dev/null; then
+  pass ".git/info/exclude に見出しコメント '$EXCLUDE_HEADER' がある"
+else
+  fail ".git/info/exclude に見出しコメント '$EXCLUDE_HEADER' が無い"
+fi
+
 echo ""
 echo "=== 2b. install.zsh 経由でシンボリックリンクされた状態での実行 ==="
 # install.zsh は bin/setup-improvement-loop を $HOME/.local/bin にシンボリック
@@ -505,6 +513,14 @@ for line in "${expected_lines[@]}"; do
 done
 if [ "$no_dup" = true ]; then
   pass ".git/info/exclude に重複行が無い（再実行後も各行1回）"
+fi
+
+# 見出しコメントも再実行で重複して増えないことを確認する。
+header_count="$(grep -Fxc "$EXCLUDE_HEADER" "$exclude_file" 2>/dev/null || true)"
+if [ "$header_count" = "1" ]; then
+  pass "再実行後も .git/info/exclude の見出しコメント '$EXCLUDE_HEADER' が重複していない"
+else
+  fail "再実行後、.git/info/exclude の見出しコメント '$EXCLUDE_HEADER' が重複している（${header_count} 行）"
 fi
 
 echo ""
