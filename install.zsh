@@ -24,23 +24,19 @@ err() {
   print -r -- "エラー: $*" >&2
 }
 
-resolve_path() {
-  if command -v realpath >/dev/null 2>&1; then
-    realpath "$1"
-  elif readlink -f "$1" >/dev/null 2>&1; then
-    readlink -f "$1"
-  else
-    local dir base
-    dir="$(cd "$(dirname "$1")" && pwd -P)"
-    base="$(basename "$1")"
-    print -r -- "$dir/$base"
-  fi
-}
-
 # ---- リポジトリのルートを、このファイル自身の場所から解決する ----
+# zsh 組み込みの ${0:A:h} が symlink 解決込みの絶対パスを返すため、
+# bin/setup-improvement-loop のようなブートストラップ用の自己完結ロジックは
+# 不要（この時点で REPO_ROOT が確定する）。
 SCRIPT_DIR="${0:A:h}"
 REPO_ROOT="${SCRIPT_DIR}"
 SOURCE_BIN="$REPO_ROOT/bin/setup-improvement-loop"
+
+# resolve_path() の唯一の定義（TASK-18）を source する。bin/setup-improvement-loop
+# と異なりここでは REPO_ROOT が既に確定しているため、循環参照の制約が無く
+# そのまま source できる。
+# shellcheck source=bin/lib/resolve_path.sh
+source "$REPO_ROOT/bin/lib/resolve_path.sh"
 
 if [ ! -f "$SOURCE_BIN" ]; then
   err "配布元スクリプトが見つからない: $SOURCE_BIN"

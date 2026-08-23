@@ -159,7 +159,11 @@ if command -v shellcheck >/dev/null 2>&1; then
   # zsh は shellcheck が対応しない shell のため SC1071 で即座に fatal
   # parse error になり、他のスクリプト側も一切linterされずに巻き添えで FAIL
   # してしまう。そのため個別に実行する。
-  if shellcheck "$SETUP_SCRIPT"; then
+  # -x -P SCRIPTDIR: bin/setup-improvement-loop は TASK-18 で
+  # bin/lib/resolve_path.sh を source するようになった。source 先を実際に
+  # 追って検査させないと、常に SC1091（source 先を辿れない）で誤って
+  # 失敗するため、source 元スクリプトのディレクトリを基準に追跡させる。
+  if shellcheck -x -P SCRIPTDIR "$SETUP_SCRIPT"; then
     pass "shellcheck bin/setup-improvement-loop"
   else
     fail "shellcheck bin/setup-improvement-loop (指摘あり。上の出力を参照)"
@@ -188,7 +192,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   # bash として（精度は落ちるが）解析させる。zsh 固有構文（${0:A:h} や
   # print 組み込みなど）による誤検知が出ることがあるため、ここでの指摘は
   # 参考情報として報告するのみで、テスト全体の hard failure にはしない。
-  if shellcheck "$INSTALL_SCRIPT"; then
+  if shellcheck -x -P SCRIPTDIR "$INSTALL_SCRIPT"; then
     pass "shellcheck install.zsh (shell=bash として、精度は参考程度)"
   else
     echo "NOTE: shellcheck install.zsh に指摘あり。install.zsh は zsh 専用のため" \
