@@ -6,11 +6,13 @@
 # 報告してスキップする（テスト対象の不具合として失敗にはしない）。
 #
 # 実行するもの:
-#   1. install.zsh / bin/setup-improvement-loop の構文チェック（bash -n）。
-#      shellcheck があれば追加で実行する（無ければスキップを明示）。
+#   1. install.zsh / bin/setup-improvement-loop / claude-skills/improvement-dispatcher/scripts/select-next-task の構文
+#      チェック（bash -n）。shellcheck があれば追加で実行する（無ければスキップを明示）。
 #   2. 一時 git リポジトリに対して bin/setup-improvement-loop を実行し、
 #      配置結果（シンボリックリンク・config.my.yml・.git/info/exclude）を検証する。
 #   3. 同じ一時リポジトリに対して再実行し、冪等性とユーザー所有ファイル保護を検証する。
+#   7. claude-skills/improvement-dispatcher/scripts/select-next-task（improvement-dispatcher 手順4の選定ロジック）の
+#      動作確認テスト（通常選定・ラベル除外・依存除外・各種GATED・NO_CANDIDATE）。
 #
 # 1 件でも失敗すれば非ゼロで終了する。
 
@@ -20,6 +22,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETUP_SCRIPT="$REPO_ROOT/bin/setup-improvement-loop"
 CREATE_WORKTREE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/create-worktree"
+MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
+SELECT_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatcher/scripts/select-next-task"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
@@ -133,8 +137,24 @@ else
 fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
+if bash -n "$MERGE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
+else
+  fail "bash -n claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
+if bash -n "$SELECT_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n claude-skills/improvement-dispatcher/scripts/select-next-task"
+else
+  fail "bash -n claude-skills/improvement-dispatcher/scripts/select-next-task: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
 if command -v shellcheck >/dev/null 2>&1; then
-  # bin/setup-improvement-loop・claude-skills/improvement-dispatcher/scripts/create-worktree は bash なので shellcheck が
+  # bin/setup-improvement-loop・claude-skills/improvement-dispatcher/scripts/create-worktree・
+  # claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch・
+  # claude-skills/improvement-dispatcher/scripts/select-next-task は bash なので shellcheck が
   # 完全サポートする。install.zsh とまとめて1回の shellcheck 呼び出しで渡すと、
   # zsh は shellcheck が対応しない shell のため SC1071 で即座に fatal
   # parse error になり、他のスクリプト側も一切linterされずに巻き添えで FAIL
@@ -149,6 +169,18 @@ if command -v shellcheck >/dev/null 2>&1; then
     pass "shellcheck claude-skills/improvement-dispatcher/scripts/create-worktree"
   else
     fail "shellcheck claude-skills/improvement-dispatcher/scripts/create-worktree (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$MERGE_SCRIPT"; then
+    pass "shellcheck claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch"
+  else
+    fail "shellcheck claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$SELECT_SCRIPT"; then
+    pass "shellcheck claude-skills/improvement-dispatcher/scripts/select-next-task"
+  else
+    fail "shellcheck claude-skills/improvement-dispatcher/scripts/select-next-task (指摘あり。上の出力を参照)"
   fi
 
   # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
@@ -692,7 +724,291 @@ else
 fi
 
 echo ""
-echo "=== 7. claude-skills/improvement-dispatcher/scripts/create-worktree の動作確認 ==="
+echo "=== 7. claude-skills/improvement-dispatcher/scripts/select-next-task の選定ロジック検証 ==="
+# improvement-dispatcher 手順4の選定ロジック（除外集合の計算・依存確認・
+# 優先度ソート・max_in_progress/max_in_review の閾値判定）を切り出した
+# claude-skills/improvement-dispatcher/scripts/select-next-task を、improvement ループの6ステータスが揃った一時
+# backlog リポジトリに対して実行し、次の6パターンを検証する。
+#   7a. NO_CANDIDATE（To Do タスクが1件も無い）
+#   7b. 通常選定（優先度最高のものが選ばれる）
+#   7c. blocked:needs-decision ラベル除外 + 同優先度タイブレーク（ID最小）
+#   7d. 未完了の依存タスクを持つものの除外、依存解消後の再選定
+#   7e. max_in_progress 以上のときの GATED
+#   7f. max_in_review 以上のときの GATED
+
+TMP_REPO_SELECT="$(mktemp -d)"
+cleanup_select() {
+  rm -rf "$TMP_REPO_SELECT"
+}
+trap 'cleanup_select; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_REPO_SELECT" && git init -q)
+select_setup_output="$("$SETUP_SCRIPT" "$TMP_REPO_SELECT" 2>&1)"
+select_setup_exit=$?
+if [ "$select_setup_exit" -ne 0 ]; then
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task 検証用の一時リポジトリの準備（setup-improvement-loop）が失敗した（exit ${select_setup_exit}）:
+$select_setup_output"
+fi
+
+# --- 7a. NO_CANDIDATE: To Do タスクが1件も無い ---
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 2 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: NO_CANDIDATE'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: To Do が無いとき RESULT: NO_CANDIDATE（exit 2）"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: To Do が無いときの結果が期待と異なる（exit ${select_exit}）:
+$select_out"
+fi
+
+(cd "$TMP_REPO_SELECT" && backlog task create "Low task" --priority low --plain >/dev/null)
+(cd "$TMP_REPO_SELECT" && backlog task create "High task" --priority high --plain >/dev/null)
+(cd "$TMP_REPO_SELECT" && backlog task create "Medium task A" --priority medium --plain >/dev/null)
+(cd "$TMP_REPO_SELECT" && backlog task create "Medium task B" --priority medium --plain >/dev/null)
+
+# --- 7b. 通常選定: 優先度最高（High、TASK-2）が選ばれる ---
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-2'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: 優先度最高（High, TASK-2）が選定される"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: 通常選定の結果が期待と異なる（TASK-2 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 7c. blocked:needs-decision ラベル除外 + 同優先度タイブレークがID最小になる ---
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-2 --label 'blocked:needs-decision' --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-3'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: blocked:needs-decision 付き（TASK-2）を除外し、同優先度でID最小（TASK-3）を選ぶ"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: blocked ラベル除外後の結果が期待と異なる（TASK-3 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 7d. 依存タスク未完了の除外、依存解消後の再選定 ---
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-3 --dep task-1 --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-4'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: 未完了の依存（TASK-1）を持つ TASK-3 を除外し、TASK-4 を選ぶ"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: 依存未完了除外後の結果が期待と異なる（TASK-4 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# 依存タスクを Done にすると、除外されていた TASK-3 が再び選ばれる
+# （同優先度内でID最小が優先されることの確認も兼ねる）。
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-1 -s "Done" --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-3'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: 依存タスク（TASK-1）が Done になると TASK-3 が再び選ばれる"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: 依存解消後の結果が期待と異なる（TASK-3 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 7e. max_in_progress GATED ---
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-3 -s "In Progress" --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 1 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: GATED' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'REASON: max_in_progress'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: In Progress が max_in_progress 以上のとき RESULT: GATED / REASON: max_in_progress（exit 1）"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: max_in_progress ゲートの結果が期待と異なる（exit ${select_exit}）:
+$select_out"
+fi
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-3 -s "To Do" --plain >/dev/null)
+
+# --- 7f. max_in_review GATED ---
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-3 -s "In Review" --plain >/dev/null)
+(cd "$TMP_REPO_SELECT" && backlog task edit TASK-4 -s "In Review" --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 2 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 1 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: GATED' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'REASON: max_in_review'; then
+  pass "claude-skills/improvement-dispatcher/scripts/select-next-task: In Review が max_in_review 以上のとき RESULT: GATED / REASON: max_in_review（exit 1）"
+else
+  fail "claude-skills/improvement-dispatcher/scripts/select-next-task: max_in_review ゲートの結果が期待と異なる（exit ${select_exit}）:
+$select_out"
+fi
+
+echo ""
+echo "=== 8. claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch の動作確認 ==="
+# improvement-dispatcher 手順3（auto_merge_reviewed: true）のマージ判定を
+# 切り出した claude-skills/improvement-dispatcher/scripts/merge-reviewed-branch を、
+# 一時 git リポジトリに対して実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
+# 3-way衝突の4パターンを、それぞれ独立した一時リポジトリで確認する
+# （TASK-22 受入基準 #1-#4 に対応）。
+
+echo ""
+echo "--- 7a. 前提条件未達: メインの作業木が汚れている ---"
+TMP_MERGE_DIRTY="$(mktemp -d)"
+cleanup_merge_dirty() { rm -rf "$TMP_MERGE_DIRTY"; }
+trap 'cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_DIRTY" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_DIRTY" && git branch feature-dirty-check)
+echo "uncommitted" > "$TMP_MERGE_DIRTY/dirty.txt"
+
+merge_dirty_output="$(cd "$TMP_MERGE_DIRTY" && "$MERGE_SCRIPT" feature-dirty-check 2>&1)"
+merge_dirty_exit=$?
+if [ "$merge_dirty_exit" -eq 1 ]; then
+  pass "7a: メインの作業木が汚れている場合、終了ステータス 1 (PRECONDITION_NOT_MET) を返す"
+else
+  fail "7a: メインの作業木が汚れている場合の終了ステータスが 1 でない（${merge_dirty_exit}）: $merge_dirty_output"
+fi
+if grep -Fq "RESULT: PRECONDITION_NOT_MET" <<<"$merge_dirty_output"; then
+  pass "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれる"
+else
+  fail "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_dirty_output"
+fi
+if [ -n "$(cd "$TMP_MERGE_DIRTY" && git status --porcelain)" ] \
+  && [ "$(cd "$TMP_MERGE_DIRTY" && git rev-parse --abbrev-ref HEAD)" = "main" ]; then
+  pass "7a: 前提条件未達時、git状態（未コミット変更・ブランチ）が変更されない"
+else
+  fail "7a: 前提条件未達のはずが、メインの作業木の git 状態が変わっている"
+fi
+
+echo ""
+echo "--- 7b. ff-only マージが成功し、対応するワークツリーが片付けられる ---"
+TMP_MERGE_FF="$(mktemp -d)"
+# 対応するワークツリー（$TMP_MERGE_FF-wt）もここで一緒に片付ける。
+# アサーション後の単発 rm -rf に任せると、ワークツリー作成後・その rm
+# 行より前で中断された場合にディレクトリが残ってしまうため、EXIT trap の
+# 中で確実に片付ける。
+cleanup_merge_ff() { rm -rf "$TMP_MERGE_FF" "$TMP_MERGE_FF-wt"; }
+trap 'cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_FF" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_FF" && git worktree add -q -b feature-ff "$TMP_MERGE_FF-wt" main)
+(cd "$TMP_MERGE_FF-wt" && git commit -q --allow-empty -m "feature ff work")
+
+merge_ff_output="$(cd "$TMP_MERGE_FF" && "$MERGE_SCRIPT" feature-ff 2>&1)"
+merge_ff_exit=$?
+if [ "$merge_ff_exit" -eq 0 ]; then
+  pass "7b: ff-only 可能なブランチのマージが終了ステータス 0 (MERGED) で成功する"
+else
+  fail "7b: ff-only 可能なはずのマージが失敗した（${merge_ff_exit}）: $merge_ff_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_ff_output"; then
+  pass "7b: 出力に RESULT: MERGED が含まれる"
+else
+  fail "7b: 出力に RESULT: MERGED が含まれない: $merge_ff_output"
+fi
+if [ "$(cd "$TMP_MERGE_FF" && git log -1 --format=%s main)" = "feature ff work" ]; then
+  pass "7b: main が feature-ff の内容までマージされている"
+else
+  fail "7b: main が feature-ff の内容までマージされていない"
+fi
+if [ -d "$TMP_MERGE_FF-wt" ]; then
+  fail "7b: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7b: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+
+echo ""
+echo "--- 7c. 3-way マージ（衝突無し）が成功し、対応するワークツリーが片付けられる ---"
+TMP_MERGE_3WAY="$(mktemp -d)"
+cleanup_merge_3way() { rm -rf "$TMP_MERGE_3WAY" "$TMP_MERGE_3WAY-wt"; }
+trap 'cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_3WAY" && git init -q -b main)
+printf 'line1\n' > "$TMP_MERGE_3WAY/f1.txt"
+printf 'line2\n' > "$TMP_MERGE_3WAY/f2.txt"
+(cd "$TMP_MERGE_3WAY" && git add -A && git commit -q -m init)
+(cd "$TMP_MERGE_3WAY" && git branch feature-3way)
+printf 'main change\n' >> "$TMP_MERGE_3WAY/f1.txt"
+(cd "$TMP_MERGE_3WAY" && git add -A && git commit -q -m "main advances f1")
+(cd "$TMP_MERGE_3WAY" && git worktree add -q "$TMP_MERGE_3WAY-wt" feature-3way)
+printf 'feature change\n' >> "$TMP_MERGE_3WAY-wt/f2.txt"
+(cd "$TMP_MERGE_3WAY-wt" && git add -A && git commit -q -m "feature-3way advances f2")
+
+merge_3way_output="$(cd "$TMP_MERGE_3WAY" && "$MERGE_SCRIPT" feature-3way 2>&1)"
+merge_3way_exit=$?
+if [ "$merge_3way_exit" -eq 0 ]; then
+  pass "7c: 衝突の無い 3-way マージが終了ステータス 0 (MERGED) で成功する"
+else
+  fail "7c: 衝突が無いはずの 3-way マージが失敗した（${merge_3way_exit}）: $merge_3way_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_3way_output"; then
+  pass "7c: 出力に RESULT: MERGED が含まれる"
+else
+  fail "7c: 出力に RESULT: MERGED が含まれない: $merge_3way_output"
+fi
+merge_3way_parents="$(cd "$TMP_MERGE_3WAY" && git log -1 --format=%P main | wc -w | tr -d ' ')"
+if [ "$merge_3way_parents" = "2" ]; then
+  pass "7c: main の最新コミットが2つの親を持つマージコミットになっている"
+else
+  fail "7c: main の最新コミットがマージコミットになっていない（親の数: ${merge_3way_parents}）"
+fi
+if [ -z "$(cd "$TMP_MERGE_3WAY" && git status --porcelain)" ]; then
+  pass "7c: マージ完了後、メインの作業木がクリーンである"
+else
+  fail "7c: マージ完了後もメインの作業木が汚れている"
+fi
+if [ -d "$TMP_MERGE_3WAY-wt" ]; then
+  fail "7c: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7c: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+
+echo ""
+echo "--- 7d. 3-way マージが衝突する場合、abort して git 状態を復元する ---"
+TMP_MERGE_CONFLICT="$(mktemp -d)"
+cleanup_merge_conflict() { rm -rf "$TMP_MERGE_CONFLICT" "$TMP_MERGE_CONFLICT-wt"; }
+trap 'cleanup_merge_conflict; cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_CONFLICT" && git init -q -b main)
+printf 'original\n' > "$TMP_MERGE_CONFLICT/shared.txt"
+(cd "$TMP_MERGE_CONFLICT" && git add -A && git commit -q -m init)
+(cd "$TMP_MERGE_CONFLICT" && git branch feature-conflict)
+printf 'main version\n' > "$TMP_MERGE_CONFLICT/shared.txt"
+(cd "$TMP_MERGE_CONFLICT" && git add -A && git commit -q -m "main changes shared.txt")
+(cd "$TMP_MERGE_CONFLICT" && git worktree add -q "$TMP_MERGE_CONFLICT-wt" feature-conflict)
+printf 'feature version\n' > "$TMP_MERGE_CONFLICT-wt/shared.txt"
+(cd "$TMP_MERGE_CONFLICT-wt" && git add -A && git commit -q -m "feature-conflict changes shared.txt")
+
+merge_conflict_head_before="$(cd "$TMP_MERGE_CONFLICT" && git rev-parse HEAD)"
+merge_conflict_output="$(cd "$TMP_MERGE_CONFLICT" && "$MERGE_SCRIPT" feature-conflict 2>&1)"
+merge_conflict_exit=$?
+merge_conflict_head_after="$(cd "$TMP_MERGE_CONFLICT" && git rev-parse HEAD)"
+
+if [ "$merge_conflict_exit" -eq 2 ]; then
+  pass "7d: 衝突する 3-way マージが終了ステータス 2 (CONFLICT) を返す"
+else
+  fail "7d: 衝突するはずの 3-way マージの終了ステータスが 2 でない（${merge_conflict_exit}）: $merge_conflict_output"
+fi
+if grep -Fq "RESULT: CONFLICT" <<<"$merge_conflict_output"; then
+  pass "7d: 出力に RESULT: CONFLICT が含まれる"
+else
+  fail "7d: 出力に RESULT: CONFLICT が含まれない: $merge_conflict_output"
+fi
+if grep -Fq "shared.txt" <<<"$merge_conflict_output"; then
+  pass "7d: 衝突したファイル（shared.txt）が出力に報告される"
+else
+  fail "7d: 衝突したファイルが出力に報告されない: $merge_conflict_output"
+fi
+if [ "$merge_conflict_head_before" = "$merge_conflict_head_after" ]; then
+  pass "7d: 衝突後、main の HEAD がマージ前と変わっていない"
+else
+  fail "7d: 衝突後、main の HEAD がマージ前から変わっている"
+fi
+if [ -z "$(cd "$TMP_MERGE_CONFLICT" && git status --porcelain)" ]; then
+  pass "7d: 衝突後、git merge --abort によりメインの作業木がクリーンな状態に戻っている"
+else
+  fail "7d: 衝突後もメインの作業木が汚れたままである（abort されていない）"
+fi
+if [ -d "$TMP_MERGE_CONFLICT-wt" ]; then
+  pass "7d: マージが完了していないため、対応するワークツリーは片付けられず残る"
+else
+  fail "7d: マージが完了していないはずなのに、対応するワークツリーが片付けられている"
+fi
+
+echo ""
+echo "=== 9. claude-skills/improvement-dispatcher/scripts/create-worktree の動作確認 ==="
 # claude-skills/improvement-dispatcher/SKILL.md 手順5から切り出したワークツリー
 # 作成スクリプトを、実際に一時 git リポジトリに対して実行して検証する。
 # git init の既定ブランチ名は環境（init.defaultBranch）によって異なりうるため、
@@ -822,7 +1138,7 @@ else
 fi
 
 echo ""
-echo "=== 8. claude-skills/improvement-dispatcher/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
+echo "=== 10. claude-skills/improvement-dispatcher/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
 # （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、
 # claude-skills/improvement-dispatcher/scripts/create-worktree へ切り出した後も維持されていることを確認する。

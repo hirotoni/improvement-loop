@@ -149,74 +149,44 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 
 現在の挙動を維持する。このリポジトリで PR を運用していない前提でのみ使う設定である。ここで main が進めば、後続の引き渡しは新しい main を基点にできる。
 
-マージの前提条件。1 つでも欠けたらマージせず、状況を報告して今回の起動を終える。
-
-- **メインの作業木**（人間や orchestrator がいるこのディレクトリ）の `git status --porcelain` が空である。汚れているときはそこでブランチを切り替えない。stash も reset もしない。作業ブランチはワークツリーで分離されているため、この条件はメインの作業木自身の汚れ（人間の手元の変更）にのみ関する。他のサブエージェントが別のワークツリーで稼働中かどうかはこの条件に影響しない。
-- 対応する作業ブランチが存在し、`git log main..<作業ブランチ>` にコミットがある。ブランチさえ存在すればよく、対応するワークツリーがまだ残っているかは問わない。
-
-対象は 1 件ずつ処理する。マージ操作自体はメインの作業木（main を checkout しているディレクトリ）で行い、ワークツリー側のディレクトリに入る必要はない。まず早送りを試す。
+マージ判定（前提条件確認・ff-only 試行・3-way ドライラン・衝突判定・commit/abort・ワークツリーの片付け）は `.claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch` に切り出されている。散文を読んで毎回 git コマンドを組み立てない。対象は 1 件ずつ処理する。メインの作業木（人間や orchestrator がいるこのディレクトリ）から実行する。
 
 ```bash
-git switch main
-git merge --ff-only <作業ブランチ>
+.claude/skills/improvement-dispatcher/scripts/merge-reviewed-branch <作業ブランチ>
 ```
 
-早送りできない場合（main が先に進んでいる）は、衝突の有無を先に確かめる。
+終了ステータスと、標準出力に現れる `RESULT: <値>` の行で結果を判別する。backlog タスクのステータス変更はスクリプトの責務外であり、次の対応表の通り orchestrator が行う。
 
-```bash
-git merge --no-commit --no-ff <作業ブランチ>
-```
+| 終了ステータス | `RESULT` | 意味 | orchestrator が行うこと |
+| --- | --- | --- | --- |
+| `0` | `MERGED` | ff-only、または衝突のない 3-way でマージが完了した | `backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<出力中の main の短縮ハッシュ>）' --comment-author @orchestrator` で `Done` にする。次の対象へ進む。 |
+| `1` | `PRECONDITION_NOT_MET` | メインの作業木が汚れている／対象ブランチが存在しない／main との差分が無い、のいずれか | タスクは `Reviewed` のまま変更しない。標準エラー出力の内容を報告に含める。メインの作業木の汚れが原因の場合は他の対象を試しても同じ結果になるため、次の対象には進まず今回の起動を終える。 |
+| `2` | `CONFLICT` | 3-way マージが衝突した（スクリプトが `git merge --abort` 済みで、git 状態はマージ前と同じ） | タスクは `Reviewed` のまま残し、標準エラー出力に列挙された衝突ファイルを報告する。解消は人間に委ねる。次の対象には進まない。 |
+| `3` | `ERROR` | 想定外のエラー（引数不足、main への切り替え失敗、マージコミット自体の失敗等） | タスクは `Reviewed` のまま残し、標準エラー出力を報告する。次の対象には進まない。 |
 
-- 衝突した → `git merge --abort` で元に戻す。タスクは `Reviewed` のまま残し、衝突したファイルを報告する。解消は人間に委ねる。次の対象には進まない。
-- 衝突しない → そのままコミットしてマージを完了する。
+`rebase` は使わない。人間がレビューしたコミットの同一性が変わるためである。`--force` を伴う操作もこのスクリプトでは行わない。
 
-`rebase` は使わない。人間がレビューしたコミットの同一性が変わるためである。`--force` を伴う操作もしない。
+マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。マージが完了した場合（`RESULT: MERGED`）のみ、スクリプトが対応するワークツリーのディレクトリを自動で片付ける。未コミットの変更が残っている等で片付けに失敗した場合、スクリプトは `--force` せずその旨を出力するので、そのまま報告に含める（中身の破棄が必要かどうかの判断は人間に委ねる）。
 
-マージが完了したタスクだけ `Done` にする。
-
-```bash
-backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<マージ後の main の短縮ハッシュ>）' --comment-author @orchestrator
-```
-
-マージ後も `push` はしない。リモートへの反映は人間が行う。作業ブランチは削除せず残す（過去のコミットを辿れるようにするため）。一方、ワークツリーのディレクトリはマージが完了すれば役目を終えるので片付ける。
-
-```bash
-git worktree remove <ワークツリーのパス>   # 例（既定の worktree_base_dir の場合）: <リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>
-```
-
-サブエージェントが後始末し忘れた未コミットの変更がワークツリー側に残っていて `remove` が失敗する場合は、`--force` で強制削除せず、その旨を報告してそのワークツリーは残す。中身の破棄が必要かどうかの判断は人間に委ねる。
-
-処理後に `git log --oneline -1 main` で main の位置を確認し、報告に含める。
+処理後に `git log --oneline -1 main` で main の位置を確認し、報告に含める（スクリプトの出力にも短縮ハッシュが含まれる）。
 
 ### 4. 次に引き渡すタスクを選ぶ
 
-`In Progress` の件数が `max_in_progress`（調整値、既定 1）未満のときだけ選ぶ。`max_in_progress` が既定値 1 のままなら、これは従来通り「`In Progress` が無いときだけ」という挙動になる。`To Do` の中から次の規則で 1 件選ぶ。
-
-除外するもの：
-
-- `blocked:needs-decision` ラベルが付いているもの。人間の判断を待っている。
-- 依存タスク（`Dependencies`）が `Done` になっていないもの。
-
-`backlog task list` の出力にラベルは出ず、ラベルの除外指定も無い。差集合で求める。
+選定ロジック（除外集合の計算、依存確認、優先度ソート、`max_in_progress`/`max_in_review` の閾値判定）は `.claude/skills/improvement-dispatcher/scripts/select-next-task` に切り出されている。テキスト出力を手で読んで集合演算・ソートを組み立てない。手順 1 で読んだ `max_in_progress`（既定 1）・`max_in_review`（既定 3）の値をそのまま渡して呼ぶ。
 
 ```bash
-backlog task list --status "To Do" --plain                                    # 候補全体
-backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain  # 除外する分
+.claude/skills/improvement-dispatcher/scripts/select-next-task <max_in_progress> <max_in_review>
 ```
 
-依存は候補ごとに `backlog task view TASK-<n> --plain` の `Dependencies` を見て確認する。
+標準出力の1行目 `RESULT: <値>` で結果が分かる。終了ステータスでも判別できる（0=SELECTED, 1=GATED, 2=NO_CANDIDATE, 3=ERROR）。
 
-順序：
+- `RESULT: SELECTED` / `TASK_ID: TASK-<n>` → そのタスクを手順 5 で引き渡す。
+- `RESULT: GATED` / `REASON: max_in_progress` → `In Progress` が上限に達している。今回は引き渡さず手順 7 に進む。
+- `RESULT: GATED` / `REASON: max_in_review` → `In Review` が上限に達している。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告して手順 7 に進む。
+- `RESULT: NO_CANDIDATE` → `To Do` に選べる候補が無い（`blocked:needs-decision` ラベル付き・依存タスク未完了のものを除いて残らない場合を含む）。手順 7 に進む。
+- `RESULT: ERROR` → 引数不正など。標準エラーに詳細が出る。原因を確認する。
 
-1. 優先度が高いもの（`High` → `Medium` → `Low`）。
-2. 同じ優先度なら ID が小さいもの。
-
-引き渡しを止める条件：
-
-- `In Review` のタスクが `max_in_review` 件以上溜まっている。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告する。
-- `To Do` に対象が無い。手順 7 に進む。
-
-以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリの親ディレクトリの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
+以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリの親ディレクトリの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す（`.claude/skills/improvement-dispatcher/scripts/select-next-task` もこの条件を見ない）。
 
 ### 5. ワークツリーを作って引き渡す
 
