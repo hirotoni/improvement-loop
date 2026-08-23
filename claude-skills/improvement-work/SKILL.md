@@ -23,7 +23,7 @@ description: improvement-dispatch から引き渡された Backlog.md タスク�
 cd "<引き渡された作業ディレクトリ>"
 backlog instructions task-execution
 backlog task view TASK-<n> --plain
-.claude/skills/improvement-work/scripts/check-handoff "<引き渡された作業ディレクトリ>" "<引き渡されたブランチ名>"
+claude-skills/improvement-work/scripts/check-handoff "<引き渡された作業ディレクトリ>" "<引き渡されたブランチ名>"
 ```
 
 - `check-handoff` は、作業ディレクトリ一致・ブランチ一致・`.backlog` シンボリックリンクの健全性という、引き渡しが完全かどうかを機械的に判定できる3条件をまとめて確認する（`claude-skills/improvement-work/scripts/check-handoff` 参照）。3条件すべてを満たせば終了コード0、いずれかを満たさなければ標準エラーにどの条件が満たされていないかを明示して非0の終了コードで終わる。
