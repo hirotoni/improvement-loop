@@ -149,33 +149,21 @@ git worktree remove <ワークツリーのパス>   # 例（既定の worktree_b
 
 ### 4. 次に引き渡すタスクを選ぶ
 
-`In Progress` の件数が `max_in_progress`（調整値、既定 1）未満のときだけ選ぶ。`max_in_progress` が既定値 1 のままなら、これは従来通り「`In Progress` が無いときだけ」という挙動になる。`To Do` の中から次の規則で 1 件選ぶ。
-
-除外するもの：
-
-- `blocked:needs-decision` ラベルが付いているもの。人間の判断を待っている。
-- 依存タスク（`Dependencies`）が `Done` になっていないもの。
-
-`backlog task list` の出力にラベルは出ず、ラベルの除外指定も無い。差集合で求める。
+選定ロジック（除外集合の計算、依存確認、優先度ソート、`max_in_progress`/`max_in_review` の閾値判定）は `bin/select-next-task` に切り出されている。テキスト出力を手で読んで集合演算・ソートを組み立てない。手順 1 で読んだ `max_in_progress`（既定 1）・`max_in_review`（既定 3）の値をそのまま渡して呼ぶ。
 
 ```bash
-backlog task list --status "To Do" --plain                                    # 候補全体
-backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain  # 除外する分
+bin/select-next-task <max_in_progress> <max_in_review>
 ```
 
-依存は候補ごとに `backlog task view TASK-<n> --plain` の `Dependencies` を見て確認する。
+標準出力の1行目 `RESULT: <値>` で結果が分かる。終了ステータスでも判別できる（0=SELECTED, 1=GATED, 2=NO_CANDIDATE, 3=ERROR）。
 
-順序：
+- `RESULT: SELECTED` / `TASK_ID: TASK-<n>` → そのタスクを手順 5 で引き渡す。
+- `RESULT: GATED` / `REASON: max_in_progress` → `In Progress` が上限に達している。今回は引き渡さず手順 7 に進む。
+- `RESULT: GATED` / `REASON: max_in_review` → `In Review` が上限に達している。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告して手順 7 に進む。
+- `RESULT: NO_CANDIDATE` → `To Do` に選べる候補が無い（`blocked:needs-decision` ラベル付き・依存タスク未完了のものを除いて残らない場合を含む）。手順 7 に進む。
+- `RESULT: ERROR` → 引数不正など。標準エラーに詳細が出る。原因を確認する。
 
-1. 優先度が高いもの（`High` → `Medium` → `Low`）。
-2. 同じ優先度なら ID が小さいもの。
-
-引き渡しを止める条件：
-
-- `In Review` のタスクが `max_in_review` 件以上溜まっている。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告する。
-- `To Do` に対象が無い。手順 7 に進む。
-
-以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリの親ディレクトリの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す。
+以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリの親ディレクトリの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す（`bin/select-next-task` もこの条件を見ない）。
 
 ### 5. ワークツリーを作って引き渡す
 
