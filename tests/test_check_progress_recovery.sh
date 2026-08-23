@@ -25,6 +25,15 @@ echo "=== 13. claude-skills/improvement-dispatch/scripts/check-progress-recovery
 #   13c. ブランチが存在しない -> REVERT_TO_TODO（AC#3）
 #   13d. ブランチは存在するが新しいコミットが無い -> REVERT_TO_TODO（AC#3）
 #   13e. 引数の妥当性検証（引数不足・base_branch が解決できない）
+#
+# 占有記録（.worktree-occupancy、TASK-40）の鮮度を追加の判定材料にする
+# TASK-41 の回帰テスト:
+#   13f. ブランチ有り・新しいコミット無し・占有記録が新しい
+#        -> REUSE_WORKTREE_REDISPATCH に上書きされる（AC#1）
+#   13g. ブランチ有り・新しいコミット無し・占有記録が古い
+#        -> 既存通り REVERT_TO_TODO のまま変わらない（AC#2）
+#   13h. ブランチ有り・新しいコミット無し・占有記録が存在しない
+#        -> 既存通り REVERT_TO_TODO のまま変わらない（AC#2・AC#3）
 
 TMP_CR_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
@@ -128,6 +137,83 @@ if [ "$cr_exit_badbase" -eq 3 ] && printf '%s\n' "$cr_out_badbase" | grep -Fxq '
 else
   fail "13e: base_branch が解決できない場合の結果が期待と異なる（exit ${cr_exit_badbase}）:
 $cr_out_badbase"
+fi
+
+# ---- TASK-41: 占有記録（.worktree-occupancy）の鮮度を判定材料にする回帰テスト ----
+# 13a-13e とは別に、ワークツリー有り・ブランチ有り・新しいコミット無し
+# （＝コミット履歴だけでは REVERT_TO_TODO になるケース）を作り、その中で
+# .worktree-occupancy の有無・鮮度を切り替えて検証する。
+CR_WORKTREE_DIR2="${TMP_CR_REPO}-wt2"
+register_tmp_cleanup "$CR_WORKTREE_DIR2"
+(cd "$TMP_CR_REPO" && git worktree add -q -b feature-recovery-occupancy "$CR_WORKTREE_DIR2" main)
+
+echo ""
+echo "--- 13f. 占有記録が新しい -> REVERT_TO_TODO ではなく REUSE_WORKTREE_REDISPATCH（AC#1） ---"
+now_epoch="$(date -u +%s)"
+cat > "$CR_WORKTREE_DIR2/.worktree-occupancy" <<EOF
+TASK_ID=task-999-occupancy-fresh-test
+ASSIGNED_AT=$(date -u +%FT%TZ)
+ASSIGNED_AT_EPOCH=$now_epoch
+EOF
+cr_out_f="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR2" feature-recovery-occupancy main 2>&1)"
+cr_exit_f=$?
+if [ "$cr_exit_f" -eq 0 ] && printf '%s\n' "$cr_out_f" | grep -Fxq 'RESULT: REUSE_WORKTREE_REDISPATCH'; then
+  pass "13f: 新しいコミットが無くても占有記録が新しければ RESULT: REUSE_WORKTREE_REDISPATCH（exit 0）（AC#1）"
+else
+  fail "13f: 期待した結果と異なる（exit ${cr_exit_f}）:
+$cr_out_f"
+fi
+if printf '%s\n' "$cr_out_f" | grep -Fxq 'NEW_COMMITS: 0' \
+    && printf '%s\n' "$cr_out_f" | grep -Fxq 'OCCUPANCY_RECORD_EXISTS: true' \
+    && printf '%s\n' "$cr_out_f" | grep -Fxq 'OCCUPANCY_FRESH: true'; then
+  pass "13f: NEW_COMMITS: 0 と OCCUPANCY_RECORD_EXISTS: true / OCCUPANCY_FRESH: true が出力される（AC#3）"
+else
+  fail "13f: 診断内訳の出力が期待と異なる:
+$cr_out_f"
+fi
+
+echo ""
+echo "--- 13g. 占有記録が古い -> 既存通り REVERT_TO_TODO のまま変わらない（AC#2） ---"
+stale_epoch=$((now_epoch - 3600))
+cat > "$CR_WORKTREE_DIR2/.worktree-occupancy" <<EOF
+TASK_ID=task-999-occupancy-fresh-test
+ASSIGNED_AT=$(date -u +%FT%TZ)
+ASSIGNED_AT_EPOCH=$stale_epoch
+EOF
+cr_out_g="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR2" feature-recovery-occupancy main 2>&1)"
+cr_exit_g=$?
+if [ "$cr_exit_g" -eq 2 ] && printf '%s\n' "$cr_out_g" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
+  pass "13g: 占有記録が古い（1時間前）場合も RESULT: REVERT_TO_TODO のまま変わらない（exit 2）（AC#2）"
+else
+  fail "13g: 期待した結果と異なる（exit ${cr_exit_g}）:
+$cr_out_g"
+fi
+if printf '%s\n' "$cr_out_g" | grep -Fxq 'OCCUPANCY_RECORD_EXISTS: true' \
+    && printf '%s\n' "$cr_out_g" | grep -Fxq 'OCCUPANCY_FRESH: false'; then
+  pass "13g: OCCUPANCY_RECORD_EXISTS: true / OCCUPANCY_FRESH: false が出力される（AC#3）"
+else
+  fail "13g: 診断内訳の出力が期待と異なる:
+$cr_out_g"
+fi
+
+echo ""
+echo "--- 13h. 占有記録が存在しない -> 既存通り REVERT_TO_TODO のまま変わらない（AC#2・AC#3） ---"
+rm -f "$CR_WORKTREE_DIR2/.worktree-occupancy"
+cr_out_h="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR2" feature-recovery-occupancy main 2>&1)"
+cr_exit_h=$?
+if [ "$cr_exit_h" -eq 2 ] && printf '%s\n' "$cr_out_h" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
+  pass "13h: 占有記録が無い場合も RESULT: REVERT_TO_TODO のまま変わらない（exit 2）（AC#2、TASK-40導入前のワークツリー相当）"
+else
+  fail "13h: 期待した結果と異なる（exit ${cr_exit_h}）:
+$cr_out_h"
+fi
+if printf '%s\n' "$cr_out_h" | grep -Fxq 'OCCUPANCY_RECORD_EXISTS: false' \
+    && printf '%s\n' "$cr_out_h" | grep -Fxq 'OCCUPANCY_AGE_SECONDS: N/A' \
+    && printf '%s\n' "$cr_out_h" | grep -Fxq 'OCCUPANCY_FRESH: N/A'; then
+  pass "13h: OCCUPANCY_RECORD_EXISTS: false / OCCUPANCY_AGE_SECONDS: N/A / OCCUPANCY_FRESH: N/A が出力される（AC#3）"
+else
+  fail "13h: 診断内訳の出力が期待と異なる:
+$cr_out_h"
 fi
 
 finish_tests
