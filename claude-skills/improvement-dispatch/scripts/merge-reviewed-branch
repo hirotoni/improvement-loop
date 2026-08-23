@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# merge-reviewed-branch
+#
+# Reviewed になった improvement-loop の作業ブランチを、決定論的な手順で
+# main にマージする（improvement-dispatch 手順3の auto_merge_reviewed: true
+# パートに対応する）。
+#
+# 使い方:
+#   .claude/skills/improvement-dispatch/scripts/merge-reviewed-branch <作業ブランチ名>
+#
+# 呼び出し元のカレントディレクトリ（の属する git リポジトリ）を
+# メインの作業木として扱う。ブランチの切り替え・マージはそのリポジトリに
+# 対して行う。対象の作業ブランチ用ワークツリー（存在する場合）には
+# 立ち入らず、マージ完了後に `git worktree remove` で片付けるだけである。
+#
+# 行うこと（すべて機械的に判定できる分岐のみ）:
+#   1. メインの作業木がクリーンか（git status --porcelain が空か）を確認する。
+#   2. 対象ブランチが存在し、main との差分があるかを確認する。
+#   3. git merge --ff-only を試す。成功すればマージ完了。
+#   4. 早送りできなければ git merge --no-commit --no-ff でドライランする。
+#      衝突していれば abort し、衝突したファイルを報告して終了する
+#      （git 状態・backlog タスクの状態は一切変更しない）。
+#      衝突していなければそのままコミットしてマージを完了する。
+#   5. マージが完了した場合のみ、対応するワークツリーを git worktree remove
+#      で片付ける（未コミットの変更等で失敗しても --force はしない）。
+#
+# 終了ステータスと、標準出力の最後の行に出す "RESULT: <値>" で結果を判別する。
+#
+#   exit 0, RESULT: MERGED               マージ完了（ff-only または衝突無し3-way）
+#   exit 1, RESULT: PRECONDITION_NOT_MET マージ未実施。メインの作業木が汚れている、
+#                                         対象ブランチが存在しない、または
+#                                         main との差分が無い
+#   exit 2, RESULT: CONFLICT             マージ未実施。3-wayマージが衝突した
+#                                         （人間の判断が必要。abort 済みで
+#                                         git 状態は変更前と同じ）
+#   exit 3, RESULT: ERROR                想定外のエラー（引数不足、git 操作
+#                                         自体の失敗等）。マージ未実施
+#
+# backlog タスクのステータス変更はこのスクリプトの責務外。呼び出し元
+# （improvement-dispatch）が終了ステータスに応じて行う。
+#
+# rebase は使わない（人間がレビューしたコミットの同一性を変えないため）。
+# --force を伴う操作もしない。
+
+set -uo pipefail
+
+err() {
+  printf 'エラー: %s\n' "$*" >&2
+}
+
+emit_result() {
+  printf 'RESULT: %s\n' "$1"
+}
+
+# git merge --abort を実行し、実際にメインの作業木がマージ前のクリーンな
+# 状態に戻ったことまで確認する。abort コマンド自体の失敗、または abort 後も
+# MERGE_HEAD や未コミットの変更が残っている場合は、git 状態の復元を保証
+# できないとみなして 1 を返す。呼び出し元はこの場合、CONFLICT 等ではなく
+# ERROR として報告しなければならない（「git 状態は変更前と同じ」という
+# 保証が崩れているため、衝突ファイルの報告だけでは不十分）。
+abort_and_verify_restored() {
+  if ! git -C "$REPO_ROOT" merge --abort >/dev/null 2>&1; then
+    err "git merge --abort 自体が失敗した"
+    return 1
+  fi
+  if git -C "$REPO_ROOT" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    err "git merge --abort 後も MERGE_HEAD が残っている"
+    return 1
+  fi
+  local post_abort_status
+  if ! post_abort_status="$(git -C "$REPO_ROOT" status --porcelain)"; then
+    err "git merge --abort 後の git status の実行に失敗した（状態を確認できない）"
+    return 1
+  fi
+  if [ -n "$post_abort_status" ]; then
+    err "git merge --abort 後もメインの作業木が汚れている"
+    return 1
+  fi
+  return 0
+}
+
+BRANCH="${1:-}"
+
+if [ -z "$BRANCH" ]; then
+  err "使い方: $0 <作業ブランチ名>"
+  emit_result "ERROR"
+  exit 3
+fi
+
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
+  err "カレントディレクトリが git リポジトリの中ではない: $REPO_ROOT"
+  emit_result "ERROR"
+  exit 3
+fi
+
+# ---- 1. 前提条件: メインの作業木がクリーンか ----
+# git status 自体の失敗（リポジトリの破損、ロック等）を、クリーンである
+# こと（$dirty_status が空）と取り違えて先に進まないよう、コマンド自体の
+# 終了ステータスも明示的に確認する（フェイルクローズ）。
+if ! dirty_status="$(git -C "$REPO_ROOT" status --porcelain)"; then
+  err "git status の実行に失敗した。マージを行わない: $REPO_ROOT"
+  emit_result "ERROR"
+  exit 3
+fi
+if [ -n "$dirty_status" ]; then
+  err "メインの作業木が汚れている。マージを行わない: $REPO_ROOT"
+  printf '%s\n' "$dirty_status" >&2
+  emit_result "PRECONDITION_NOT_MET"
+  exit 1
+fi
+
+# ---- 2. 前提条件: 対象ブランチが存在するか ----
+if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  err "作業ブランチが存在しない: $BRANCH"
+  emit_result "PRECONDITION_NOT_MET"
+  exit 1
+fi
+
+# ---- 3. 前提条件: main との差分があるか ----
+if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/main"; then
+  err "main ブランチが存在しない"
+  emit_result "PRECONDITION_NOT_MET"
+  exit 1
+fi
+
+commit_count="$(git -C "$REPO_ROOT" rev-list --count "main..$BRANCH" 2>/dev/null || true)"
+if [ -z "$commit_count" ] || [ "$commit_count" -eq 0 ]; then
+  err "作業ブランチ '$BRANCH' に main との差分が無い"
+  emit_result "PRECONDITION_NOT_MET"
+  exit 1
+fi
+
+# ---- 4. main に切り替える ----
+if ! git -C "$REPO_ROOT" switch main >/dev/null 2>&1; then
+  err "main への切り替えに失敗した"
+  emit_result "ERROR"
+  exit 3
+fi
+
+# ---- 5. ff-only を試す ----
+if git -C "$REPO_ROOT" merge --ff-only "$BRANCH" >/dev/null 2>&1; then
+  echo "ff-only でマージした: $BRANCH"
+else
+  # ---- 6. 3-way ドライラン ----
+  merge_output="$(git -C "$REPO_ROOT" merge --no-commit --no-ff "$BRANCH" 2>&1)"
+  merge_status=$?
+  conflicted_files="$(git -C "$REPO_ROOT" diff --name-only --diff-filter=U)"
+
+  if [ -n "$conflicted_files" ]; then
+    if abort_and_verify_restored; then
+      err "3-wayマージが衝突した。abort してマージ前の状態に戻した。"
+      err "衝突したファイル:"
+      printf '%s\n' "$conflicted_files" >&2
+      emit_result "CONFLICT"
+      exit 2
+    else
+      err "3-wayマージが衝突し、かつ abort による状態の復元も確認できなかった。"
+      err "メインの作業木の状態を手動で確認すること: $REPO_ROOT"
+      emit_result "ERROR"
+      exit 3
+    fi
+  fi
+
+  if [ "$merge_status" -ne 0 ]; then
+    # 衝突ではないが merge 自体が失敗した（想定外）。安全側に倒し、
+    # 進行中のマージがあれば abort してマージ前の状態に戻す。
+    err "3-wayマージが衝突以外の理由で失敗した: $merge_output"
+    if ! abort_and_verify_restored; then
+      err "abort による状態の復元も確認できなかった。メインの作業木の状態を手動で確認すること: $REPO_ROOT"
+    fi
+    emit_result "ERROR"
+    exit 3
+  fi
+
+  if ! git -C "$REPO_ROOT" commit --no-edit >/dev/null 2>&1; then
+    # 衝突は無くマージ自体は進んだが、コミットに失敗した（フック等）。
+    # 安全側に倒し、abort してマージ前の状態に戻す。
+    err "衝突は無かったがマージコミットに失敗した。"
+    if ! abort_and_verify_restored; then
+      err "abort による状態の復元も確認できなかった。メインの作業木の状態を手動で確認すること: $REPO_ROOT"
+    fi
+    emit_result "ERROR"
+    exit 3
+  fi
+
+  echo "3-wayマージ（衝突無し）でマージした: $BRANCH"
+fi
+
+merged_sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+echo "main の位置: $merged_sha"
+
+# ---- 7. 対応するワークツリーを片付ける ----
+worktree_path="$(git -C "$REPO_ROOT" worktree list --porcelain | awk -v branch="refs/heads/$BRANCH" '
+  /^worktree / { path = substr($0, index($0, $2)) }
+  /^branch /   { if ($2 == branch) print path }
+')"
+
+if [ -n "$worktree_path" ]; then
+  worktree_err_file="$(mktemp)"
+  if git -C "$REPO_ROOT" worktree remove "$worktree_path" 2>"$worktree_err_file"; then
+    echo "ワークツリーを片付けた: $worktree_path"
+  else
+    err "ワークツリーの片付けに失敗した（--force はせず残す）: $worktree_path"
+    err "$(cat "$worktree_err_file")"
+  fi
+  rm -f "$worktree_err_file"
+else
+  echo "対応するワークツリーは見つからなかった（既に片付け済みの可能性がある）"
+fi
+
+emit_result "MERGED"
+exit 0
