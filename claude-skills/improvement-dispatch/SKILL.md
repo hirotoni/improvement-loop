@@ -109,18 +109,32 @@ backlog task view TASK-<n> --plain                       # 前回この手順で
        .claude/skills/improvement-dispatch/scripts/check-progress-recovery <ワークツリーのパス> <作業ブランチ> <デフォルトブランチ>
        ```
 
-       標準出力の最後の行 `RESULT: <値>` で結果を判別する（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
+       標準出力には `RESULT` の前に次の判定材料の行が並ぶ（TASK-40/TASK-41）。
+
+       ```
+       WORKTREE_EXISTS: true|false
+       BRANCH_EXISTS: true|false
+       NEW_COMMITS: <件数>|N/A
+       OCCUPANCY_RECORD_EXISTS: true|false
+       OCCUPANCY_AGE_SECONDS: <秒数>|N/A
+       OCCUPANCY_FRESH: true|false|N/A
+       RESULT: <値>
+       ```
+
+       `OCCUPANCY_*` は、ワークツリー直下の占有記録（`.worktree-occupancy`。TASK-40 で `.claude/skills/improvement-dispatch/scripts/create-worktree` が引き渡し・再引き渡しのたびに上書きする。`TASK_ID`・`ASSIGNED_AT`・`ASSIGNED_AT_EPOCH` の3行）を読み、その `ASSIGNED_AT_EPOCH`（最後に `create-worktree` が実行された＝最後にこのワークツリーが引き渡された時刻）からの経過秒数が 1800 秒（30分）未満かどうかを示す（TASK-41）。占有記録が無い、または読めない場合は `OCCUPANCY_RECORD_EXISTS: false` / `OCCUPANCY_AGE_SECONDS: N/A` / `OCCUPANCY_FRESH: N/A` となり、占有記録導入前と同じくコミット履歴のみの判定にフォールバックする。dispatch はこれらの行を個別に解釈する必要は無く、最後の行 `RESULT: <値>` だけで結果を判別すればよい（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
 
        | `RESULT` | 意味 | dispatch が行うこと |
        | --- | --- | --- |
-       | `REUSE_WORKTREE_REDISPATCH` | ワークツリー・ブランチともに存在し、デフォルトブランチから見て新しいコミットがある（＝実装が途中まで進んでいる） | 既存のワークツリーをそのまま再利用し、その到達点を引き渡し情報に含めて手順 5 で再度引き渡す。 |
-       | `RECREATE_WORKTREE_REDISPATCH` | ワークツリーは無いがブランチが存在し、新しいコミットがある | `git worktree prune` で古い管理情報を掃除した後、手順 5（`.claude/skills/improvement-dispatch/scripts/create-worktree`。ワークツリーは無くブランチだけ存在する場合、新規作成せず既存の作業ブランチを割り当てる）で作り直し、到達点を引き渡し情報に含めて再度引き渡す。 |
-       | `REVERT_TO_TODO` | ブランチが存在しない、またはデフォルトブランチから見て新しいコミットが無い（＝何も進んでいない） | `backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @dispatch` で戻す。出力の `WORKTREE_EXISTS: true` でワークツリーが残っていると分かれば `git worktree remove <ワークツリーのパス>` で片付ける。 |
+       | `REUSE_WORKTREE_REDISPATCH` | 次のいずれか。(a) ワークツリー・ブランチともに存在し、デフォルトブランチから見て新しいコミットがある（＝実装が途中まで進んでいる）。(b) 新しいコミットは無いが、`OCCUPANCY_FRESH: true`（＝最後の引き渡しから30分未満。TASK-41）。この場合はコミットを伴わない長時間処理（大きなテスト実行など）が続いているだけで、実際には稼働中の可能性が高いとみなす。 | 既存のワークツリーをそのまま再利用し、その到達点を引き渡し情報に含めて手順 5 で再度引き渡す（手順 5 は `create-worktree` を経由するため、占有記録の `ASSIGNED_AT_EPOCH` もこの再引き渡しの時刻に更新される）。 |
+       | `RECREATE_WORKTREE_REDISPATCH` | ワークツリーは無いがブランチが存在し、新しいコミットがある（ワークツリーが無い時点で占有記録は判定に使わない） | `git worktree prune` で古い管理情報を掃除した後、手順 5（`.claude/skills/improvement-dispatch/scripts/create-worktree`。ワークツリーは無くブランチだけ存在する場合、新規作成せず既存の作業ブランチを割り当てる）で作り直し、到達点を引き渡し情報に含めて再度引き渡す。 |
+       | `REVERT_TO_TODO` | ブランチが存在しない。またはブランチはあるが新しいコミットが無く、かつ占有記録も新しくない（`OCCUPANCY_FRESH` が `false` または `N/A`）（＝コミット履歴からも占有記録からも活動が確認できない） | `backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @dispatch` で戻す。出力の `WORKTREE_EXISTS: true` でワークツリーが残っていると分かれば `git worktree remove <ワークツリーのパス>` で片付ける。 |
        | `ERROR` | 引数不正、対象リポジトリでない、デフォルトブランチが解決できない等 | 標準エラー出力の内容を確認する。 |
+
+30 分という閾値は、この手順の中に独立して2箇所出てくる。ひとつは直前の「経過が 30 分以上」（dispatch 自身が notes のコミットハッシュ・`git status --porcelain` の記録から判定する、この復旧診断を呼び出すかどうかのゲート）、もうひとつは `check-progress-recovery` 内部の `OCCUPANCY_FRESH`（占有記録の `ASSIGNED_AT_EPOCH` からの経過。復旧診断を呼び出した後、新しいコミットが無い場合の判定に使う）である。両者は測る起点が異なる（前者はコミット・作業ツリー差分が最後に変化した時刻、後者は最後に `create-worktree` が実行された＝引き渡された時刻）。値をどちらも 1800 秒に揃えているのは、根拠となる手順 7 の起動間隔（後述）が共通だからであり、同じ1つの計測を指しているわけではない。
 
 この 30 分という目安の根拠は手順 7 の起動間隔である。手順 7 では、サブエージェント稼働中の次回起動を保険として 1800 秒以上後に、承認待ち・レビュー待ちで動けないときは 1200〜1800 秒後にそれぞれ設定する目安を定めている。1 回の起動間隔が概ね 20〜30 分であることを踏まえ、記録した観測から 30 分以上が経過していれば、その間に少なくとも 1 回以上は別の起動を挟んでいる（＝複数回の起動にわたって同じ状態を確認した）とみなせる。
 
-この基準はワークツリーの静けさをサブエージェントの生死の代理指標として使っているため、コミットを伴わない長時間の処理（大きなテスト実行など）が続いている場合には、稀に「まだ生きているのに存在しないと誤判定し、再引き渡しした先で同一ワークツリーへの二重書き込みが起きる」リスクが完全には無くならない。ただし従来の「不安定な表示を見た瞬間に判定する」挙動と比べれば、30 分以上の無変化という条件を挟む分だけ発生頻度は大きく下がる。残るリスクをゼロにする設計（例えばロックファイルの導入）はこのタスクの範囲外とする。
+この基準はワークツリーの静けさをサブエージェントの生死の代理指標として使っているため、コミットを伴わない長時間の処理（大きなテスト実行など）が続いている場合には、「まだ生きているのに存在しないと誤判定し、再引き渡しした先で同一ワークツリーへの二重書き込みが起きる」リスクがある。TASK-40/TASK-41 で導入した占有記録（`.worktree-occupancy` と `OCCUPANCY_FRESH`、上の対応表参照）は、このリスクのうち「直近に引き渡し・再引き渡しされたばかりのワークツリーが、コミットを伴わない処理の間に誤って `REVERT_TO_TODO` されてしまう」場合を軽減する。ただし占有記録は `create-worktree` 実行のたびに丸ごと上書きされるだけで、作業の進行に合わせて継続的に更新されるハートビートではない。そのため、直近の引き渡しから 30 分を超えてなおコミットを伴わない処理（大きなテスト実行など）が続く場合は `OCCUPANCY_FRESH` も `false` になり、占有記録導入前と同じ誤判定のリスクがそのまま残る。この残余リスクを完全に無くす設計（例えば作業の進行に合わせて占有記録を継続的に更新するハートビート方式の導入）は現時点では未着手であり、必要になった際に別途タスク化する。
 
 `In Progress` は同時に `max_in_progress` 件までとする。以前はメインの作業木を複数のサブエージェントで共有していたため、この上限がブランチの混線を防ぐ唯一の歯止めだった。手順 5 でタスクごとに独立したワークツリーへ分離した現在、その理由自体は成立しなくなっている。ただし値を引き上げるかどうかはこのタスクのスコープ外として据え置く（レビュー体制や運用実績を見て別途判断する）。
 
