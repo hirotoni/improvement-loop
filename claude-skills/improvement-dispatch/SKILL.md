@@ -269,13 +269,21 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
 - status が `In Review` になっているか。
 - 受入基準がチェックされ、notes に検証の証跡（実行したコマンドと結果）があるか。
 - ブランチにコミットがあるか。差分が受入基準の範囲に収まっているか。
+- `forbidden_paths`/`allowed_paths` のバックストップ検証（TASK-44）。上記と同じ2つのブランチ間の変更ファイル一覧を、機械的な照合スクリプトに突き合わせる。
+
+  ```bash
+  .claude/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths \
+    $(git diff <デフォルトブランチ>..<作業ブランチ> --name-only)
+  ```
+
+  終了ステータスと標準出力の `RESULT: <値>` の行で判別する（0=OK, 1=VIOLATION, 2=ERROR）。`forbidden_paths`/`allowed_paths` が両方空、キー自体が無い、または `.backlog/config.my.yml` 自体が無い場合、このスクリプトは常に `RESULT: OK` で終わる（スクリプト自身の仕様）。そのため未設定のときはこの検証を実行しても判定は常に無違反となり、既存の手順6の実行フローに変化は生じない。`RESULT: VIOLATION` のときは標準出力の `VIOLATING_FILES` に違反ファイルが列挙される。`RESULT: ERROR` のときは標準エラー出力を確認し、環境不備（対象リポジトリでない等）を解消したうえで手順6をやり直す。backlog タスクの状態はこのスクリプト自体では変更しない。
 - 報告に挙がった検証コマンドを 1 つ選び、自分で実行して結果が一致するか確かめる。
 
 満たしていない場合の扱い：
 
-- 実装が不完全、範囲外、または検証が無い → `backlog task edit TASK-<n> -s "To Do" --comment '<不足点>' --comment-author @dispatch` で戻し、次回の起動で再度引き渡す。同じタスクの再引き渡しは `max_redispatch` 回まで。
-- 再引き渡しを `max_redispatch` 回使い切った、または人間の判断が必要と報告された → `backlog task edit TASK-<n> --add-label 'blocked:needs-decision' -s "To Do" --comment '<未解決の判断事項>' --comment-author @dispatch`。以降の選択から自動的に外れる。
-- 満たしている → そのまま `In Review` で置く。`Done` にしない。ブランチ名と差分の要約を報告する。
+- 実装が不完全、範囲外、検証が無い、または `forbidden_paths`/`allowed_paths` のバックストップ検証が `RESULT: VIOLATION` を返した → `backlog task edit TASK-<n> -s "To Do" --comment '<不足点、または VIOLATING_FILES の一覧>' --comment-author @dispatch` で戻し、次回の起動で再度引き渡す。同じタスクの再引き渡しは `max_redispatch` 回まで。
+- 再引き渡しを `max_redispatch` 回使い切った、または人間の判断が必要と報告された（`forbidden_paths`/`allowed_paths` の違反が再引き渡し後も解消しない場合を含む） → `backlog task edit TASK-<n> --add-label 'blocked:needs-decision' -s "To Do" --comment '<未解決の判断事項>' --comment-author @dispatch`。以降の選択から自動的に外れる。
+- 満たしている（`forbidden_paths`/`allowed_paths` のバックストップ検証が `RESULT: OK` の場合を含む） → そのまま `In Review` で置く。`Done` にしない。ブランチ名と差分の要約を報告する。
 
 ### 7. 次の起動を決めて報告する
 
