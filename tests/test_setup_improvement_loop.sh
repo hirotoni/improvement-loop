@@ -600,4 +600,239 @@ else
   fail "再実行後にコメントアウトされたキー max_in_review が有効な形で重複追記された（${commented_active_count2} 件）"
 fi
 
+echo ""
+echo "=== 7. 旧ステータス名 Reviewed が残る既存 consumer リポジトリの移行（TASK-48） ==="
+# TASK-8 で Reviewed は Approved にリネームされたが、この移行は本リポジトリ自身の
+# .backlog/config.yml のみを対象に行われ、setup-improvement-loop（配布ロジック）
+# には反映されていなかった。TASK-8 以前にセットアップされた既存 consumer
+# リポジトリを模擬した一時ディレクトリ環境（statuses に Reviewed と Approved が
+# 両方残り、status: Reviewed の既存タスクがある状態）に対して setup-improvement-loop
+# を実行し、(a) statuses の重複が解消され Reviewed が消えること（AC#1）、
+# (b) 既存タスクが Approved へ移行されること（AC#2）を検証する。
+# 実際の consumer リポジトリ（~/dotfiles 等）へは書き込まない。
+
+TMP_REPO_REVIEWED_MIGRATION="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_REVIEWED_MIGRATION"
+
+(cd "$TMP_REPO_REVIEWED_MIGRATION" && git init -q)
+mkdir -p "$TMP_REPO_REVIEWED_MIGRATION/.backlog"
+
+# TASK-48 の起票時に実機（~/dotfiles）で確認された statuses の並びをそのまま模擬する。
+cat > "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml" <<'YAML'
+project_name: "reviewed-migration-test"
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+# status: Reviewed の既存タスク（TASK-1）と、影響を受けてはいけない別ステータスの
+# タスク（TASK-2、To Do のまま）を backlog CLI 経由で用意する。
+# TASK-1 のタイトルにわざと "TASK-999"（存在しないタスクID）という文字列を
+# 含めておく。`backlog task list --status "Reviewed" --plain` の出力行から
+# タスクIDを抽出する実装が、行のどこにでも現れる "TASK-[0-9]+" を素朴に拾うと、
+# タイトル中のこの文字列を別タスクのIDと誤検出し、存在しない TASK-999 を
+# 移行しようとして失敗する（回帰テスト）。
+(cd "$TMP_REPO_REVIEWED_MIGRATION" && backlog task create "reviewed task fix TASK-999 regression" --plain >/dev/null)
+(cd "$TMP_REPO_REVIEWED_MIGRATION" && backlog task edit TASK-1 -s "Reviewed" --plain >/dev/null)
+(cd "$TMP_REPO_REVIEWED_MIGRATION" && backlog task create "still todo task" --plain >/dev/null)
+
+reviewed_task_file="$(find "$TMP_REPO_REVIEWED_MIGRATION/.backlog/tasks" -name 'task-1 - *.md')"
+todo_task_file="$(find "$TMP_REPO_REVIEWED_MIGRATION/.backlog/tasks" -name 'task-2 - *.md')"
+
+if [ -z "$reviewed_task_file" ] || ! grep -Fxq 'status: Reviewed' "$reviewed_task_file"; then
+  fail "テスト前提が壊れている: TASK-1 を status: Reviewed にできなかった"
+fi
+
+# AC#4 の証跡: 移行前の状態をログに残す（模擬環境での before）。
+echo "--- 移行前（before） ---"
+echo "config.yml statuses: $(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
+echo "TASK-1 status: $(grep -m1 '^status:' "$reviewed_task_file")"
+echo "TASK-2 status: $(grep -m1 '^status:' "$todo_task_file")"
+
+reviewed_migration_output="$("$SETUP_SCRIPT" "$TMP_REPO_REVIEWED_MIGRATION" 2>&1)"
+reviewed_migration_exit=$?
+if [ "$reviewed_migration_exit" -eq 0 ]; then
+  pass "Reviewed が残る一時リポジトリに対する setup-improvement-loop 実行が成功する（exit 0）"
+else
+  fail "Reviewed が残る一時リポジトリに対する setup-improvement-loop 実行が失敗した（exit ${reviewed_migration_exit}）:
+$reviewed_migration_output"
+fi
+
+# AC#4 の証跡: 移行後の状態をログに残す（模擬環境での after）。
+echo "--- 移行後（after） ---"
+echo "config.yml statuses: $(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
+echo "TASK-1 status: $(grep -m1 '^status:' "$reviewed_task_file")"
+echo "TASK-2 status: $(grep -m1 '^status:' "$todo_task_file")"
+
+# ---- AC#1: statuses から旧名 Reviewed が消え、Approved の重複が解消される ----
+result_status_line="$(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
+if ! grep -Fq '"Reviewed"' <<<"$result_status_line"; then
+  pass "AC#1: statuses から旧名 'Reviewed' が除去された"
+else
+  fail "AC#1: statuses に旧名 'Reviewed' が残っている: $result_status_line"
+fi
+approved_count="$(grep -o '"Approved"' <<<"$result_status_line" | wc -l | tr -d ' ')"
+if [ "$approved_count" = "1" ]; then
+  pass "AC#1: statuses に 'Approved' がちょうど1つだけ残る（重複していない）"
+else
+  fail "AC#1: statuses の 'Approved' の件数が想定と異なる（${approved_count} 件）: $result_status_line"
+fi
+
+# ---- AC#2: status: Reviewed だった既存タスクが Approved へ移行される ----
+if grep -Fxq 'status: Approved' "$reviewed_task_file"; then
+  pass "AC#2: status: Reviewed だった TASK-1 が Approved へ移行された"
+else
+  fail "AC#2: TASK-1 が Approved へ移行されなかった: $(grep -m1 '^status:' "$reviewed_task_file")"
+fi
+
+# 影響を受けてはいけないタスク（To Do のまま）が変更されていないことも確認する。
+if grep -Fxq 'status: To Do' "$todo_task_file"; then
+  pass "移行対象外のタスク（To Do）が変更されずに保持されている"
+else
+  fail "移行対象外のタスク（To Do）の status が意図せず変更された: $(grep -m1 '^status:' "$todo_task_file")"
+fi
+
+# タイトルに含まれる "TASK-999" という文字列が、存在しないタスクIDとして
+# 誤検出・誤操作されていないことを確認する（回帰テスト）。誤検出されていれば
+# 上の「setup-improvement-loop 実行が成功する」の時点で TASK-999 が存在しない
+# ため既に失敗しているはずだが、念のためタスクファイルが作られていないことも
+# 直接確認する。
+fake_task_999_file="$(find "$TMP_REPO_REVIEWED_MIGRATION/.backlog/tasks" -name 'task-999*' 2>/dev/null)"
+if [ -z "$fake_task_999_file" ]; then
+  pass "タイトル中の 'TASK-999' という文字列が存在しないタスクIDとして誤検出されなかった"
+else
+  fail "タイトル中の 'TASK-999' が誤ってタスクIDとして扱われた形跡がある: $fake_task_999_file"
+fi
+
+echo ""
+echo "=== 7b. 移行済みリポジトリへの再実行は何も変化させない（AC#3・冪等性） ==="
+# 7. で Reviewed が完全に移行済みになった同じリポジトリに再度実行し、
+# 「既に移行済みのリポジトリでは何も変化しない」（AC#3 の後半）ことを確認する。
+
+reviewed_task_status_before_rerun="$(cat "$reviewed_task_file")"
+config_before_rerun="$(cat "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
+
+reviewed_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_REVIEWED_MIGRATION" 2>&1)"
+reviewed_rerun_exit=$?
+if [ "$reviewed_rerun_exit" -eq 0 ]; then
+  pass "移行済みリポジトリへの再実行が成功する（exit 0）"
+else
+  fail "移行済みリポジトリへの再実行が失敗した（exit ${reviewed_rerun_exit}）:
+$reviewed_rerun_output"
+fi
+
+if grep -Fq "status: Reviewed の既存タスクは見つからなかった" <<<"$reviewed_rerun_output" \
+  && grep -Fq "旧名 'Reviewed' は残っていない" <<<"$reviewed_rerun_output"; then
+  pass "AC#3: 再実行時、Reviewed 関連の移行処理が両方ともスキップと報告される"
+else
+  fail "AC#3: 再実行時に期待するスキップ報告が出力されなかった:
+$reviewed_rerun_output"
+fi
+
+if [ "$(cat "$reviewed_task_file")" = "$reviewed_task_status_before_rerun" ]; then
+  pass "AC#3: 移行済みタスクファイルは再実行後も変化しない"
+else
+  fail "AC#3: 移行済みタスクファイルが再実行で変化した"
+fi
+if [ "$(cat "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")" = "$config_before_rerun" ]; then
+  pass "AC#3: config.yml は再実行後も変化しない"
+else
+  fail "AC#3: config.yml が再実行で変化した"
+fi
+
+echo ""
+echo "=== 7c. Reviewed が元から存在しないリポジトリでは何も変化しない（AC#3） ==="
+# セクション2で通常セットアップ済みの $TMP_REPO（Reviewed を一度も含んだことが
+# 無い）に対して setup-improvement-loop を再実行し、Reviewed 関連の移行処理が
+# 両方ともスキップと報告されることを確認する（AC#3 の前半）。
+
+no_reviewed_output="$("$SETUP_SCRIPT" "$TMP_REPO" 2>&1)"
+no_reviewed_exit=$?
+if [ "$no_reviewed_exit" -eq 0 ]; then
+  pass "Reviewed が元から無いリポジトリへの実行が成功する（exit 0）"
+else
+  fail "Reviewed が元から無いリポジトリへの実行が失敗した（exit ${no_reviewed_exit}）:
+$no_reviewed_output"
+fi
+if grep -Fq "status: Reviewed の既存タスクは見つからなかった" <<<"$no_reviewed_output" \
+  && grep -Fq "旧名 'Reviewed' は残っていない" <<<"$no_reviewed_output"; then
+  pass "AC#3: Reviewed が元から無い場合も、両方の移行処理がスキップと報告される"
+else
+  fail "AC#3: Reviewed が元から無い場合に期待するスキップ報告が出力されなかった:
+$no_reviewed_output"
+fi
+
+echo ""
+echo "=== 7d. task_prefix をカスタマイズしたリポジトリでの Reviewed タスク移行（回帰テスト） ==="
+# backlog task list --plain が出力する ID は config.yml の task_prefix に応じて
+# 変わる（既定は "TASK-<n>" だが、task_prefix: "issue" なら "ISSUE-<n>"）。
+# ID 抽出パターンを "TASK-" 固定にすると、task_prefix をカスタマイズした
+# リポジトリでは対象タスクを一切検出できず、config.yml の statuses からだけ
+# "Reviewed" が消えて既存タスクが status: Reviewed のまま永久に取り残される
+# （後続の再実行でも同じく検出できないため回復しない）。この不具合の回帰テスト。
+
+TMP_REPO_CUSTOM_PREFIX="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX"
+
+(cd "$TMP_REPO_CUSTOM_PREFIX" && git init -q)
+mkdir -p "$TMP_REPO_CUSTOM_PREFIX/.backlog"
+cat > "$TMP_REPO_CUSTOM_PREFIX/.backlog/config.yml" <<'YAML'
+project_name: "custom-prefix-test"
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "issue"
+YAML
+
+(cd "$TMP_REPO_CUSTOM_PREFIX" && backlog task create "custom prefix reviewed task" --plain >/dev/null)
+(cd "$TMP_REPO_CUSTOM_PREFIX" && backlog task edit ISSUE-1 -s "Reviewed" --plain >/dev/null)
+
+custom_prefix_task_file="$(find "$TMP_REPO_CUSTOM_PREFIX/.backlog/tasks" -name 'issue-1 - *.md')"
+if [ -z "$custom_prefix_task_file" ] || ! grep -Fxq 'status: Reviewed' "$custom_prefix_task_file"; then
+  fail "テスト前提が壊れている: ISSUE-1 を status: Reviewed にできなかった"
+fi
+
+custom_prefix_output="$("$SETUP_SCRIPT" "$TMP_REPO_CUSTOM_PREFIX" 2>&1)"
+custom_prefix_exit=$?
+if [ "$custom_prefix_exit" -eq 0 ]; then
+  pass "task_prefix をカスタマイズしたリポジトリへの実行が成功する（exit 0）"
+else
+  fail "task_prefix をカスタマイズしたリポジトリへの実行が失敗した（exit ${custom_prefix_exit}）:
+$custom_prefix_output"
+fi
+
+if grep -Fxq 'status: Approved' "$custom_prefix_task_file"; then
+  pass "task_prefix をカスタマイズしたリポジトリでも、status: Reviewed だった ISSUE-1 が Approved へ移行された"
+else
+  fail "task_prefix をカスタマイズしたリポジトリで ISSUE-1 が Approved へ移行されなかった（'TASK-' 固定のID抽出パターンによる検出漏れの疑い）: $(grep -m1 '^status:' "$custom_prefix_task_file")"
+fi
+
+custom_prefix_status_line="$(grep -m1 '^statuses:' "$TMP_REPO_CUSTOM_PREFIX/.backlog/config.yml")"
+if ! grep -Fq '"Reviewed"' <<<"$custom_prefix_status_line"; then
+  pass "task_prefix をカスタマイズしたリポジトリでも statuses から旧名 'Reviewed' が除去された"
+else
+  fail "task_prefix をカスタマイズしたリポジトリで statuses に旧名 'Reviewed' が残っている: $custom_prefix_status_line"
+fi
+
 finish_tests
