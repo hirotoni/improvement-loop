@@ -15,7 +15,7 @@
 # 実行するもの:
 #   1. improvement_loop.worktree_base_dir（.backlog/config.my.yml）を読み、
 #      ワークツリーの作成先ベースディレクトリを決定・正規化する
-#      （未設定なら既定でリポジトリの親ディレクトリの .worktree/）。
+#      （未設定なら既定でリポジトリルート配下の .worktree/）。
 #      この配下にさらにリポジトリ名で名前空間分けする。
 #   2. ベースディレクトリがリポジトリ内を指す場合だけ、.git/info/exclude に
 #      除外パターンを追記する（リポジトリ外を指す場合は追記しない）。
@@ -89,7 +89,7 @@ fi
 # 絶対パス、またはリポジトリルート起点の相対パスを指定できる。実際の作成先は
 # この配下にさらにリポジトリ名で名前空間分けされる（BASE_DIR/$REPO_NAME/<task-id>）。
 if [ -z "$WORKTREE_BASE_DIR_CONFIG" ]; then
-  BASE_DIR="$(dirname "$REPO_ROOT")/.worktree"
+  BASE_DIR="$REPO_ROOT/.worktree"
 elif [[ "$WORKTREE_BASE_DIR_CONFIG" = /* ]]; then
   BASE_DIR="$WORKTREE_BASE_DIR_CONFIG"
 else

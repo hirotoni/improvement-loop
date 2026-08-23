@@ -1028,7 +1028,7 @@ trap 'cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_em
 (cd "$TMP_CW_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 
 CW_TASK_ID="task-77-worktree-check"
-CW_EXPECTED_WORKTREE_DIR="$(dirname "$TMP_CW_REPO")/.worktree/$(basename "$TMP_CW_REPO")/$CW_TASK_ID"
+CW_EXPECTED_WORKTREE_DIR="$TMP_CW_REPO/.worktree/$(basename "$TMP_CW_REPO")/$CW_TASK_ID"
 CW_EXPECTED_BRANCH="improvement/$CW_TASK_ID"
 
 cw_output1="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
@@ -1041,7 +1041,7 @@ $cw_output1"
 fi
 
 if printf '%s\n' "$cw_output1" | grep -Fxq "WORKTREE_DIR=$CW_EXPECTED_WORKTREE_DIR"; then
-  pass "既定の worktree_base_dir（リポジトリの親ディレクトリの .worktree/、リポジトリ名で名前空間分け）配下に想定通りのパスが出力される"
+  pass "既定の worktree_base_dir（リポジトリルート配下の .worktree/、リポジトリ名で名前空間分け）配下に想定通りのパスが出力される"
 else
   fail "WORKTREE_DIR の出力が想定と異なる。期待: WORKTREE_DIR=$CW_EXPECTED_WORKTREE_DIR, 実際の出力:
 $cw_output1"
@@ -1070,6 +1070,22 @@ if grep -Fxq ".backlog" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null; then
   pass ".git/info/exclude に .backlog が追記されている"
 else
   fail ".git/info/exclude に .backlog が追記されていない"
+fi
+
+# ---- AC#2: 既定の worktree_base_dir（リポジトリルート配下の .worktree/）は
+# リポジトリ内を指すため、.git/info/exclude に .worktree が自動追記され、
+# git status に汚れとして現れないこと ----
+if grep -Fxq ".worktree" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null; then
+  pass "既定の worktree_base_dir（リポジトリルート配下の .worktree/）が .git/info/exclude に追記されている"
+else
+  fail "既定の worktree_base_dir（.worktree）が .git/info/exclude に追記されていない"
+fi
+
+if [ -z "$(git -C "$TMP_CW_REPO" status --porcelain)" ]; then
+  pass "既定パスにワークツリーを作成しても、元のリポジトリの git status が汚れない"
+else
+  fail "既定パスにワークツリーを作成すると、元のリポジトリの git status が汚れる:
+$(git -C "$TMP_CW_REPO" status --porcelain)"
 fi
 
 # ---- 冪等性（AC#3）: 同じ task-id で2回目を実行しても、エラーにならず
