@@ -17,7 +17,7 @@ description: 人間が伝えた改善要望を、探索や観点選定を挟ま�
 | `To Do` | 着手が承認された | 人間 |
 | `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatch |
 | `In Review` | 実装がブランチに乗り、レビュー待ち | improvement-work |
-| `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
+| `Approved` | 人間のレビューが済み、マージを待っている | 人間 |
 | `Done` | main にマージ済み | improvement-dispatch |
 
 `Proposed` から先には進めない。人間が内容を確認して `To Do` に上げたものだけが improvement-dispatch に拾われる。

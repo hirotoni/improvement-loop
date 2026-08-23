@@ -19,15 +19,15 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 | `To Do`       | 着手が承認された                         | 人間                      |
 | `In Progress` | 作業ブランチに引き渡し済み               | **dispatch が動かす** |
 | `In Review`   | 実装がブランチに乗り、レビュー待ち       | improvement-work          |
-| `Reviewed`    | 人間のレビューが済み、マージを待っている | 人間                      |
+| `Approved`    | 人間のレビューが済み、マージを待っている | 人間                      |
 | `Done`        | main にマージ済み                        | `auto_merge_reviewed` 次第（**dispatch** または人間） |
 
 `Proposed` を `To Do` に上げるのは人間である。承認を代行しない。
-`In Review` を `Reviewed` に上げるのも人間である。レビューを代行しない。
-`Reviewed` になったものの扱いは `auto_merge_reviewed`（調整値、既定 `false`）で分岐する（手順 3）。
+`In Review` を `Approved` に上げるのも人間である。レビューを代行しない。
+`Approved` になったものの扱いは `auto_merge_reviewed`（調整値、既定 `false`）で分岐する（手順 3）。
 
-- `auto_merge_reviewed: true` のとき。このリポジトリは PR を運用していない前提であり、dispatch が `Reviewed` を検知するとローカルで main にマージし、`Done` にする。マージまで進め、`push` はしない。
-- `auto_merge_reviewed: false`（既定）のとき。このリポジトリは GitHub 上で PR ベースの開発フローを運用している前提であり、dispatch は `Reviewed` を検知しても main にマージしない。人間が PR で正規にレビュー・マージし、その後 `Done` にする。
+- `auto_merge_reviewed: true` のとき。このリポジトリは PR を運用していない前提であり、dispatch が `Approved` を検知するとローカルで main にマージし、`Done` にする。マージまで進め、`push` はしない。
+- `auto_merge_reviewed: false`（既定）のとき。このリポジトリは GitHub 上で PR ベースの開発フローを運用している前提であり、dispatch は `Approved` を検知しても main にマージしない。人間が PR で正規にレビュー・マージし、その後 `Done` にする。
 
 ## 調整値
 
@@ -38,7 +38,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 | `max_in_review`        | この件数以上 `In Review` が溜まっていたら新規の引き渡しを止める   | 3       |
 | `max_in_progress`      | 同時に `In Progress` にできる件数                                 | 1       |
 | `max_redispatch`       | 同じタスクを再引き渡しできる回数                                  | 2       |
-| `auto_merge_reviewed`  | `Reviewed` を検知したとき main に自動マージするかどうか（手順 3） | `false` |
+| `auto_merge_reviewed`  | `Approved` を検知したとき main に自動マージするかどうか（手順 3） | `false` |
 | `worktree_base_dir`    | ワークツリーの作成先ベースディレクトリ（手順 5）。配下にさらにリポジトリ名で名前空間分けされる | `""`（= リポジトリの親ディレクトリ/`.worktree`） |
 
 ファイルが存在しない場合、`improvement_loop` が無い場合、個別のキーが欠けている場合は、それぞれ既定値を使う。読めなかった旨を報告に 1 行添えること。値の変更は直接編集で行う。`backlog config set` は `config.yml` 側の設定を触るもので、このファイルには効かない。
@@ -129,10 +129,10 @@ backlog task view TASK-<n> --plain                       # 前回この手順で
 
 ### 3. レビュー済みのものを扱う
 
-`Reviewed` は人間のレビューが済んだ状態である。手順 4 の選定より先に処理する。
+`Approved` は人間のレビューが済んだ状態である。手順 4 の選定より先に処理する。
 
 ```bash
-backlog task list --status "Reviewed" --plain
+backlog task list --status "Approved" --plain
 ```
 
 対象が無ければ手順 4 に進む。
@@ -143,9 +143,9 @@ backlog task list --status "Reviewed" --plain
 
 main へのマージは行わない。このリポジトリは GitHub 上の PR ベースの開発フローを正規のルートとする前提であり、dispatch がそれを迂回してローカルで main を進めることはしない。
 
-対象タスクは `Reviewed` のまま変更せず、一覧を報告するだけに留めて手順 4 に進む。マージも `Done` への変更も行わない。
+対象タスクは `Approved` のまま変更せず、一覧を報告するだけに留めて手順 4 に進む。マージも `Done` への変更も行わない。
 
-`Reviewed` から `Done` への経路は人間が担う。
+`Approved` から `Done` への経路は人間が担う。
 
 1. 人間が作業ブランチ（`improvement/task-<n>-<スラッグ>`）から PR を作成し、レビューと CI を経て GitHub 上で main にマージする。
 2. マージ後、人間が次のコマンドで `Done` にする。
@@ -154,9 +154,9 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
    backlog task edit TASK-<n> -s "Done" --comment 'PR で main にマージ済み' --comment-author @human --plain
    ```
 
-3. 対応するワークツリー（既定では `<リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`。配置場所は `worktree_base_dir` で変更できる）の後片付け（`git worktree remove`）も、この設定のときは dispatch ではなく人間が行う。dispatch は `auto_merge_reviewed: false` の間、`Reviewed`/`Done` のワークツリーを片付けない。
+3. 対応するワークツリー（既定では `<リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`。配置場所は `worktree_base_dir` で変更できる）の後片付け（`git worktree remove`）も、この設定のときは dispatch ではなく人間が行う。dispatch は `auto_merge_reviewed: false` の間、`Approved`/`Done` のワークツリーを片付けない。
 
-この設定のとき、手順 7 の「人間に必要な行動」に `Reviewed` の一覧を毎回含めて報告し、ループが `Reviewed` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
+この設定のとき、手順 7 の「人間に必要な行動」に `Approved` の一覧を毎回含めて報告し、ループが `Approved` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
 
 #### `auto_merge_reviewed: true`
 
@@ -173,9 +173,9 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 | 終了ステータス | `RESULT` | 意味 | dispatch が行うこと |
 | --- | --- | --- | --- |
 | `0` | `MERGED` | ff-only、または衝突のない 3-way でマージが完了した | `backlog task edit TASK-<n> -s "Done" --comment 'main にマージした（<出力中の main の短縮ハッシュ>）' --comment-author @dispatch` で `Done` にする。次の対象へ進む。 |
-| `1` | `PRECONDITION_NOT_MET` | メインの作業木が汚れている／対象ブランチが存在しない／main との差分が無い、のいずれか | タスクは `Reviewed` のまま変更しない。標準エラー出力の内容を報告に含める。メインの作業木の汚れが原因の場合は他の対象を試しても同じ結果になるため、次の対象には進まず今回の起動を終える。 |
-| `2` | `CONFLICT` | 3-way マージが衝突した（スクリプトが `git merge --abort` 済みで、git 状態はマージ前と同じ） | タスクは `Reviewed` のまま残し、標準エラー出力に列挙された衝突ファイルを報告する。解消は人間に委ねる。次の対象には進まない。 |
-| `3` | `ERROR` | 想定外のエラー（引数不足、main への切り替え失敗、マージコミット自体の失敗等） | タスクは `Reviewed` のまま残し、標準エラー出力を報告する。次の対象には進まない。 |
+| `1` | `PRECONDITION_NOT_MET` | メインの作業木が汚れている／対象ブランチが存在しない／main との差分が無い、のいずれか | タスクは `Approved` のまま変更しない。標準エラー出力の内容を報告に含める。メインの作業木の汚れが原因の場合は他の対象を試しても同じ結果になるため、次の対象には進まず今回の起動を終える。 |
+| `2` | `CONFLICT` | 3-way マージが衝突した（スクリプトが `git merge --abort` 済みで、git 状態はマージ前と同じ） | タスクは `Approved` のまま残し、標準エラー出力に列挙された衝突ファイルを報告する。解消は人間に委ねる。次の対象には進まない。 |
+| `3` | `ERROR` | 想定外のエラー（引数不足、main への切り替え失敗、マージコミット自体の失敗等） | タスクは `Approved` のまま残し、標準エラー出力を報告する。次の対象には進まない。 |
 
 `rebase` は使わない。人間がレビューしたコミットの同一性が変わるためである。`--force` を伴う操作もこのスクリプトでは行わない。
 
@@ -269,11 +269,11 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
 報告に含めるもの：
 
 - 今回やったこと（マージした／引き渡した／検証した／何もしなかった）。
-- 現在の状態の内訳（`Proposed` / `To Do` / `In Progress` / `In Review` / `Reviewed` の件数）。
+- 現在の状態の内訳（`Proposed` / `To Do` / `In Progress` / `In Review` / `Approved` の件数）。
 - マージした場合は、マージ後の main の位置と、プッシュが未実施であること。
 - 人間に必要な行動：
   - `Proposed` の承認：`backlog task edit TASK-<n> -s "To Do"`
-  - `In Review` のレビュー、済んだら `backlog task edit TASK-<n> -s "Reviewed"`
+  - `In Review` のレビュー、済んだら `backlog task edit TASK-<n> -s "Approved"`
     - `auto_merge_reviewed: true` の場合：次の起動で dispatch が main にマージし `Done` にする。
     - `auto_merge_reviewed: false`（既定）の場合：dispatch はマージしない。人間が作業ブランチから PR を作成し、レビュー・CI を経て main にマージした後、`backlog task edit TASK-<n> -s "Done"` で `Done` にする。対応するワークツリーの片付けも人間が行う。
   - main のプッシュ（`auto_merge_reviewed: true` でマージした場合のみ該当。dispatch は行わない）
@@ -290,11 +290,11 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
 
 - 実装しない。コード、設定、テストを編集しない。
 - `push` と PR 作成をしない。リモートへの反映は人間が行う。
-- `merge` は手順 3 の `Reviewed` のものに限る。それ以外のブランチを main に入れない。
+- `merge` は手順 3 の `Approved` のものに限る。それ以外のブランチを main に入れない。
 - `rebase` と `--force` を伴う git 操作をしない。レビュー済みのコミットの同一性を変えない。
 - メインの作業木が汚れているときは、そこでブランチを切り替えない（該当するのは手順 3 のマージ時のみ。手順 5 のワークツリー作成はメインの作業木の状態を問わない）。stash も reset もしない。
 - サブエージェントが作業しているワークツリーの中身を直接編集・削除しない。片付けはマージ完了後（手順 3）に、そのワークツリーに限って `git worktree remove` で行う。
-- `Proposed` を `To Do` に上げない。`In Review` を `Reviewed` に上げない。`Reviewed` 以外を `Done` にしない。
+- `Proposed` を `To Do` に上げない。`In Review` を `Approved` に上げない。`Approved` 以外を `Done` にしない。
 - `.backlog/` 配下の md を直接編集しない。すべて `backlog` CLI 経由で行う。
 - `max_in_progress` 件を超えて `In Progress` にしない。
 - サブエージェントの完了を待つために短い間隔で起動を繰り返さない。通知で起こされる。
