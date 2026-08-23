@@ -7,6 +7,7 @@ https://creators.bengo4.com/entry/2026/07/22/095159
 
 - improvement-dispatcher
 - improvement-scout
+- improvement-scout-major
 - improvement-work
 - improvement-add
 
