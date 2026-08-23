@@ -342,13 +342,27 @@ check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-work/SKILL.md" "improvem
 echo ""
 echo "=== 2. 一時リポジトリへのセットアップ ==="
 
+# 一時ディレクトリの後片付けレジストリ。
+# 新しい一時ディレクトリ利用テストセクションを追加する際は、ディレクトリを
+# 作った直後に register_tmp_cleanup へパスを渡して登録するだけでよい。
+# trap はここで一度だけ設定し、登録済みの全パスをスクリプト終了時にまとめて
+# 後片付けするため、セクションを追加するたびにこの trap 行（それ以前の
+# cleanup 呼び出しの列挙）を書き換える必要が無い。
+TMP_CLEANUP_PATHS=()
+register_tmp_cleanup() {
+  TMP_CLEANUP_PATHS+=("$@")
+}
+cleanup_registered_tmp_paths() {
+  if [ "${#TMP_CLEANUP_PATHS[@]}" -gt 0 ]; then
+    rm -rf "${TMP_CLEANUP_PATHS[@]}"
+  fi
+}
+trap cleanup_registered_tmp_paths EXIT
+
 TMP_REPO="$(mktemp -d)"
 TMP_HOME="$(mktemp -d)"
 TMP_REPO_SYMLINK="$(mktemp -d)"
-cleanup() {
-  rm -rf "$TMP_REPO" "$TMP_HOME" "$TMP_REPO_SYMLINK"
-}
-trap cleanup EXIT
+register_tmp_cleanup "$TMP_REPO" "$TMP_HOME" "$TMP_REPO_SYMLINK"
 
 (cd "$TMP_REPO" && git init -q)
 
@@ -570,10 +584,7 @@ echo "=== 4. statuses: [] (空配列) に対する回帰テスト ==="
 # setup-improvement-loop がクラッシュしないことを確認する。
 
 TMP_REPO_EMPTY_STATUSES="$(mktemp -d)"
-cleanup_empty_statuses() {
-  rm -rf "$TMP_REPO_EMPTY_STATUSES"
-}
-trap 'cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_REPO_EMPTY_STATUSES"
 
 (cd "$TMP_REPO_EMPTY_STATUSES" && git init -q)
 mkdir -p "$TMP_REPO_EMPTY_STATUSES/.backlog"
@@ -615,10 +626,7 @@ echo "=== 5. statuses の複数行YAMLリスト形式に対する回帰テスト
 # （置換し損ねた元の "  - ..." 行が残る等）を生成しないことを確認する。
 
 TMP_REPO_MULTILINE_STATUSES="$(mktemp -d)"
-cleanup_multiline_statuses() {
-  rm -rf "$TMP_REPO_MULTILINE_STATUSES"
-}
-trap 'cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_REPO_MULTILINE_STATUSES"
 
 (cd "$TMP_REPO_MULTILINE_STATUSES" && git init -q)
 mkdir -p "$TMP_REPO_MULTILINE_STATUSES/.backlog"
@@ -697,10 +705,7 @@ echo "=== 6. config.my.yml の不足キー補完（マイグレーション）�
 # 無いユーザー独自のキーはそのまま残ることを確認する（TASK-19）。
 
 TMP_REPO_MIGRATION="$(mktemp -d)"
-cleanup_migration() {
-  rm -rf "$TMP_REPO_MIGRATION"
-}
-trap 'cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_REPO_MIGRATION"
 
 (cd "$TMP_REPO_MIGRATION" && git init -q)
 mkdir -p "$TMP_REPO_MIGRATION/.backlog"
@@ -791,10 +796,7 @@ echo "=== 7. claude-skills/improvement-dispatch/scripts/select-next-task の選�
 #   7f. max_in_review 以上のときの GATED
 
 TMP_REPO_SELECT="$(mktemp -d)"
-cleanup_select() {
-  rm -rf "$TMP_REPO_SELECT"
-}
-trap 'cleanup_select; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_REPO_SELECT"
 
 (cd "$TMP_REPO_SELECT" && git init -q)
 select_setup_output="$("$SETUP_SCRIPT" "$TMP_REPO_SELECT" 2>&1)"
@@ -900,8 +902,7 @@ echo "=== 8. claude-skills/improvement-dispatch/scripts/merge-reviewed-branch �
 echo ""
 echo "--- 7a. 前提条件未達: メインの作業木が汚れている ---"
 TMP_MERGE_DIRTY="$(mktemp -d)"
-cleanup_merge_dirty() { rm -rf "$TMP_MERGE_DIRTY"; }
-trap 'cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_MERGE_DIRTY"
 
 (cd "$TMP_MERGE_DIRTY" && git init -q -b main && git commit -q --allow-empty -m init)
 (cd "$TMP_MERGE_DIRTY" && git branch feature-dirty-check)
@@ -934,12 +935,11 @@ fi
 echo ""
 echo "--- 7b. ff-only マージが成功し、対応するワークツリーが片付けられる ---"
 TMP_MERGE_FF="$(mktemp -d)"
-# 対応するワークツリー（$TMP_MERGE_FF-wt）もここで一緒に片付ける。
+# 対応するワークツリー（$TMP_MERGE_FF-wt）もここで一緒に登録する。
 # アサーション後の単発 rm -rf に任せると、ワークツリー作成後・その rm
-# 行より前で中断された場合にディレクトリが残ってしまうため、EXIT trap の
-# 中で確実に片付ける。
-cleanup_merge_ff() { rm -rf "$TMP_MERGE_FF" "$TMP_MERGE_FF-wt"; }
-trap 'cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+# 行より前で中断された場合にディレクトリが残ってしまうため、EXIT trap で
+# 確実に片付くようここで登録しておく。
+register_tmp_cleanup "$TMP_MERGE_FF" "$TMP_MERGE_FF-wt"
 
 (cd "$TMP_MERGE_FF" && git init -q -b main && git commit -q --allow-empty -m init)
 (cd "$TMP_MERGE_FF" && git worktree add -q -b feature-ff "$TMP_MERGE_FF-wt" main)
@@ -976,8 +976,7 @@ fi
 echo ""
 echo "--- 7c. 3-way マージ（衝突無し）が成功し、対応するワークツリーが片付けられる ---"
 TMP_MERGE_3WAY="$(mktemp -d)"
-cleanup_merge_3way() { rm -rf "$TMP_MERGE_3WAY" "$TMP_MERGE_3WAY-wt"; }
-trap 'cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_MERGE_3WAY" "$TMP_MERGE_3WAY-wt"
 
 (cd "$TMP_MERGE_3WAY" && git init -q -b main)
 printf 'line1\n' > "$TMP_MERGE_3WAY/f1.txt"
@@ -1027,8 +1026,7 @@ fi
 echo ""
 echo "--- 7d. 3-way マージが衝突する場合、abort して git 状態を復元する ---"
 TMP_MERGE_CONFLICT="$(mktemp -d)"
-cleanup_merge_conflict() { rm -rf "$TMP_MERGE_CONFLICT" "$TMP_MERGE_CONFLICT-wt"; }
-trap 'cleanup_merge_conflict; cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_MERGE_CONFLICT" "$TMP_MERGE_CONFLICT-wt"
 
 (cd "$TMP_MERGE_CONFLICT" && git init -q -b main)
 printf 'original\n' > "$TMP_MERGE_CONFLICT/shared.txt"
@@ -1090,8 +1088,7 @@ echo "--- 7e. マージは完了するが、対応するワークツリーが汚
 # 扱い）と、--force/-D を使わずワークツリー・ブランチの両方が削除されずに
 # 残ることを確認する。
 TMP_MERGE_DIRTY_WT="$(mktemp -d)"
-cleanup_merge_dirty_wt() { rm -rf "$TMP_MERGE_DIRTY_WT" "$TMP_MERGE_DIRTY_WT-wt"; }
-trap 'cleanup_merge_dirty_wt; cleanup_merge_conflict; cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_MERGE_DIRTY_WT" "$TMP_MERGE_DIRTY_WT-wt"
 
 (cd "$TMP_MERGE_DIRTY_WT" && git init -q -b main && git commit -q --allow-empty -m init)
 (cd "$TMP_MERGE_DIRTY_WT" && git worktree add -q -b feature-dirty-wt "$TMP_MERGE_DIRTY_WT-wt" main)
@@ -1139,10 +1136,7 @@ TMP_CW_REPO="$(mktemp -d)"
 # claude-skills/improvement-dispatch/scripts/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
 # 文字列比較が一致しない。ここでも同じ正規化をしておく。
 TMP_CW_REPO="$(cd "$TMP_CW_REPO" && pwd -P)"
-cleanup_cw_repo() {
-  rm -rf "$TMP_CW_REPO"
-}
-trap 'cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_CW_REPO"
 
 (cd "$TMP_CW_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 
@@ -1279,10 +1273,7 @@ echo "=== 10. claude-skills/improvement-dispatch/scripts/create-worktree の wor
 # claude-skills/improvement-dispatch/scripts/create-worktree へ切り出した後も維持されていることを確認する。
 
 TMP_CW_BASEDIR_REPO="$(mktemp -d)"
-cleanup_cw_basedir_repo() {
-  rm -rf "$TMP_CW_BASEDIR_REPO"
-}
-trap 'cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_CW_BASEDIR_REPO"
 
 (cd "$TMP_CW_BASEDIR_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 mkdir -p "$TMP_CW_BASEDIR_REPO/.backlog"
@@ -1334,10 +1325,7 @@ else
 fi
 
 TMP_HOOK_REPO="$(mktemp -d)"
-cleanup_hook_repo() {
-  rm -rf "$TMP_HOOK_REPO"
-}
-trap 'cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_HOOK_REPO"
 
 (cd "$TMP_HOOK_REPO" && git init -q -b main)
 git -C "$TMP_HOOK_REPO" config user.email "test@example.com"
@@ -1414,10 +1402,7 @@ TMP_HANDOFF_REPO="$(mktemp -d)"
 # であり、check-handoff 内部の pwd -P による正規化後のパスと文字列比較するため、
 # ここでも同じ正規化をしておく。
 TMP_HANDOFF_REPO="$(cd "$TMP_HANDOFF_REPO" && pwd -P)"
-cleanup_handoff_repo() {
-  rm -rf "$TMP_HANDOFF_REPO"
-}
-trap 'cleanup_handoff_repo; cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_HANDOFF_REPO"
 
 HANDOFF_BRANCH="improvement/task-99-handoff-check"
 (cd "$TMP_HANDOFF_REPO" && git init -q -b "$HANDOFF_BRANCH" && git commit -q --allow-empty -m init)
@@ -1546,10 +1531,7 @@ TMP_CR_REPO="$(mktemp -d)"
 # （/private/var/...）と文字列比較が一致しない。ここでも同じ正規化をしておく。
 TMP_CR_REPO="$(cd "$TMP_CR_REPO" && pwd -P)"
 CR_WORKTREE_DIR="${TMP_CR_REPO}-wt"
-cleanup_cr_repo() {
-  rm -rf "$TMP_CR_REPO" "$CR_WORKTREE_DIR"
-}
-trap 'cleanup_cr_repo; cleanup_handoff_repo; cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+register_tmp_cleanup "$TMP_CR_REPO" "$CR_WORKTREE_DIR"
 
 (cd "$TMP_CR_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 (cd "$TMP_CR_REPO" && git worktree add -q -b feature-recovery-a "$CR_WORKTREE_DIR" main)
