@@ -10,14 +10,7 @@ description: コードベースを探索して改善タスクを Backlog.md に 
 
 ## ループ内の位置
 
-| status | 意味 | 動かす主体 |
-| --- | --- | --- |
-| `Proposed` | 起票された改善候補。未承認 | **scout が起票する** |
-| `To Do` | 着手が承認された | 人間 |
-| `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatch |
-| `In Review` | 実装がブランチに乗り、レビュー待ち | improvement-work |
-| `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
-| `Done` | main にマージ済み | `auto_merge_reviewed` 次第（dispatch または人間） |
+状態遷移表の正本は `claude-skills/status-table.md` にある。まず読む。**このスキルが動かすのは `Proposed`（scout が起票する）である。**
 
 `Proposed` から先には進めない。人間が内容を確認して `To Do` に上げたものだけが improvement-dispatch に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。
