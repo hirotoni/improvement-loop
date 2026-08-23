@@ -69,6 +69,44 @@ assert_statuses_present() {
   fi
 }
 
+echo "=== 1d. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
+# REQUIRED_STATUSES（上で導出済み）と、TASK-30 で新設された状態遷移表の正本
+# （claude-skills/status-table.md）の「## 状態遷移表」節に列挙されたステータス名の
+# 集合が一致することを検証する。ステータス名の情報源が2箇所に分かれている以上、
+# 将来どちらか一方だけが更新されて食い違う可能性が残るため、その食い違いを
+# 検知する回帰テスト（TASK-32）。
+STATUS_TABLE_FILE="$REPO_ROOT/claude-skills/status-table.md"
+if [ ! -f "$STATUS_TABLE_FILE" ]; then
+  fail "claude-skills/status-table.md が存在しない"
+else
+  table_statuses_raw="$(awk '
+    /^## 状態遷移表/ { flag=1; next }
+    /^## / { flag=0 }
+    flag
+  ' "$STATUS_TABLE_FILE" | grep -E '^\| `' | sed -E 's/^\| `([^`]*)`.*/\1/')"
+
+  if [ -z "$table_statuses_raw" ]; then
+    fail "claude-skills/status-table.md の「## 状態遷移表」節からステータス名を1件も抽出できなかった（見出しや表の書式が変わった可能性がある）"
+  else
+    TABLE_STATUSES=()
+    while IFS= read -r line; do
+      [ -n "$line" ] && TABLE_STATUSES+=("$line")
+    done <<<"$table_statuses_raw"
+
+    required_sorted="$(printf '%s\n' "${REQUIRED_STATUSES[@]}" | sort)"
+    table_sorted="$(printf '%s\n' "${TABLE_STATUSES[@]}" | sort)"
+
+    if [ "$required_sorted" = "$table_sorted" ]; then
+      pass "REQUIRED_STATUSES と claude-skills/status-table.md の状態遷移表のステータス名一覧が一致する"
+    else
+      diff_out="$(diff <(printf '%s\n' "$required_sorted") <(printf '%s\n' "$table_sorted"))"
+      fail "REQUIRED_STATUSES（bin/setup-improvement-loop）と claude-skills/status-table.md の状態遷移表のステータス名一覧が一致しない:
+$diff_out"
+    fi
+  fi
+fi
+
+echo ""
 echo "=== 2. 一時リポジトリへのセットアップ ==="
 
 TMP_REPO="$(mktemp -d)"
