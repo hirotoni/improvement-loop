@@ -19,18 +19,22 @@
 # 作業木の中で実行する）。
 #
 # 処理:
-#   1. `backlog task list --status "In Progress" --plain` の件数を数え、
-#      max_in_progress 以上なら選定を行わず GATED で終了する。
-#   2. `backlog task list --status "In Review" --plain` の件数を数え、
-#      max_in_review 以上なら選定を行わず GATED で終了する。
-#   3. `backlog task list --status "To Do" --plain` で候補を取得する。
-#   4. `blocked:needs-decision` ラベルが付いているものを除外する
+#   1. `backlog task list --plain`（フィルタ無し・1回のみ）で全ステータスを
+#      まとめて取得し、"In Progress:" / "In Review:" / "To Do:" の各セクション
+#      をそれぞれ切り出す（TASK-59。`--status` 違いで3回個別に呼ぶより、
+#      backlog CLI 自体の起動コストを1回分に抑えられる）。
+#   2. In Progress セクションの件数を数え、max_in_progress 以上なら選定を
+#      行わず GATED で終了する。
+#   3. In Review セクションの件数を数え、max_in_review 以上なら選定を
+#      行わず GATED で終了する。
+#   4. To Do セクションを候補として使う。
+#   5. `blocked:needs-decision` ラベルが付いているものを除外する
 #      （`backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain`
-#      との差集合）。
-#   5. 各候補について `backlog task view TASK-<n> --plain` の Dependencies
+#      との差集合。このフィルタ呼び出しは対象外＝そのまま残す）。
+#   6. 各候補について `backlog task view TASK-<n> --plain` の Dependencies
 #      行を確認し、依存タスクが1つでも Done でなければ除外する
 #      （依存タスクが見つからない場合も安全側に倒して「未完了」扱いにする）。
-#   6. 残った候補を優先度（High=0 → Medium=1 → Low=2 → 未設定=3）→
+#   7. 残った候補を優先度（High=0 → Medium=1 → Low=2 → 未設定=3）→
 #      数値 ID 昇順でソートし、先頭を選ぶ。backlog CLI 自体の `--sort`
 #      の並び順（未文書化の tie-break に依存する）には頼らず、この
 #      スクリプト自身が比較を行う。
@@ -111,7 +115,31 @@ count_task_lines() {
     | grep -cE '^[A-Za-z][A-Za-z0-9_-]*-[0-9]+ - ' || true
 }
 
-# ---- 1. In Progress / In Review の件数を数える ----
+# `backlog task list --plain`（フィルタ無し）は、対象が1件以上あるステータス
+# についてのみ "<Status>:" という見出し行（先頭に空白が無く、コロンで終わる。
+# 例: "In Progress:" "To Do:"）を出し、その直後にそのステータスに属する
+# タスク行（先頭が空白のインデント行）を、次の見出し行または出力末尾まで
+# 並べる（該当タスクが1件も無いステータスは見出し自体が出ない。全ステータス
+# 合計で0件なら "No tasks found." の1行だけになる）。`--status` 違いで3回
+# 個別に呼ぶ代わりに、この1回の出力からステータスごとのセクションを切り出す
+# （TASK-59）。
+#
+# extract_status_section: $1 = backlog task list --plain の全出力、
+# $2 = 見出し文字列（コロン無し。例: "In Progress"）。該当セクションの
+# タスク行（見出し行自体は含まない）を標準出力へ書く。該当セクションが
+# 出力に無ければ何も出力しない（= 0件として扱われる）。
+extract_status_section() {
+  local full_output="$1"
+  local heading="$2:"
+  printf '%s\n' "$full_output" | awk -v heading="$heading" '
+    $0 == heading { in_section = 1; next }
+    in_section && /^[^[:space:]].*:$/ { in_section = 0 }
+    in_section { print }
+  '
+}
+
+# ---- 1. フィルタ無しの1回の呼び出しで In Progress / In Review / To Do の
+#         セクションをまとめて取得する ----
 # backlog task list/view はコマンドが存在し引数の形が正しい限り、対象が
 # 0件・not found でも exit 0 で返す（実測済み）。それでも `set -e` 下では
 # 何らかの理由（backlog 自体の異常終了など）で非ゼロ終了した場合、代入
@@ -119,14 +147,14 @@ count_task_lines() {
 # ヘッダーで宣言した出力契約（標準出力1行目に必ず RESULT: を出す）を破る。
 # `if ! var="$(cmd)"; then ...; fi` の形にして、失敗を確実に検知し
 # result_error（RESULT: ERROR, exit 3）に倒す。
-if ! in_progress_output="$(backlog task list --status "In Progress" --plain)"; then
-  result_error 'backlog task list --status "In Progress" --plain が失敗した'
+if ! all_output="$(backlog task list --plain)"; then
+  result_error 'backlog task list --plain が失敗した'
 fi
+
+in_progress_output="$(extract_status_section "$all_output" "In Progress")"
 in_progress_count="$(count_task_lines "$in_progress_output")"
 
-if ! in_review_output="$(backlog task list --status "In Review" --plain)"; then
-  result_error 'backlog task list --status "In Review" --plain が失敗した'
-fi
+in_review_output="$(extract_status_section "$all_output" "In Review")"
 in_review_count="$(count_task_lines "$in_review_output")"
 
 if [ "$in_progress_count" -ge "$MAX_IN_PROGRESS" ]; then
@@ -146,9 +174,10 @@ if [ "$in_review_count" -ge "$MAX_IN_REVIEW" ]; then
 fi
 
 # ---- 2. To Do 候補と blocked:needs-decision の除外集合を取得する ----
-if ! todo_output="$(backlog task list --status "To Do" --plain)"; then
-  result_error 'backlog task list --status "To Do" --plain が失敗した'
-fi
+# To Do セクションは手順1で取得済みの all_output から切り出す（追加の
+# backlog 呼び出しは不要）。blocked:needs-decision の除外集合は `--labels`
+# フィルタが必要なため、この呼び出しだけは対象外のまま残す（TASK-59）。
+todo_output="$(extract_status_section "$all_output" "To Do")"
 if ! blocked_output="$(backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain)"; then
   result_error "backlog task list --status \"To Do\" --labels 'blocked:needs-decision' --plain が失敗した"
 fi
