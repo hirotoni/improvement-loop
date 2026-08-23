@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# bin/select-next-task
+# claude-skills/improvement-dispatcher/scripts/select-next-task
 #
 # improvement-dispatcher 手順4（次に引き渡す To Do タスクの選定）を
 # 決定論的に行う。
 #
 # 使い方:
-#   select-next-task <max_in_progress> <max_in_review>
+#   .claude/skills/improvement-dispatcher/scripts/select-next-task <max_in_progress> <max_in_review>
 #
 # 引数（どちらも正の整数、または 0）:
 #   max_in_progress  .backlog/config.my.yml の improvement_loop.max_in_progress
