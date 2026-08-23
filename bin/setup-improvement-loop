@@ -343,6 +343,11 @@ if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
 fi
 
 # ---- 1. 前提コマンドの確認 ----
+# backlog: Backlog.md CLI（https://backlog.md/）。ここではコマンドの存在確認のみ
+# 行い、バージョンまでは確認しない。動作確認済みの最小バージョンは 1.48.0
+# （README.md「前提: backlog CLI」参照）。それより古いバージョンでは
+# --add-label 等の一部フラグが使えず、improvement-dispatch/improvement-work
+# 実行中に初めてエラーになることがある。
 for cmd in git backlog; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     err "コマンド '$cmd' が見つからない。インストールしてから再実行すること。"

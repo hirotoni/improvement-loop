@@ -15,6 +15,18 @@ https://creators.bengo4.com/entry/2026/07/22/095159
 
 ## インストール手順
 
+### 前提: backlog CLI
+
+このリポジトリのスキル群・スクリプト群は [Backlog.md](https://backlog.md/)（[GitHub: MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md)）の `backlog` CLI に依存しており、`--add-label` / `--check-ac` / `--final-summary` / `--plan` など多数の非自明なフラグを前提にしている。`setup-improvement-loop`は `backlog` コマンドの存在確認のみ行い、バージョンまでは確認しないため、事前に以下のいずれかの方法で導入しておく。
+
+```sh
+brew install backlog-md
+# または
+npm install -g backlog.md
+```
+
+動作確認済みの最小バージョンは `1.48.0`（`backlog --version`で確認）。これより古いバージョンでは、上記フラグの一部が使えず、improvement-dispatch/improvement-work 実行中にエラーになる場合がある。
+
 `install.zsh`は以下を行う。
 
 1. `setup-improvement-loop`コマンドをパスに追加
