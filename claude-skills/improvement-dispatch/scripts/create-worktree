@@ -167,8 +167,12 @@ fi
 # 「既に存在する」で失敗しないようにするための冪等性ガード）。
 existing_worktree_branch=""
 if [ -d "$WORKTREE_DIR" ]; then
+  # パスに半角スペースを含むと awk のデフォルトフィールド分割（$2）では
+  # スペース以降が切り捨てられ、$WORKTREE_DIR と一致しなくなる（TASK-55）。
+  # merge-reviewed-branch:196-199 と同じ substr(index()) パターンで、
+  # "worktree " 以降の行全体をパスとして復元する。
   existing_worktree_branch="$(git worktree list --porcelain | awk -v d="$WORKTREE_DIR" '
-    $1 == "worktree" { cur = $2; next }
+    $1 == "worktree" { cur = substr($0, index($0, $2)); next }
     $1 == "branch" && cur == d { sub("^refs/heads/", "", $2); print $2; exit }
   ')"
 fi
