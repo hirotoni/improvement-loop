@@ -160,6 +160,54 @@ else
 fi
 
 echo ""
+echo "=== 9b. BASE_REF 解決失敗時（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
+# リモートが設定されておらず、かつローカルのデフォルトブランチが "main" 以外の
+# リポジトリでは、140-145行目のフォールバックにより BASE_REF="main" になるが、
+# その "main" ブランチは実在しない。この場合に生の git エラー（"fatal:" 等）で
+# 異常終了するのではなく、err() 形式の診断メッセージを出して明示的な exit code
+# （1）で終了することを確認する。main フォールバック自体（リモート未設定/
+# フェッチ失敗時に main を使うこと）は変更しないため、BASE_REF="main" になる
+# こと自体は妨げない。
+
+TMP_CW_NOMAIN_REPO="$(mktemp -d)"
+TMP_CW_NOMAIN_REPO="$(cd "$TMP_CW_NOMAIN_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_NOMAIN_REPO"
+
+(cd "$TMP_CW_NOMAIN_REPO" && git init -q -b master && git commit -q --allow-empty -m init)
+
+CW_NOMAIN_TASK_ID="task-99-no-main-branch"
+
+cw_nomain_output="$(cd "$TMP_CW_NOMAIN_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_NOMAIN_TASK_ID" 2>&1)"
+cw_nomain_exit=$?
+
+if [ "$cw_nomain_exit" -eq 1 ]; then
+  pass "デフォルトブランチが main 以外でリモート未設定の場合、明示的な exit code（1）で終了する"
+else
+  fail "デフォルトブランチが main 以外でリモート未設定の場合の exit code が想定と異なる（期待: 1, 実際: ${cw_nomain_exit}):
+$cw_nomain_output"
+fi
+
+if printf '%s\n' "$cw_nomain_output" | grep -Fq "エラー: "; then
+  pass "err() 形式の診断メッセージ（\"エラー: \" プレフィックス）が標準エラーに出る"
+else
+  fail "err() 形式の診断メッセージが出力されていない:
+$cw_nomain_output"
+fi
+
+if printf '%s\n' "$cw_nomain_output" | grep -Fiq "fatal:"; then
+  fail "生の git エラー（\"fatal:\"）がそのまま出力されている:
+$cw_nomain_output"
+else
+  pass "生の git エラー（\"fatal:\"）が出力されていない"
+fi
+
+if [ ! -d "$TMP_CW_NOMAIN_REPO/.worktree/$(basename "$TMP_CW_NOMAIN_REPO")/$CW_NOMAIN_TASK_ID" ]; then
+  pass "ワークツリー作成に失敗した場合、想定パスにディレクトリが作られない"
+else
+  fail "ワークツリー作成に失敗したはずなのに、想定パスにディレクトリが作られている"
+fi
+
+echo ""
 echo "=== 10. claude-skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
 # （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、
