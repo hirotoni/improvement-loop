@@ -124,4 +124,76 @@ else
 $select_out"
 fi
 
+echo ""
+echo "=== 8. task_prefix をカスタマイズしたリポジトリでの回帰テスト（TASK-54） ==="
+# backlog task list --plain が出力する ID は .backlog/config.yml の task_prefix に
+# 応じて変わる（既定は "TASK-<n>" だが、task_prefix: "issue" なら "ISSUE-<n>"）。
+# select-next-task の ID 抽出・件数カウントを "TASK-" 固定パターンで行うと、
+# task_prefix をカスタマイズしたリポジトリでは件数カウントが常に0、
+# 候補抽出も常に0件になり、To Do タスクが実在しても RESULT: NO_CANDIDATE を
+# 返し続け、max_in_progress/max_in_review によるゲーティングも機能しなく
+# なる。この不具合の回帰テスト（tests/test_setup_improvement_loop.sh の
+# 7d節・migrate_reviewed_tasks の回帰テストと同じ手法で一時リポジトリを作る）。
+
+TMP_REPO_CUSTOM_PREFIX_SELECT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX_SELECT"
+
+(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && git init -q)
+mkdir -p "$TMP_REPO_CUSTOM_PREFIX_SELECT/.backlog"
+cat > "$TMP_REPO_CUSTOM_PREFIX_SELECT/.backlog/config.yml" <<'YAML'
+project_name: "custom-prefix-select-test"
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "issue"
+YAML
+
+# --- 8a. AC#1: To Do タスクが存在するとき RESULT: SELECTED / 正しい TASK_ID (ISSUE-1) ---
+(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && backlog task create "Custom prefix task" --priority high --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: SELECTED' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: ISSUE-1'; then
+  pass "AC#1: task_prefix をカスタマイズしたリポジトリ（ISSUE-1）でも RESULT: SELECTED / TASK_ID: ISSUE-1 を返す"
+else
+  fail "AC#1: task_prefix カスタマイズ時の選定結果が期待と異なる（TASK_ID: ISSUE-1 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 8b. AC#2: In Progress の件数が max_in_progress 以上のとき RESULT: GATED ---
+(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && backlog task edit ISSUE-1 -s "In Progress" --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 1 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: GATED' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'REASON: max_in_progress' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'IN_PROGRESS_COUNT: 1'; then
+  pass "AC#2: task_prefix をカスタマイズしたリポジトリでも In Progress の件数が正しく数えられ RESULT: GATED / REASON: max_in_progress を返す"
+else
+  fail "AC#2: task_prefix カスタマイズ時の max_in_progress ゲート結果が期待と異なる（exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 8c. AC#2: In Review の件数が max_in_review 以上のとき RESULT: GATED ---
+(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && backlog task edit ISSUE-1 -s "In Review" --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_CUSTOM_PREFIX_SELECT" && "$SELECT_SCRIPT" 1 1 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 1 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: GATED' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'REASON: max_in_review' \
+    && printf '%s\n' "$select_out" | grep -Fxq 'IN_REVIEW_COUNT: 1'; then
+  pass "AC#2: task_prefix をカスタマイズしたリポジトリでも In Review の件数が正しく数えられ RESULT: GATED / REASON: max_in_review を返す"
+else
+  fail "AC#2: task_prefix カスタマイズ時の max_in_review ゲート結果が期待と異なる（exit ${select_exit}）:
+$select_out"
+fi
+
 finish_tests
