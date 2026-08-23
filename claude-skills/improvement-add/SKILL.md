@@ -37,7 +37,8 @@ description: 人間が伝えた改善要望を、探索や観点選定を挟ま�
 ## 1. 前提を確認する
 
 - `backlog instructions overview` と `backlog instructions task-creation` を読む。プロジェクトの規約が優先される。
-- `backlog config get statuses` を実行し、`Proposed` があるか確認する。ない場合は `.backlog/config.yml`（または `backlog/config.yml`）の `statuses` に `Proposed` を先頭で追加する。`statuses` は `backlog config set` では変更できず、backlog 自身が config ファイルの直接編集を案内する。設定にない status を渡すと作成が失敗する。
+- `backlog config get statuses` を実行し、`Proposed` があるか確認する。設定にない status を渡すとタスク作成が失敗するため、この確認を先に行う。
+- 無ければ `.backlog/config.yml`（または `backlog/config.yml`）の `statuses` に `Proposed` を先頭で追加する。`statuses` は `backlog config set` では変更できず、backlog 自身が config ファイルの直接編集を案内する。
 - `backlog config get types` と `backlog config get priorities` で使える値を確認し、以降その値だけを渡す。
 - backlog の読み取り系コマンドには必ず `--plain` を付ける。付けないと対話 UI が起動してセッションが止まる。`backlog task create` はタイトルを引数で渡す（省略すると対話プロンプトになる）。
 

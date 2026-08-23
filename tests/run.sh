@@ -5,18 +5,7 @@
 # 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
 # 報告してスキップする（テスト対象の不具合として失敗にはしない）。
 #
-# 実行するもの:
-#   1. install.zsh / bin/setup-improvement-loop / claude-skills/improvement-dispatch/scripts/select-next-task の構文
-#      チェック（bash -n）。shellcheck があれば追加で実行する（無ければスキップを明示）。
-#   2. 一時 git リポジトリに対して bin/setup-improvement-loop を実行し、
-#      配置結果（シンボリックリンク・config.my.yml・.git/info/exclude）を検証する。
-#   3. 同じ一時リポジトリに対して再実行し、冪等性とユーザー所有ファイル保護を検証する。
-#   7. claude-skills/improvement-dispatch/scripts/select-next-task（improvement-dispatch 手順4の選定ロジック）の
-#      動作確認テスト（通常選定・ラベル除外・依存除外・各種GATED・NO_CANDIDATE）。
-#  13. claude-skills/improvement-dispatch/scripts/check-progress-recovery（improvement-dispatch 手順2-3の
-#      復旧診断ロジック）の動作確認テスト（既存ワークツリー再利用・ワークツリー
-#      作り直し・To Doへの差し戻しの3パターン、および引数の妥当性検証）。
-#
+# 実行する内容は、以降に現れる `echo "=== N. ... ==="` の各セクション見出しの通り。
 # 1 件でも失敗すれば非ゼロで終了する。
 
 set -uo pipefail
