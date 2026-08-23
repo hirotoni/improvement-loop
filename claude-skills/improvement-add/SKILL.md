@@ -11,14 +11,7 @@ description: 人間が伝えた改善要望を、探索や観点選定を挟ま�
 
 ## ループ内の位置
 
-| status | 意味 | 動かす主体 |
-| --- | --- | --- |
-| `Proposed` | 起票された改善候補。未承認 | **add が起票する（scout も起票する）** |
-| `To Do` | 着手が承認された | 人間 |
-| `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatch |
-| `In Review` | 実装がブランチに乗り、レビュー待ち | improvement-work |
-| `Approved` | 人間のレビューが済み、マージを待っている | 人間 |
-| `Done` | main にマージ済み | improvement-dispatch |
+状態遷移表の正本は `claude-skills/status-table.md` にある。まず読む。**このスキルが動かすのは `Proposed`（add が起票する。scout も起票する）である。**
 
 `Proposed` から先には進めない。人間が内容を確認して `To Do` に上げたものだけが improvement-dispatch に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。

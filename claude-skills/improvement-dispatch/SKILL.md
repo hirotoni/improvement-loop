@@ -13,14 +13,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 
 ## ループ内の位置
 
-| status        | 意味                                     | 動かす主体                |
-| ------------- | ---------------------------------------- | ------------------------- |
-| `Proposed`    | 起票された改善候補。未承認               | improvement-scout が起票  |
-| `To Do`       | 着手が承認された                         | 人間                      |
-| `In Progress` | 作業ブランチに引き渡し済み               | **dispatch が動かす** |
-| `In Review`   | 実装がブランチに乗り、レビュー待ち       | improvement-work          |
-| `Approved`    | 人間のレビューが済み、マージを待っている | 人間                      |
-| `Done`        | main にマージ済み                        | `auto_merge_reviewed` 次第（**dispatch** または人間） |
+状態遷移表の正本は `claude-skills/status-table.md` にある。まず読む。**このスキルが動かすのは `In Progress`（dispatch が動かす）と、`auto_merge_reviewed` 次第の `Done`（dispatch または人間）である。**
 
 `Proposed` を `To Do` に上げるのは人間である。承認を代行しない。
 `In Review` を `Approved` に上げるのも人間である。レビューを代行しない。

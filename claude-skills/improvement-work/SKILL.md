@@ -10,14 +10,7 @@ description: improvement-dispatch から引き渡された Backlog.md タスク�
 
 ## ループ内の位置
 
-| status | 意味 | 動かす主体 |
-| --- | --- | --- |
-| `Proposed` | 起票された改善候補。未承認 | improvement-scout が起票 |
-| `To Do` | 着手が承認された | 人間 |
-| `In Progress` | 作業ブランチに引き渡し済み | improvement-dispatch |
-| `In Review` | 実装がブランチに乗り、レビュー待ち | **work が動かす** |
-| `Reviewed` | 人間のレビューが済み、マージを待っている | 人間 |
-| `Done` | main にマージ済み | improvement-dispatch |
+状態遷移表の正本は `claude-skills/status-table.md` にある。まず読む。**このスキルが動かすのは `In Review`（work が動かす）である。**
 
 **承認は既に済んでいる。** 人間が `Proposed` を `To Do` に上げた時点が承認である。
 だから改めて承認を求めない。ただし承認されたのはタスクの受入基準の範囲だけである。そこから外に出るときは中断する（後述）。
