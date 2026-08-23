@@ -113,127 +113,75 @@ fi
 
 echo "=== 1. 構文チェック ==="
 
-if bash -n "$INSTALL_SCRIPT" 2>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n install.zsh"
-else
-  fail "bash -n install.zsh: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
+# CHECK_SCRIPTS: bash -n / shellcheck の対象スクリプトを列挙する単一の情報源。
+# 新しいスクリプトを構文チェック対象に加えるには、ここに1エントリ追加するだけでよい
+# （変数宣言は上のブロックで別途行う。パスと変数を1対1にしたのは、対象スクリプトの
+# 実体パスが REPO_ROOT からの導出であり、かつ他セクション（setup実行や
+# select-next-task の直接呼び出し等）でも同じ変数を使い回すため）。
+#
+# 各要素はパイプ区切りの1行で「<パス変数>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
+# - 追加フラグが必要なのは bin/setup-improvement-loop と install.zsh のみ:
+#   -x -P SCRIPTDIR は、TASK-18 で bin/setup-improvement-loop が
+#   bin/lib/resolve_path.sh を source するようになったため、source 先を実際に
+#   追って検査させる指定（無いと常に SC1091 で誤って失敗する）。install.zsh も
+#   同じ resolve_path.sh を source するため同様に必要。
+# - install.zsh だけ hard failure にしない（4フィールド目が true）。zsh 専用
+#   スクリプトで、shellcheck は zsh を直接サポートしないため（下のshellcheck
+#   ループのコメントを参照）。
+CHECK_SCRIPTS=(
+  "$INSTALL_SCRIPT|install.zsh|-x -P SCRIPTDIR|true"
+  "$SETUP_SCRIPT|bin/setup-improvement-loop|-x -P SCRIPTDIR|false"
+  "$CREATE_WORKTREE_SCRIPT|claude-skills/improvement-dispatch/scripts/create-worktree||false"
+  "$MERGE_SCRIPT|claude-skills/improvement-dispatch/scripts/merge-reviewed-branch||false"
+  "$SELECT_SCRIPT|claude-skills/improvement-dispatch/scripts/select-next-task||false"
+  "$CHECK_HANDOFF_SCRIPT|claude-skills/improvement-work/scripts/check-handoff||false"
+  "$PRECOMMIT_HOOK|githooks/pre-commit||false"
+  "$CHECK_RECOVERY_SCRIPT|claude-skills/improvement-dispatch/scripts/check-progress-recovery||false"
+)
 
-if bash -n "$SETUP_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n bin/setup-improvement-loop"
-else
-  fail "bash -n bin/setup-improvement-loop: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-
-if bash -n "$CREATE_WORKTREE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n claude-skills/improvement-dispatch/scripts/create-worktree"
-else
-  fail "bash -n claude-skills/improvement-dispatch/scripts/create-worktree: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-rm -f /tmp/tests-run-sh-syntax-err.$$
-
-if bash -n "$MERGE_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n claude-skills/improvement-dispatch/scripts/merge-reviewed-branch"
-else
-  fail "bash -n claude-skills/improvement-dispatch/scripts/merge-reviewed-branch: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-rm -f /tmp/tests-run-sh-syntax-err.$$
-
-if bash -n "$SELECT_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n claude-skills/improvement-dispatch/scripts/select-next-task"
-else
-  fail "bash -n claude-skills/improvement-dispatch/scripts/select-next-task: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-rm -f /tmp/tests-run-sh-syntax-err.$$
-
-if bash -n "$CHECK_HANDOFF_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n claude-skills/improvement-work/scripts/check-handoff"
-else
-  fail "bash -n claude-skills/improvement-work/scripts/check-handoff: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-rm -f /tmp/tests-run-sh-syntax-err.$$
-
-if bash -n "$PRECOMMIT_HOOK" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n githooks/pre-commit"
-else
-  fail "bash -n githooks/pre-commit: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-rm -f /tmp/tests-run-sh-syntax-err.$$
-
-if bash -n "$CHECK_RECOVERY_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
-  pass "bash -n claude-skills/improvement-dispatch/scripts/check-progress-recovery"
-else
-  fail "bash -n claude-skills/improvement-dispatch/scripts/check-progress-recovery: $(cat /tmp/tests-run-sh-syntax-err.$$)"
-fi
-rm -f /tmp/tests-run-sh-syntax-err.$$
+SYNTAX_ERR_FILE="/tmp/tests-run-sh-syntax-err.$$"
+: > "$SYNTAX_ERR_FILE"
+for entry in "${CHECK_SCRIPTS[@]}"; do
+  IFS='|' read -r script_path script_label _sc_flags _sc_allow_fail <<<"$entry"
+  if bash -n "$script_path" 2>"$SYNTAX_ERR_FILE"; then
+    pass "bash -n $script_label"
+  else
+    fail "bash -n $script_label: $(cat "$SYNTAX_ERR_FILE")"
+  fi
+done
+rm -f "$SYNTAX_ERR_FILE"
 
 if command -v shellcheck >/dev/null 2>&1; then
-  # bin/setup-improvement-loop・claude-skills/improvement-dispatch/scripts/create-worktree・
-  # claude-skills/improvement-dispatch/scripts/merge-reviewed-branch・
-  # claude-skills/improvement-dispatch/scripts/select-next-task は bash なので shellcheck が
-  # 完全サポートする。install.zsh とまとめて1回の shellcheck 呼び出しで渡すと、
+  # install.zsh とその他のスクリプトをまとめて1回の shellcheck 呼び出しで渡すと、
   # zsh は shellcheck が対応しない shell のため SC1071 で即座に fatal
   # parse error になり、他のスクリプト側も一切linterされずに巻き添えで FAIL
-  # してしまう。そのため個別に実行する。
-  # -x -P SCRIPTDIR: bin/setup-improvement-loop は TASK-18 で
-  # bin/lib/resolve_path.sh を source するようになった。source 先を実際に
-  # 追って検査させないと、常に SC1091（source 先を辿れない）で誤って
-  # 失敗するため、source 元スクリプトのディレクトリを基準に追跡させる。
-  if shellcheck -x -P SCRIPTDIR "$SETUP_SCRIPT"; then
-    pass "shellcheck bin/setup-improvement-loop"
-  else
-    fail "shellcheck bin/setup-improvement-loop (指摘あり。上の出力を参照)"
-  fi
-
-  if shellcheck "$CREATE_WORKTREE_SCRIPT"; then
-    pass "shellcheck claude-skills/improvement-dispatch/scripts/create-worktree"
-  else
-    fail "shellcheck claude-skills/improvement-dispatch/scripts/create-worktree (指摘あり。上の出力を参照)"
-  fi
-
-  if shellcheck "$MERGE_SCRIPT"; then
-    pass "shellcheck claude-skills/improvement-dispatch/scripts/merge-reviewed-branch"
-  else
-    fail "shellcheck claude-skills/improvement-dispatch/scripts/merge-reviewed-branch (指摘あり。上の出力を参照)"
-  fi
-
-  if shellcheck "$SELECT_SCRIPT"; then
-    pass "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task"
-  else
-    fail "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task (指摘あり。上の出力を参照)"
-  fi
-
-  if shellcheck "$CHECK_HANDOFF_SCRIPT"; then
-    pass "shellcheck claude-skills/improvement-work/scripts/check-handoff"
-  else
-    fail "shellcheck claude-skills/improvement-work/scripts/check-handoff (指摘あり。上の出力を参照)"
-  fi
-
-  if shellcheck "$PRECOMMIT_HOOK"; then
-    pass "shellcheck githooks/pre-commit"
-  else
-    fail "shellcheck githooks/pre-commit (指摘あり。上の出力を参照)"
-  fi
-
-  if shellcheck "$CHECK_RECOVERY_SCRIPT"; then
-    pass "shellcheck claude-skills/improvement-dispatch/scripts/check-progress-recovery"
-  else
-    fail "shellcheck claude-skills/improvement-dispatch/scripts/check-progress-recovery (指摘あり。上の出力を参照)"
-  fi
-
-  # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
-  # しない。ファイル冒頭の `# shellcheck shell=bash` ディレクティブにより
-  # bash として（精度は落ちるが）解析させる。zsh 固有構文（${0:A:h} や
-  # print 組み込みなど）による誤検知が出ることがあるため、ここでの指摘は
-  # 参考情報として報告するのみで、テスト全体の hard failure にはしない。
-  if shellcheck -x -P SCRIPTDIR "$INSTALL_SCRIPT"; then
-    pass "shellcheck install.zsh (shell=bash として、精度は参考程度)"
-  else
-    echo "NOTE: shellcheck install.zsh に指摘あり。install.zsh は zsh 専用のため" \
-         "zsh 構文由来の誤検知を含みうる。上の出力を参照し、実際のバグかどうかは" \
-         "目視で判断すること（この結果だけでテストを失敗にはしない）。"
-    skip "shellcheck install.zsh (指摘あり。zsh 構文の誤検知の可能性があるため参考情報扱い)"
-  fi
+  # してしまう。そのため CHECK_SCRIPTS の各エントリに対して個別に実行する。
+  for entry in "${CHECK_SCRIPTS[@]}"; do
+    IFS='|' read -r script_path script_label sc_flags sc_allow_fail <<<"$entry"
+    # shellcheck disable=SC2086  # sc_flags は複数フラグをそのまま単語分割させたいので意図的
+    if shellcheck $sc_flags "$script_path"; then
+      if [ "$sc_allow_fail" = "true" ]; then
+        pass "shellcheck $script_label (shell=bash として、精度は参考程度)"
+      else
+        pass "shellcheck $script_label"
+      fi
+    else
+      if [ "$sc_allow_fail" = "true" ]; then
+        # install.zsh は zsh 専用スクリプトで、shellcheck は zsh を直接サポート
+        # しない。ファイル冒頭の `# shellcheck shell=bash` ディレクティブにより
+        # bash として（精度は落ちるが）解析させている。zsh 固有構文
+        # （${0:A:h} や print 組み込みなど）による誤検知が出ることがあるため、
+        # ここでの指摘は参考情報として報告するのみで、テスト全体の
+        # hard failure にはしない。
+        echo "NOTE: shellcheck $script_label に指摘あり。$script_label は zsh 専用のため" \
+             "zsh 構文由来の誤検知を含みうる。上の出力を参照し、実際のバグかどうかは" \
+             "目視で判断すること（この結果だけでテストを失敗にはしない）。"
+        skip "shellcheck $script_label (指摘あり。zsh 構文の誤検知の可能性があるため参考情報扱い)"
+      else
+        fail "shellcheck $script_label (指摘あり。上の出力を参照)"
+      fi
+    fi
+  done
 else
   skip "shellcheck が PATH に無いため実行しなかった"
 fi
