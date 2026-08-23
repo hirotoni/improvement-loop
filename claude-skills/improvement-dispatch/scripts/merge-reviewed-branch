@@ -23,6 +23,9 @@
 #      衝突していなければそのままコミットしてマージを完了する。
 #   5. マージが完了した場合のみ、対応するワークツリーを git worktree remove
 #      で片付ける（未コミットの変更等で失敗しても --force はしない）。
+#   6. マージが完了した場合のみ、対応する作業ブランチ自体も git branch -d
+#      で削除する（安全削除のみ。--force/-D はせず、失敗してもエラーを
+#      報告して先に進む。worktree の片付けと同じ扱いである）。
 #
 # 終了ステータスと、標準出力の最後の行に出す "RESULT: <値>" で結果を判別する。
 #
@@ -207,6 +210,21 @@ if [ -n "$worktree_path" ]; then
 else
   echo "対応するワークツリーは見つからなかった（既に片付け済みの可能性がある）"
 fi
+
+# ---- 8. 対応する作業ブランチ自体を削除する ----
+# git branch -d は安全削除（HEAD にマージ済みでないブランチは拒否する）であり、
+# --force に相当する -D は使わない。ワークツリーの片付け（手順7）に失敗して
+# ブランチがまだそのワークツリーで使用中の場合も、この削除は失敗する。
+# いずれの失敗もエラーを報告するだけに留め、--force はせず、スクリプト全体の
+# 結果（exit code・RESULT）は変えない（worktree の片付け失敗時と同じ扱い）。
+branch_err_file="$(mktemp)"
+if git -C "$REPO_ROOT" branch -d "$BRANCH" 2>"$branch_err_file"; then
+  echo "作業ブランチを削除した: $BRANCH"
+else
+  err "作業ブランチの削除に失敗した（-D はせず残す）: $BRANCH"
+  err "$(cat "$branch_err_file")"
+fi
+rm -f "$branch_err_file"
 
 emit_result "MERGED"
 exit 0
