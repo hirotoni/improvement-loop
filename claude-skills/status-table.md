@@ -2,9 +2,8 @@
 
 improvement ループが使う6状態の名称・意味・「動かす主体」の正本。
 `improvement-scout` / `improvement-scout-major` / `improvement-add` / `improvement-dispatch` / `improvement-work` の
-各 `SKILL.md` は、それぞれ独立した手書きコピーとしてこの表と同内容を持っている（TASK-30 時点）。
-このファイルは内容の単一情報源を作ることだけを目的とし、5ファイルの表自体をこのファイルへの参照に置き換える作業は
-後続タスクの範囲とする。5ファイルを直接編集する前に必ずこの表を更新すること。
+各 `SKILL.md` は、ステータスの定義を手元に複製せず、この表を単一情報源として参照する。
+5ファイルを直接編集する前に必ずこの表を更新すること。
 
 ## ステータス名の一致先
 
@@ -45,10 +44,3 @@ REQUIRED_STATUSES=(Proposed "To Do" "In Progress" "In Review" Approved Done)
 - `Done`：`Approved` になったタスクの扱いは調整値 `auto_merge_reviewed` で分岐する。`false`（既定）は
   GitHub 上の PR ベース運用を前提とし、人間が PR でマージした後 `Done` にする。`true` は PR を運用しない
   前提で、improvement-dispatch がローカルで main にマージしてから `Done` にする（`push` はしない）。
-
-## 名称変更の経緯
-
-- 旧名 `Reviewed` は TASK-8 で `Approved` に改名された（Done・main マージ済み）。ただし TASK-8 は
-  `improvement-scout` / `improvement-scout-major` / `improvement-work` の3ファイルを非目標として明示的に除外しており、
-  この3ファイルは本ファイル作成時点でもまだ旧名 `Reviewed` のまま残っている。この不一致の解消（5ファイルの表を
-  この正本へ揃える、または参照に置き換える）は後続タスクの範囲であり、本ファイルの新規作成だけでは行わない。
