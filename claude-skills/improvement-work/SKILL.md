@@ -154,9 +154,28 @@ git diff <デフォルトブランチ>...HEAD
 
 ```bash
 git add <変更したファイル>
-git commit
+CHANGED_FILES="$(git diff --name-only --cached)"
+CHECK_OUTPUT="$(claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths $CHANGED_FILES 2>&1)"
+CHECK_EXIT=$?
+printf '%s\n' "$CHECK_OUTPUT"
 ```
 
+- `git add` の直後、`git commit` の前に、`claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`（TASK-44 で追加。ワークツリー内に実体としてチェックアウトされている `claude-skills/` 配下の tracked パスを直接参照する。`.claude/skills/...` のシンボリックリンク経由では参照しない）に、ステージした変更ファイル一覧（`git diff --name-only --cached`）を渡し、`.backlog/config.my.yml` の `forbidden_paths`/`allowed_paths` と機械的に突き合わせる。
+- `forbidden_paths`/`allowed_paths` が両方空、またはキー自体が無い場合、このスクリプトは常に `RESULT: OK`・終了コード `0` で終わる。したがってこの手順を追加しても、両方未設定の既存タスクの実行フローは変化しない（そのまま `git commit` に進むだけである）。
+- `$CHECK_EXIT` の値で分岐する。
+  - `0`（`RESULT: OK`）：違反なし。そのまま `git commit` する。
+  - `1`（`RESULT: VIOLATION`）：コミットしない。次の二段で対応する。
+    1. **自己修正を試みる**：`CHECK_OUTPUT` の `VIOLATING_FILES:` に列挙されたファイルのうち、受入基準の達成に必要ない変更は `git restore --staged --worktree -- <file>` で取り消す。取り消し後、`git add` からやり直して同じチェックを再実行する。再チェックが `RESULT: OK` になれば、そのまま `git commit` する。
+    2. **自己修正できない場合**：違反ファイルへの変更が受入基準の達成に不可欠で取り消せない場合（＝受入基準の範囲そのものが `forbidden_paths`/`allowed_paths` と矛盾している）は、手順3「中断する条件」の「受入基準どうしが矛盾している」に準じて扱う。コミットせず、手順3と同じ差し戻し手順を実行する。
+       ```bash
+       backlog task edit TASK-<n> \
+         --add-label 'blocked:needs-decision' \
+         -s "To Do" \
+         --comment '<VIOLATING_FILES の一覧と、どの受入基準の達成にその変更が必要か。A) forbidden_paths/allowed_paths を緩める B) 該当の受入基準を見直す、の形で選択肢を書く>' \
+         --comment-author @improvement-work --plain
+       ```
+       報告に `blocked` である旨と違反内容を書いて終える。
+  - `2`（`RESULT: ERROR`）：スクリプトが対象リポジトリを認識できない等の環境不備。コミットしない。これは製品判断ではなく環境不備なので `blocked:needs-decision` は付けず、手順1の `check-handoff` が非0終了したときと同じ扱い（`CHECK_OUTPUT` の内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側である自分が行う）にする。
 - 作業ディレクトリ（ワークツリー）内でコミットする。このディレクトリのブランチはこのタスクのために作られている。メインの作業木には一切コミットしない。
 - コミットメッセージはリポジトリの既存の書式に合わせる。ハーネスがトレーラを要求している場合はそれに従う。
 - `push` しない。`merge` しない。PR を作らない。リモートに触らない。`git worktree remove` もしない。ワークツリーの片付けは dispatch がマージ後に行う。
