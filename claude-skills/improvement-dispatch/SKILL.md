@@ -32,7 +32,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 | `max_in_progress`      | 同時に `In Progress` にできる件数                                 | 1       |
 | `max_redispatch`       | 同じタスクを再引き渡しできる回数                                  | 2       |
 | `auto_merge_reviewed`  | `Approved` を検知したとき main に自動マージするかどうか（手順 3） | `false` |
-| `worktree_base_dir`    | ワークツリーの作成先ベースディレクトリ（手順 5）。配下にさらにリポジトリ名で名前空間分けされる | `""`（= リポジトリの親ディレクトリ/`.worktree`） |
+| `worktree_base_dir`    | ワークツリーの作成先ベースディレクトリ（手順 5）。配下にさらにリポジトリ名で名前空間分けされる | `""`（= リポジトリルート/`.worktree`） |
 | `forbidden_paths`      | AIエージェントが変更してはいけないパスのリスト（前方一致）。手順 5 の引き渡しプロンプトに反映される | `[]`（制限なし） |
 | `allowed_paths`        | AIエージェントが変更してよいパスのリスト（前方一致）。手順 5 の引き渡しプロンプトに反映される | `[]`（制限なし） |
 
@@ -165,7 +165,7 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
    backlog task edit TASK-<n> -s "Done" --comment 'PR で main にマージ済み' --comment-author @human --plain
    ```
 
-3. 対応するワークツリー（既定では `<リポジトリの親ディレクトリ>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`。配置場所は `worktree_base_dir` で変更できる）の後片付け（`git worktree remove`）も、この設定のときは dispatch ではなく人間が行う。dispatch は `auto_merge_reviewed: false` の間、`Approved`/`Done` のワークツリーを片付けない。
+3. 対応するワークツリー（既定では `<リポジトリルート>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`。配置場所は `worktree_base_dir` で変更できる）の後片付け（`git worktree remove`）も、この設定のときは dispatch ではなく人間が行う。dispatch は `auto_merge_reviewed: false` の間、`Approved`/`Done` のワークツリーを片付けない。
 
 この設定のとき、手順 7 の「人間に必要な行動」に `Approved` の一覧を毎回含めて報告し、ループが `Approved` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
 
@@ -210,11 +210,11 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 - `RESULT: NO_CANDIDATE` → `To Do` に選べる候補が無い（`blocked:needs-decision` ラベル付き・依存タスク未完了のものを除いて残らない場合を含む）。手順 7 に進む。
 - `RESULT: ERROR` → 引数不正など。標準エラーに詳細が出る。原因を確認する。
 
-以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリの親ディレクトリの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す（`.claude/skills/improvement-dispatch/scripts/select-next-task` もこの条件を見ない）。
+以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリルートの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す（`.claude/skills/improvement-dispatch/scripts/select-next-task` もこの条件を見ない）。
 
 ### 5. ワークツリーを作って引き渡す
 
-作業ブランチはメインの作業木の上には作らない。ワークツリーの作成先ベースディレクトリ（`improvement_loop.worktree_base_dir`。既定ではリポジトリの親ディレクトリの `.worktree/`）配下の `<リポジトリ名>/` に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この名前空間分けは `worktree_base_dir` の値を変えても常に適用される。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
+作業ブランチはメインの作業木の上には作らない。ワークツリーの作成先ベースディレクトリ（`improvement_loop.worktree_base_dir`。既定ではリポジトリルートの `.worktree/`）配下の `<リポジトリ名>/` に、タスクごとに独立したワークツリーを作る。リポジトリ名で名前空間分けすることで、同じ親ディレクトリを共有する兄弟リポジトリ同士でワークツリーのパスが衝突しない。この名前空間分けは `worktree_base_dir` の値を変えても常に適用される。この操作はメインの作業木のブランチ切り替えや checkout の変更を伴わないため、人間がメインの作業木で作業中でも実行できる。
 
 ワークツリー作成の一連の処理（`worktree_base_dir` の解決・正規化、リポジトリ内外判定つき `.git/info/exclude` への追記、デフォルトブランチの判定、`git worktree add`、`.backlog` シンボリックリンクの作成）は `.claude/skills/improvement-dispatch/scripts/create-worktree` に決定論的なスクリプトとして切り出されている（`.claude/skills/improvement-dispatch` は `claude-skills/improvement-dispatch` ディレクトリ丸ごとへのシンボリックリンクであり、`scripts/` サブディレクトリごと配布される）。dispatch はこれを都度読み取って組み立てる必要は無く、次のように1回実行するだけでよい。
 
