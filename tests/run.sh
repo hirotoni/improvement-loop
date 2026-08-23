@@ -871,6 +871,11 @@ if [ -n "$(cd "$TMP_MERGE_DIRTY" && git status --porcelain)" ] \
 else
   fail "7a: 前提条件未達のはずが、メインの作業木の git 状態が変わっている"
 fi
+if [ -n "$(cd "$TMP_MERGE_DIRTY" && git branch --list feature-dirty-check)" ]; then
+  pass "7a: 前提条件未達（マージ未実施）のとき、作業ブランチは削除されない"
+else
+  fail "7a: 前提条件未達のはずが、作業ブランチが削除されている"
+fi
 
 echo ""
 echo "--- 7b. ff-only マージが成功し、対応するワークツリーが片付けられる ---"
@@ -907,6 +912,11 @@ if [ -d "$TMP_MERGE_FF-wt" ]; then
   fail "7b: マージ完了後も対応するワークツリーが片付けられていない"
 else
   pass "7b: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+if [ -z "$(cd "$TMP_MERGE_FF" && git branch --list feature-ff)" ]; then
+  pass "7b: マージ完了後、対応する作業ブランチが自動で削除される（AC#1）"
+else
+  fail "7b: マージ完了後も対応する作業ブランチが削除されていない"
 fi
 
 echo ""
@@ -953,6 +963,11 @@ if [ -d "$TMP_MERGE_3WAY-wt" ]; then
   fail "7c: マージ完了後も対応するワークツリーが片付けられていない"
 else
   pass "7c: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+if [ -z "$(cd "$TMP_MERGE_3WAY" && git branch --list feature-3way)" ]; then
+  pass "7c: マージ完了後、対応する作業ブランチが自動で削除される（AC#1）"
+else
+  fail "7c: マージ完了後も対応する作業ブランチが削除されていない"
 fi
 
 echo ""
@@ -1005,6 +1020,56 @@ if [ -d "$TMP_MERGE_CONFLICT-wt" ]; then
   pass "7d: マージが完了していないため、対応するワークツリーは片付けられず残る"
 else
   fail "7d: マージが完了していないはずなのに、対応するワークツリーが片付けられている"
+fi
+if [ -n "$(cd "$TMP_MERGE_CONFLICT" && git branch --list feature-conflict)" ]; then
+  pass "7d: マージが完了していない（CONFLICT）ため、作業ブランチは削除されない（AC#2）"
+else
+  fail "7d: マージが完了していないはずなのに、作業ブランチが削除されている"
+fi
+
+echo ""
+echo "--- 7e. マージは完了するが、対応するワークツリーが汚れており片付け・ブランチ削除の両方が失敗する ---"
+# ワークツリーに未コミットの変更を残しておくと、git worktree remove は --force
+# しない限り失敗する。さらにそのワークツリーが存在する限り、ブランチはそこで
+# 使用中のままなので git branch -d も失敗する。この状況で、マージ自体
+# （RESULT/exit code）が成功のまま変わらないこと（AC#3: worktree片付けと同様の
+# 扱い）と、--force/-D を使わずワークツリー・ブランチの両方が削除されずに
+# 残ることを確認する。
+TMP_MERGE_DIRTY_WT="$(mktemp -d)"
+cleanup_merge_dirty_wt() { rm -rf "$TMP_MERGE_DIRTY_WT" "$TMP_MERGE_DIRTY_WT-wt"; }
+trap 'cleanup_merge_dirty_wt; cleanup_merge_conflict; cleanup_merge_3way; cleanup_merge_ff; cleanup_merge_dirty; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_MERGE_DIRTY_WT" && git init -q -b main && git commit -q --allow-empty -m init)
+(cd "$TMP_MERGE_DIRTY_WT" && git worktree add -q -b feature-dirty-wt "$TMP_MERGE_DIRTY_WT-wt" main)
+(cd "$TMP_MERGE_DIRTY_WT-wt" && git commit -q --allow-empty -m "feature dirty-wt work")
+echo "uncommitted in worktree" > "$TMP_MERGE_DIRTY_WT-wt/uncommitted.txt"
+
+merge_dirty_wt_output="$(cd "$TMP_MERGE_DIRTY_WT" && "$MERGE_SCRIPT" feature-dirty-wt 2>&1)"
+merge_dirty_wt_exit=$?
+if [ "$merge_dirty_wt_exit" -eq 0 ]; then
+  pass "7e: ワークツリーが汚れていて片付け・ブランチ削除の両方が失敗しても、マージ自体は終了ステータス 0 (MERGED) のまま"
+else
+  fail "7e: ワークツリーが汚れている場合でもマージ自体は成功するはずが、終了ステータスが 0 でない（${merge_dirty_wt_exit}）: $merge_dirty_wt_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_dirty_wt_output"; then
+  pass "7e: 出力に RESULT: MERGED が含まれる（worktree片付け・ブランチ削除の失敗は結果を変えない）"
+else
+  fail "7e: 出力に RESULT: MERGED が含まれない: $merge_dirty_wt_output"
+fi
+if [ "$(cd "$TMP_MERGE_DIRTY_WT" && git log -1 --format=%s main)" = "feature dirty-wt work" ]; then
+  pass "7e: main が feature-dirty-wt の内容までマージされている"
+else
+  fail "7e: main が feature-dirty-wt の内容までマージされていない"
+fi
+if [ -d "$TMP_MERGE_DIRTY_WT-wt" ]; then
+  pass "7e: ワークツリーが汚れているため --force されず、片付けられず残る"
+else
+  fail "7e: 汚れたワークツリーが --force で片付けられてしまっている（想定外）"
+fi
+if [ -n "$(cd "$TMP_MERGE_DIRTY_WT" && git branch --list feature-dirty-wt)" ]; then
+  pass "7e: ワークツリーで使用中のため作業ブランチの削除に失敗し、-D されず残る（AC#3）"
+else
+  fail "7e: ブランチ削除が失敗するはずが、作業ブランチが削除されている（-D 相当の強制削除が疑われる）"
 fi
 
 echo ""
