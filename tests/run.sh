@@ -13,7 +13,7 @@
 #   3. 同じ一時リポジトリに対して再実行し、冪等性とユーザー所有ファイル保護を検証する。
 #   7. claude-skills/improvement-dispatch/scripts/select-next-task（improvement-dispatch 手順4の選定ロジック）の
 #      動作確認テスト（通常選定・ラベル除外・依存除外・各種GATED・NO_CANDIDATE）。
-#  11. claude-skills/improvement-dispatch/scripts/check-progress-recovery（improvement-dispatch 手順2-3の
+#  13. claude-skills/improvement-dispatch/scripts/check-progress-recovery（improvement-dispatch 手順2-3の
 #      復旧診断ロジック）の動作確認テスト（既存ワークツリー再利用・ワークツリー
 #      作り直し・To Doへの差し戻しの3パターン、および引数の妥当性検証）。
 #
@@ -28,7 +28,9 @@ CREATE_WORKTREE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/cr
 MERGE_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/merge-reviewed-branch"
 SELECT_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/select-next-task"
 CHECK_RECOVERY_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/scripts/check-progress-recovery"
+CHECK_HANDOFF_SCRIPT="$REPO_ROOT/claude-skills/improvement-work/scripts/check-handoff"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
+PRECOMMIT_HOOK="$REPO_ROOT/githooks/pre-commit"
 SOURCE_CONFIG="$REPO_ROOT/backlogmd-custom-config/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-skills"
 
@@ -155,6 +157,20 @@ else
 fi
 rm -f /tmp/tests-run-sh-syntax-err.$$
 
+if bash -n "$CHECK_HANDOFF_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n claude-skills/improvement-work/scripts/check-handoff"
+else
+  fail "bash -n claude-skills/improvement-work/scripts/check-handoff: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
+if bash -n "$PRECOMMIT_HOOK" 2>>/tmp/tests-run-sh-syntax-err.$$; then
+  pass "bash -n githooks/pre-commit"
+else
+  fail "bash -n githooks/pre-commit: $(cat /tmp/tests-run-sh-syntax-err.$$)"
+fi
+rm -f /tmp/tests-run-sh-syntax-err.$$
+
 if bash -n "$CHECK_RECOVERY_SCRIPT" 2>>/tmp/tests-run-sh-syntax-err.$$; then
   pass "bash -n claude-skills/improvement-dispatch/scripts/check-progress-recovery"
 else
@@ -170,7 +186,11 @@ if command -v shellcheck >/dev/null 2>&1; then
   # zsh は shellcheck が対応しない shell のため SC1071 で即座に fatal
   # parse error になり、他のスクリプト側も一切linterされずに巻き添えで FAIL
   # してしまう。そのため個別に実行する。
-  if shellcheck "$SETUP_SCRIPT"; then
+  # -x -P SCRIPTDIR: bin/setup-improvement-loop は TASK-18 で
+  # bin/lib/resolve_path.sh を source するようになった。source 先を実際に
+  # 追って検査させないと、常に SC1091（source 先を辿れない）で誤って
+  # 失敗するため、source 元スクリプトのディレクトリを基準に追跡させる。
+  if shellcheck -x -P SCRIPTDIR "$SETUP_SCRIPT"; then
     pass "shellcheck bin/setup-improvement-loop"
   else
     fail "shellcheck bin/setup-improvement-loop (指摘あり。上の出力を参照)"
@@ -194,6 +214,18 @@ if command -v shellcheck >/dev/null 2>&1; then
     fail "shellcheck claude-skills/improvement-dispatch/scripts/select-next-task (指摘あり。上の出力を参照)"
   fi
 
+  if shellcheck "$CHECK_HANDOFF_SCRIPT"; then
+    pass "shellcheck claude-skills/improvement-work/scripts/check-handoff"
+  else
+    fail "shellcheck claude-skills/improvement-work/scripts/check-handoff (指摘あり。上の出力を参照)"
+  fi
+
+  if shellcheck "$PRECOMMIT_HOOK"; then
+    pass "shellcheck githooks/pre-commit"
+  else
+    fail "shellcheck githooks/pre-commit (指摘あり。上の出力を参照)"
+  fi
+
   if shellcheck "$CHECK_RECOVERY_SCRIPT"; then
     pass "shellcheck claude-skills/improvement-dispatch/scripts/check-progress-recovery"
   else
@@ -205,7 +237,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   # bash として（精度は落ちるが）解析させる。zsh 固有構文（${0:A:h} や
   # print 組み込みなど）による誤検知が出ることがあるため、ここでの指摘は
   # 参考情報として報告するのみで、テスト全体の hard failure にはしない。
-  if shellcheck "$INSTALL_SCRIPT"; then
+  if shellcheck -x -P SCRIPTDIR "$INSTALL_SCRIPT"; then
     pass "shellcheck install.zsh (shell=bash として、精度は参考程度)"
   else
     echo "NOTE: shellcheck install.zsh に指摘あり。install.zsh は zsh 専用のため" \
@@ -1295,15 +1327,229 @@ else
 fi
 
 echo ""
-echo "=== 11. claude-skills/improvement-dispatch/scripts/check-progress-recovery の動作確認 ==="
+echo "=== 11. githooks/pre-commit の動作確認 ==="
+# TASK-17: tests/run.sh を pre-commit フックから自動実行し、FAIL 時はコミットを
+# ブロックする（受入基準 #1・#3）。githooks/pre-commit 自体は
+# `git rev-parse --show-toplevel` で解決したリポジトリルート直下の
+# tests/run.sh を実行するだけの薄いラッパーなので、一時リポジトリの直下に
+# tests/run.sh という名前でスタブを置けば、実運用と同じ経路
+# （core.hooksPath 経由のフック起動 → リポジトリルートの tests/run.sh 実行）
+# を保ったまま、外部依存無しに高速に動作確認できる。
+
+if [ ! -f "$PRECOMMIT_HOOK" ]; then
+  fail "githooks/pre-commit が存在しない: $PRECOMMIT_HOOK"
+elif [ ! -x "$PRECOMMIT_HOOK" ]; then
+  fail "githooks/pre-commit に実行ビットが無い"
+else
+  pass "githooks/pre-commit が実行可能ファイルとして存在する"
+fi
+
+TMP_HOOK_REPO="$(mktemp -d)"
+cleanup_hook_repo() {
+  rm -rf "$TMP_HOOK_REPO"
+}
+trap 'cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+(cd "$TMP_HOOK_REPO" && git init -q -b main)
+git -C "$TMP_HOOK_REPO" config user.email "test@example.com"
+git -C "$TMP_HOOK_REPO" config user.name "Test"
+
+mkdir -p "$TMP_HOOK_REPO/githooks"
+cp "$PRECOMMIT_HOOK" "$TMP_HOOK_REPO/githooks/pre-commit"
+chmod +x "$TMP_HOOK_REPO/githooks/pre-commit"
+git -C "$TMP_HOOK_REPO" config core.hooksPath githooks
+
+mkdir -p "$TMP_HOOK_REPO/tests"
+
+# ---- FAIL するスタブ: コミットが阻止されることを確認する ----
+cat > "$TMP_HOOK_REPO/tests/run.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "PASS: 0, FAIL: 1, SKIP: 0"
+exit 1
+STUB
+chmod +x "$TMP_HOOK_REPO/tests/run.sh"
+
+git -C "$TMP_HOOK_REPO" add -A
+head_before_fail="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+hook_fail_output="$(cd "$TMP_HOOK_REPO" && git commit -q -m "should be blocked" 2>&1)"
+hook_fail_exit=$?
+head_after_fail="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+
+if [ "$hook_fail_exit" -ne 0 ]; then
+  pass "tests/run.sh が FAIL するとき、git commit が非ゼロで終了する（pre-commit フックがブロックする）"
+else
+  fail "tests/run.sh が FAIL しても git commit が成功してしまった（exit 0）: $hook_fail_output"
+fi
+
+if [ "$head_before_fail" = "$head_after_fail" ]; then
+  pass "tests/run.sh が FAIL するとき、コミットが実際には作成されない（HEAD が進まない）"
+else
+  fail "tests/run.sh が FAIL したのにコミットが作成されてしまった（HEAD が進んだ）"
+fi
+
+# ---- PASS するスタブ: コミットが成功することを確認する ----
+cat > "$TMP_HOOK_REPO/tests/run.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "PASS: 1, FAIL: 0, SKIP: 0"
+exit 0
+STUB
+chmod +x "$TMP_HOOK_REPO/tests/run.sh"
+
+git -C "$TMP_HOOK_REPO" add -A
+head_before_pass="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+hook_pass_output="$(cd "$TMP_HOOK_REPO" && git commit -q -m "should succeed" 2>&1)"
+hook_pass_exit=$?
+head_after_pass="$(git -C "$TMP_HOOK_REPO" rev-parse HEAD 2>/dev/null || echo NONE)"
+
+if [ "$hook_pass_exit" -eq 0 ]; then
+  pass "tests/run.sh が成功するとき、git commit が成功する（exit 0）"
+else
+  fail "tests/run.sh が成功しても git commit が失敗した: $hook_pass_output"
+fi
+
+if [ "$head_before_pass" != "$head_after_pass" ] && [ "$head_after_pass" != "NONE" ]; then
+  pass "tests/run.sh が成功するとき、コミットが実際に作成される（HEAD が進む）"
+else
+  fail "tests/run.sh が成功したのにコミットが作成されなかった（HEAD が進んでいない）"
+fi
+
+echo ""
+echo "=== 12. claude-skills/improvement-work/scripts/check-handoff の動作確認 ==="
+# improvement-work 手順1（引き渡し内容の確認）の3条件（作業ディレクトリ一致・
+# ブランチ一致・.backlog シンボリックリンクの健全性）を切り出した
+# claude-skills/improvement-work/scripts/check-handoff を、一時 git リポジトリに対して
+# 実際に実行して検証する（TASK-24 受入基準 #1-#4 に対応）。
+
+TMP_HANDOFF_REPO="$(mktemp -d)"
+# macOS では mktemp -d が返すパスがシンボリックリンク経由（/var/... -> /private/var/...）
+# であり、check-handoff 内部の pwd -P による正規化後のパスと文字列比較するため、
+# ここでも同じ正規化をしておく。
+TMP_HANDOFF_REPO="$(cd "$TMP_HANDOFF_REPO" && pwd -P)"
+cleanup_handoff_repo() {
+  rm -rf "$TMP_HANDOFF_REPO"
+}
+trap 'cleanup_handoff_repo; cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+
+HANDOFF_BRANCH="improvement/task-99-handoff-check"
+(cd "$TMP_HANDOFF_REPO" && git init -q -b "$HANDOFF_BRANCH" && git commit -q --allow-empty -m init)
+ln -s "$TMP_HANDOFF_REPO" "$TMP_HANDOFF_REPO/.backlog"
+
+echo ""
+echo "--- 12a. 3条件すべてを満たすとき、成功（exit 0）で終了する（AC#1） ---"
+handoff_ok_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
+handoff_ok_exit=$?
+if [ "$handoff_ok_exit" -eq 0 ]; then
+  pass "12a: 作業ディレクトリ・ブランチ・.backlog シンボリックリンクが全て期待通りのとき、exit 0 で終了する"
+else
+  fail "12a: 3条件を満たすはずなのに exit 0 で終了しなかった（${handoff_ok_exit}）: $handoff_ok_output"
+fi
+
+echo ""
+echo "--- 12b. 作業ディレクトリが期待するパスと異なるとき、失敗（非0終了コード）で終了する（AC#2） ---"
+handoff_wrongdir_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO/does-not-exist" "$HANDOFF_BRANCH" 2>&1)"
+handoff_wrongdir_exit=$?
+if [ "$handoff_wrongdir_exit" -ne 0 ]; then
+  pass "12b: 作業ディレクトリが異なるとき、非0終了コードで終了する（${handoff_wrongdir_exit}）"
+else
+  fail "12b: 作業ディレクトリが異なるはずなのに exit 0 で終了した"
+fi
+if grep -Fq "作業ディレクトリ" <<<"$handoff_wrongdir_output"; then
+  pass "12b: 作業ディレクトリの不一致がエラーメッセージに明示される"
+else
+  fail "12b: 作業ディレクトリの不一致がエラーメッセージに明示されていない: $handoff_wrongdir_output"
+fi
+
+echo ""
+echo "--- 12c. 現在のブランチが期待するブランチ名と異なるとき、失敗（非0終了コード）で終了する（AC#3） ---"
+handoff_wrongbranch_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "some-other-branch" 2>&1)"
+handoff_wrongbranch_exit=$?
+if [ "$handoff_wrongbranch_exit" -ne 0 ]; then
+  pass "12c: ブランチが異なるとき、非0終了コードで終了する（${handoff_wrongbranch_exit}）"
+else
+  fail "12c: ブランチが異なるはずなのに exit 0 で終了した"
+fi
+if grep -Fq "ブランチ" <<<"$handoff_wrongbranch_output"; then
+  pass "12c: ブランチの不一致がエラーメッセージに明示される"
+else
+  fail "12c: ブランチの不一致がエラーメッセージに明示されていない: $handoff_wrongbranch_output"
+fi
+
+echo ""
+echo "--- 12d. .backlog がシンボリックリンクとして存在しないとき、失敗（非0終了コード）で終了する（AC#4） ---"
+rm "$TMP_HANDOFF_REPO/.backlog"
+handoff_nolink_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
+handoff_nolink_exit=$?
+if [ "$handoff_nolink_exit" -ne 0 ]; then
+  pass "12d: .backlog が無いとき、非0終了コードで終了する（${handoff_nolink_exit}）"
+else
+  fail "12d: .backlog が無いはずなのに exit 0 で終了した"
+fi
+if grep -Fq ".backlog" <<<"$handoff_nolink_output"; then
+  pass "12d: .backlog の欠落がエラーメッセージに明示される"
+else
+  fail "12d: .backlog の欠落がエラーメッセージに明示されていない: $handoff_nolink_output"
+fi
+
+echo ""
+echo "--- 12e. .backlog が壊れたシンボリックリンクのとき、失敗（非0終了コード）で終了する（AC#4） ---"
+ln -s "$TMP_HANDOFF_REPO/no-such-target" "$TMP_HANDOFF_REPO/.backlog"
+handoff_brokenlink_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
+handoff_brokenlink_exit=$?
+if [ "$handoff_brokenlink_exit" -ne 0 ]; then
+  pass "12e: .backlog が壊れたシンボリックリンクのとき、非0終了コードで終了する（${handoff_brokenlink_exit}）"
+else
+  fail "12e: .backlog が壊れたシンボリックリンクのはずなのに exit 0 で終了した"
+fi
+if grep -Fq ".backlog" <<<"$handoff_brokenlink_output"; then
+  pass "12e: .backlog の壊れたリンクがエラーメッセージに明示される"
+else
+  fail "12e: .backlog の壊れたリンクがエラーメッセージに明示されていない: $handoff_brokenlink_output"
+fi
+rm -f "$TMP_HANDOFF_REPO/.backlog"
+ln -s "$TMP_HANDOFF_REPO" "$TMP_HANDOFF_REPO/.backlog"
+
+echo ""
+echo "--- 12f. .backlog がシンボリックリンクではなく実体のディレクトリのとき、失敗（非0終了コード）で終了する（AC#4） ---"
+rm "$TMP_HANDOFF_REPO/.backlog"
+mkdir "$TMP_HANDOFF_REPO/.backlog"
+handoff_realdir_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
+handoff_realdir_exit=$?
+if [ "$handoff_realdir_exit" -ne 0 ]; then
+  pass "12f: .backlog が実体のディレクトリのとき、非0終了コードで終了する（${handoff_realdir_exit}）"
+else
+  fail "12f: .backlog が実体のディレクトリのはずなのに exit 0 で終了した"
+fi
+if grep -Fq ".backlog" <<<"$handoff_realdir_output"; then
+  pass "12f: .backlog が実体のディレクトリであることがエラーメッセージに明示される"
+else
+  fail "12f: .backlog が実体のディレクトリであることがエラーメッセージに明示されていない: $handoff_realdir_output"
+fi
+rm -rf "$TMP_HANDOFF_REPO/.backlog"
+ln -s "$TMP_HANDOFF_REPO" "$TMP_HANDOFF_REPO/.backlog"
+
+echo ""
+echo "--- 12g. 引数不足のとき、使い方を示して失敗（非0終了コード）で終了する ---"
+if "$CHECK_HANDOFF_SCRIPT" >/dev/null 2>&1; then
+  fail "12g: 引数無しで check-handoff を実行してもエラーにならない"
+else
+  pass "12g: 引数無しで check-handoff を実行するとエラーになる"
+fi
+
+if "$CHECK_HANDOFF_SCRIPT" "relative/path" "$HANDOFF_BRANCH" >/dev/null 2>&1; then
+  fail "12g: 期待する作業ディレクトリに相対パスを渡してもエラーにならない"
+else
+  pass "12g: 期待する作業ディレクトリに相対パスを渡すとエラーになる"
+fi
+
+echo "=== 13. claude-skills/improvement-dispatch/scripts/check-progress-recovery の動作確認 ==="
 # improvement-dispatch 手順2-3（In Progress タスクの引き渡し先が失われたと
 # 確定した後の復旧診断）を切り出した claude-skills/improvement-dispatch/scripts/check-progress-recovery を、
 # 一時 git リポジトリに対して実際に実行して検証する（TASK-21 受入基準 #1-#3 に対応）。
-#   11a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH（AC#1）
-#   11b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH（AC#2）
-#   11c. ブランチが存在しない -> REVERT_TO_TODO（AC#3）
-#   11d. ブランチは存在するが新しいコミットが無い -> REVERT_TO_TODO（AC#3）
-#   11e. 引数の妥当性検証（引数不足・base_branch が解決できない）
+#   13a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH（AC#1）
+#   13b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH（AC#2）
+#   13c. ブランチが存在しない -> REVERT_TO_TODO（AC#3）
+#   13d. ブランチは存在するが新しいコミットが無い -> REVERT_TO_TODO（AC#3）
+#   13e. 引数の妥当性検証（引数不足・base_branch が解決できない）
 
 TMP_CR_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
@@ -1314,101 +1560,101 @@ CR_WORKTREE_DIR="${TMP_CR_REPO}-wt"
 cleanup_cr_repo() {
   rm -rf "$TMP_CR_REPO" "$CR_WORKTREE_DIR"
 }
-trap 'cleanup_cr_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
+trap 'cleanup_cr_repo; cleanup_handoff_repo; cleanup_hook_repo; cleanup_cw_basedir_repo; cleanup_cw_repo; cleanup_migration; cleanup_multiline_statuses; cleanup_empty_statuses; cleanup' EXIT
 
 (cd "$TMP_CR_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 (cd "$TMP_CR_REPO" && git worktree add -q -b feature-recovery-a "$CR_WORKTREE_DIR" main)
 (cd "$CR_WORKTREE_DIR" && git commit -q --allow-empty -m "in-progress work")
 
 echo ""
-echo "--- 11a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH ---"
+echo "--- 13a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH ---"
 cr_out_a="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a main 2>&1)"
 cr_exit_a=$?
 if [ "$cr_exit_a" -eq 0 ] && printf '%s\n' "$cr_out_a" | grep -Fxq 'RESULT: REUSE_WORKTREE_REDISPATCH'; then
-  pass "11a: ワークツリー・ブランチともに存在し新しいコミットがある場合、RESULT: REUSE_WORKTREE_REDISPATCH（exit 0）（AC#1）"
+  pass "13a: ワークツリー・ブランチともに存在し新しいコミットがある場合、RESULT: REUSE_WORKTREE_REDISPATCH（exit 0）（AC#1）"
 else
-  fail "11a: 期待した結果と異なる（exit ${cr_exit_a}）:
+  fail "13a: 期待した結果と異なる（exit ${cr_exit_a}）:
 $cr_out_a"
 fi
 if printf '%s\n' "$cr_out_a" | grep -Fxq 'WORKTREE_EXISTS: true' \
     && printf '%s\n' "$cr_out_a" | grep -Fxq 'BRANCH_EXISTS: true' \
     && printf '%s\n' "$cr_out_a" | grep -Fxq 'NEW_COMMITS: 1'; then
-  pass "11a: WORKTREE_EXISTS/BRANCH_EXISTS/NEW_COMMITS の内訳が期待通り出力される"
+  pass "13a: WORKTREE_EXISTS/BRANCH_EXISTS/NEW_COMMITS の内訳が期待通り出力される"
 else
-  fail "11a: 診断内訳の出力が期待と異なる:
+  fail "13a: 診断内訳の出力が期待と異なる:
 $cr_out_a"
 fi
 
 echo ""
-echo "--- 11b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH ---"
+echo "--- 13b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH ---"
 (cd "$TMP_CR_REPO" && git worktree remove "$CR_WORKTREE_DIR")
 cr_out_b="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a main 2>&1)"
 cr_exit_b=$?
 if [ "$cr_exit_b" -eq 1 ] && printf '%s\n' "$cr_out_b" | grep -Fxq 'RESULT: RECREATE_WORKTREE_REDISPATCH'; then
-  pass "11b: ワークツリーが無く、ブランチに新しいコミットがある場合、RESULT: RECREATE_WORKTREE_REDISPATCH（exit 1）（AC#2）"
+  pass "13b: ワークツリーが無く、ブランチに新しいコミットがある場合、RESULT: RECREATE_WORKTREE_REDISPATCH（exit 1）（AC#2）"
 else
-  fail "11b: 期待した結果と異なる（exit ${cr_exit_b}）:
+  fail "13b: 期待した結果と異なる（exit ${cr_exit_b}）:
 $cr_out_b"
 fi
 if printf '%s\n' "$cr_out_b" | grep -Fxq 'WORKTREE_EXISTS: false' \
     && printf '%s\n' "$cr_out_b" | grep -Fxq 'BRANCH_EXISTS: true'; then
-  pass "11b: WORKTREE_EXISTS: false / BRANCH_EXISTS: true が出力される"
+  pass "13b: WORKTREE_EXISTS: false / BRANCH_EXISTS: true が出力される"
 else
-  fail "11b: 診断内訳の出力が期待と異なる:
+  fail "13b: 診断内訳の出力が期待と異なる:
 $cr_out_b"
 fi
 
 echo ""
-echo "--- 11c. ブランチが存在しない -> REVERT_TO_TODO ---"
+echo "--- 13c. ブランチが存在しない -> REVERT_TO_TODO ---"
 cr_out_c="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" no-such-branch main 2>&1)"
 cr_exit_c=$?
 if [ "$cr_exit_c" -eq 2 ] && printf '%s\n' "$cr_out_c" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
-  pass "11c: ブランチが存在しない場合、RESULT: REVERT_TO_TODO（exit 2）（AC#3）"
+  pass "13c: ブランチが存在しない場合、RESULT: REVERT_TO_TODO（exit 2）（AC#3）"
 else
-  fail "11c: 期待した結果と異なる（exit ${cr_exit_c}）:
+  fail "13c: 期待した結果と異なる（exit ${cr_exit_c}）:
 $cr_out_c"
 fi
 if printf '%s\n' "$cr_out_c" | grep -Fxq 'BRANCH_EXISTS: false' \
     && printf '%s\n' "$cr_out_c" | grep -Fxq 'NEW_COMMITS: N/A'; then
-  pass "11c: BRANCH_EXISTS: false / NEW_COMMITS: N/A が出力される"
+  pass "13c: BRANCH_EXISTS: false / NEW_COMMITS: N/A が出力される"
 else
-  fail "11c: 診断内訳の出力が期待と異なる:
+  fail "13c: 診断内訳の出力が期待と異なる:
 $cr_out_c"
 fi
 
 echo ""
-echo "--- 11d. ブランチは存在するが base_branch から見て新しいコミットが無い -> REVERT_TO_TODO ---"
+echo "--- 13d. ブランチは存在するが base_branch から見て新しいコミットが無い -> REVERT_TO_TODO ---"
 (cd "$TMP_CR_REPO" && git branch feature-recovery-no-progress)
 cr_out_d="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-no-progress main 2>&1)"
 cr_exit_d=$?
 if [ "$cr_exit_d" -eq 2 ] && printf '%s\n' "$cr_out_d" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
-  pass "11d: ブランチはあるが新しいコミットが無い場合、RESULT: REVERT_TO_TODO（exit 2）（AC#3）"
+  pass "13d: ブランチはあるが新しいコミットが無い場合、RESULT: REVERT_TO_TODO（exit 2）（AC#3）"
 else
-  fail "11d: 期待した結果と異なる（exit ${cr_exit_d}）:
+  fail "13d: 期待した結果と異なる（exit ${cr_exit_d}）:
 $cr_out_d"
 fi
 if printf '%s\n' "$cr_out_d" | grep -Fxq 'BRANCH_EXISTS: true' \
     && printf '%s\n' "$cr_out_d" | grep -Fxq 'NEW_COMMITS: 0'; then
-  pass "11d: BRANCH_EXISTS: true / NEW_COMMITS: 0 が出力される"
+  pass "13d: BRANCH_EXISTS: true / NEW_COMMITS: 0 が出力される"
 else
-  fail "11d: 診断内訳の出力が期待と異なる:
+  fail "13d: 診断内訳の出力が期待と異なる:
 $cr_out_d"
 fi
 
 echo ""
-echo "--- 11e. 引数の妥当性検証 ---"
+echo "--- 13e. 引数の妥当性検証 ---"
 if (cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a >/dev/null 2>&1); then
-  fail "11e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行してもエラーにならない"
+  fail "13e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行してもエラーにならない"
 else
-  pass "11e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行するとエラーになる"
+  pass "13e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行するとエラーになる"
 fi
 
 cr_out_badbase="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a no-such-base 2>&1)"
 cr_exit_badbase=$?
 if [ "$cr_exit_badbase" -eq 3 ] && printf '%s\n' "$cr_out_badbase" | grep -Fxq 'RESULT: ERROR'; then
-  pass "11e: base_branch が解決できない場合、RESULT: ERROR（exit 3）"
+  pass "13e: base_branch が解決できない場合、RESULT: ERROR（exit 3）"
 else
-  fail "11e: base_branch が解決できない場合の結果が期待と異なる（exit ${cr_exit_badbase}）:
+  fail "13e: base_branch が解決できない場合の結果が期待と異なる（exit ${cr_exit_badbase}）:
 $cr_out_badbase"
 fi
 

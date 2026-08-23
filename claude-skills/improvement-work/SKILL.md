@@ -30,15 +30,16 @@ description: improvement-dispatch から引き渡された Backlog.md タスク�
 cd "<引き渡された作業ディレクトリ>"
 backlog instructions task-execution
 backlog task view TASK-<n> --plain
-pwd
-git branch --show-current
-git status --porcelain
+.claude/skills/improvement-work/scripts/check-handoff "<引き渡された作業ディレクトリ>" "<引き渡されたブランチ名>"
 ```
 
-- 指定された作業ディレクトリ（ワークツリー、例: `<リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>`）に `cd` し、`pwd` の出力が一致することを確認する。自分でブランチを作成・切り替え（`git switch`、`git checkout` 等）しない。ワークツリーは引き渡し時点で既に指定のブランチを checkout 済みであり、`git branch --show-current` はその確認にのみ使う。作業ディレクトリが存在しない、または `git worktree list` に出てこない場合は dispatch の引き渡しが不完全なので、その旨を報告して止まる。
-- **重要:** このハーネスは Bash 呼び出しごとにカレントディレクトリをリセットする。一度 `cd` しても次の Bash 呼び出しには引き継がれない。したがって、これ以降タスクが終わるまでの**すべての** Bash 呼び出しで、各コマンドの前に必ずこの作業ディレクトリへ `cd` してから続きを実行する（例: `cd "<作業ディレクトリ>" && git status --porcelain`、あるいは 1 回の呼び出し内に複数行の一連の作業をまとめて書く）。以降の手順の bash 例ではこの `cd` を省略して書くが、実行時には必ず補うこと。
-- `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。dispatch が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している（`ls -la .backlog` で確認できる）。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。もし `.backlog/` が見当たらない、またはシンボリックリンクになっていない場合は dispatch の引き渡しが不完全なので、その旨を報告して止まる。
+- `check-handoff` は、作業ディレクトリ一致・ブランチ一致・`.backlog` シンボリックリンクの健全性という、引き渡しが完全かどうかを機械的に判定できる3条件をまとめて確認する（`claude-skills/improvement-work/scripts/check-handoff` 参照）。3条件すべてを満たせば終了コード0、いずれかを満たさなければ標準エラーにどの条件が満たされていないかを明示して非0の終了コードで終わる。
+- 引数には、引き渡された作業ディレクトリの絶対パスと、引き渡されたブランチ名をそのまま渡す。指定された作業ディレクトリ（ワークツリー、例: `<リポジトリの親ディレクトリ>/.worktree/task-<n>-<スラッグ>`）へは自分で `cd` する。自分でブランチを作成・切り替え（`git switch`、`git checkout` 等）しない。ワークツリーは引き渡し時点で既に指定のブランチを checkout 済みである。
+- `check-handoff` が非0で終了した場合（作業ディレクトリが存在しない、`.backlog/` が見当たらない・シンボリックリンクになっていない等）は、dispatch の引き渡しが不完全なので、標準エラーの内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側（自分自身）が行う。
+- `check-handoff` はこの3条件のみを機械的に確認する。ワークツリー自体が `git worktree list` に登録されているか（worktree の管理情報が壊れているケース等）は範囲外なので、疑わしい場合は別途 `git worktree list` で確認すること。
+- `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。dispatch が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。
 - このディレクトリはメインの作業木（人間が普段作業する場所）とは別の独立したワークツリーである。メインの作業木のファイルには一切触れない。
+- **重要:** このハーネスは Bash 呼び出しごとにカレントディレクトリをリセットする。一度 `cd` しても次の Bash 呼び出しには引き継がれない。したがって、これ以降タスクが終わるまでの**すべての** Bash 呼び出しで、各コマンドの前に必ずこの作業ディレクトリへ `cd` してから続きを実行する（例: `cd "<作業ディレクトリ>" && git status --porcelain`、あるいは 1 回の呼び出し内に複数行の一連の作業をまとめて書く）。以降の手順の bash 例ではこの `cd` を省略して書くが、実行時には必ず補うこと。
 - 自分を担当者にする：`backlog task edit TASK-<n> -a @improvement-work --plain`。status は既に `In Progress` になっている。
 - リポジトリの規約（`CLAUDE.md`、`AGENTS.md`、lint 設定）を読む。backlog の操作は必ず CLI 経由で行う。
 
