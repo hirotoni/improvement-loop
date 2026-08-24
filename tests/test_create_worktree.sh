@@ -329,6 +329,64 @@ else
 fi
 
 echo ""
+echo "=== 9c. git コマンドが PATH に無い環境での動作確認（TASK-58） ==="
+# claude-skills/improvement-dispatch/scripts/create-worktree:80 の
+# REPO_ROOT="$(git rev-parse --show-toplevel)" は、git が PATH に無い環境では
+# 保護されていないと生の "command not found" で exit 127 になり、他の兄弟
+# スクリプト（merge-reviewed-branch 等）と異なり err() 経由の診断メッセージも
+# 定義済みの終了コードも出さない。ここでは git を含まない最小 PATH を用意して
+# create-worktree を実行し、err() 形式の診断メッセージと定義済みの終了コード
+# （1）で終了することを確認する。
+#
+# git rev-parse --show-toplevel の呼び出し（80行目）は、引数検証の直後・
+# mkdir/grep/sed 等の外部コマンドを使う処理より前に実行されるため、
+# PATH には何も置かない空のディレクトリで十分再現できる。
+
+TMP_CW_NOGIT_REPO="$(mktemp -d)"
+TMP_CW_NOGIT_REPO="$(cd "$TMP_CW_NOGIT_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_NOGIT_REPO"
+(cd "$TMP_CW_NOGIT_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+
+CW_EMPTY_PATH_DIR="$(mktemp -d)"
+register_tmp_cleanup "$CW_EMPTY_PATH_DIR"
+CW_BASH_BIN="$(command -v bash)"
+
+CW_NOGIT_TASK_ID="task-58-no-git-in-path"
+
+# git 呼び出しの手前で必要になるのは bash 組み込み（[[ ]] 等）のみであり、
+# 外部コマンドは git 以外まだ登場しないため、PATH を空ディレクトリのみにして
+# 再現する。bash 自体はフルパスで直接起動するため PATH 解決に依存しない。
+cw_nogit_output="$(cd "$TMP_CW_NOGIT_REPO" && PATH="$CW_EMPTY_PATH_DIR" "$CW_BASH_BIN" "$CREATE_WORKTREE_SCRIPT" "$CW_NOGIT_TASK_ID" 2>&1)"
+cw_nogit_exit=$?
+
+if [ "$cw_nogit_exit" -eq 1 ]; then
+  pass "git が PATH に無い場合、定義済みの終了コード（1）で終了する（AC#1）"
+else
+  fail "git が PATH に無い場合の exit code が想定と異なる（期待: 1, 実際: ${cw_nogit_exit}、生の command not found による exit 127 の可能性）:
+$cw_nogit_output"
+fi
+
+if printf '%s\n' "$cw_nogit_output" | grep -Fq "エラー: "; then
+  pass "git が PATH に無い場合、err() 形式の診断メッセージ（\"エラー: \" プレフィックス）が出る（AC#1）"
+else
+  fail "git が PATH に無い場合に err() 形式の診断メッセージが出力されていない:
+$cw_nogit_output"
+fi
+
+if printf '%s\n' "$cw_nogit_output" | grep -Eq '^[^エ]*command not found'; then
+  fail "生の \"command not found\" がそのまま（err() を経由せず）出力されている:
+$cw_nogit_output"
+else
+  pass "生の \"command not found\" がそのまま出力されていない（err() 経由のメッセージに包まれている）"
+fi
+
+if [ ! -d "$TMP_CW_NOGIT_REPO/.worktree/$(basename "$TMP_CW_NOGIT_REPO")/$CW_NOGIT_TASK_ID" ]; then
+  pass "git が PATH に無い場合、想定パスにワークツリーディレクトリが作られない"
+else
+  fail "git が PATH に無いのにワークツリーディレクトリが作られている"
+fi
+
+echo ""
 echo "=== 10. claude-skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
 # （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、

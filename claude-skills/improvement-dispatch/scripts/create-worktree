@@ -77,7 +77,10 @@ if ! [[ "$TASK_ID" =~ ^task-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   exit 1
 fi
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
+  err "リポジトリルートの取得に失敗した（git コマンドが見つからない、またはカレントディレクトリが git リポジトリの中ではない可能性がある）: $REPO_ROOT"
+  exit 1
+fi
 cd "$REPO_ROOT"
 REPO_NAME="$(basename "$REPO_ROOT")"
 
