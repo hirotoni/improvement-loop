@@ -835,4 +835,152 @@ else
   fail "task_prefix をカスタマイズしたリポジトリで statuses に旧名 'Reviewed' が残っている: $custom_prefix_status_line"
 fi
 
+echo ""
+echo "=== 8. remoteOperations / defaultAssignee の既定値収束の検証 ==="
+# improvement-loop は push を前提としない完全ローカル運用のため、backlog CLI の
+# remote git 操作に依存させる理由がなく、backlog init --defaults の既定
+# remoteOperations: true を false に収束させる。また、タスクの起票者を
+# improvement-loop-bot に統一するため defaultAssignee も収束させる。どちらも
+# ensure_backlog_statuses と同じ「未設定・既定値のままの箇所だけを安全に補正し、
+# 既にユーザーが設定した値は上書きしない」パターンに従う（TASK番号未採番、
+# ユーザー指示による追加）。
+
+TMP_REPO_DEFAULTS="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_DEFAULTS"
+(cd "$TMP_REPO_DEFAULTS" && git init -q)
+
+defaults_output="$("$SETUP_SCRIPT" "$TMP_REPO_DEFAULTS" 2>&1)"
+defaults_exit=$?
+if [ "$defaults_exit" -eq 0 ]; then
+  pass "8a: 新規セットアップの実行が成功する（exit 0）"
+else
+  fail "8a: 新規セットアップの実行が失敗した（exit ${defaults_exit}）:
+$defaults_output"
+fi
+
+remote_ops_after_setup="$(cd "$TMP_REPO_DEFAULTS" && backlog config get remoteOperations 2>/dev/null)"
+if [ "$remote_ops_after_setup" = "false" ]; then
+  pass "8a: 新規セットアップ後、remoteOperations が false に収束する"
+else
+  fail "8a: 新規セットアップ後の remoteOperations が false になっていない: '$remote_ops_after_setup'"
+fi
+
+defaults_config="$TMP_REPO_DEFAULTS/.backlog/config.yml"
+if grep -m1 '^default_assignee:' "$defaults_config" | grep -Fq '@improvement-loop-bot'; then
+  pass "8a: 新規セットアップ後、default_assignee が @improvement-loop-bot に収束する"
+else
+  fail "8a: 新規セットアップ後の default_assignee が @improvement-loop-bot になっていない: $(grep -m1 '^default_assignee:' "$defaults_config")"
+fi
+
+# ---- 8b. 冪等性: 再実行しても壊れず、両方とも [skip] と報告される ----
+defaults_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_DEFAULTS" 2>&1)"
+defaults_rerun_exit=$?
+if [ "$defaults_rerun_exit" -eq 0 ]; then
+  pass "8b: remoteOperations/defaultAssignee が既に収束済みの状態への再実行が成功する（exit 0）"
+else
+  fail "8b: 再実行が失敗した（exit ${defaults_rerun_exit}）:
+$defaults_rerun_output"
+fi
+if grep -Fq "remoteOperations は既に false" <<<"$defaults_rerun_output"; then
+  pass "8b: 再実行時、remoteOperations の収束処理がスキップと報告される"
+else
+  fail "8b: 再実行時に remoteOperations のスキップ報告が出力されなかった:
+$defaults_rerun_output"
+fi
+if grep -Fq "default_assignee は既に設定されている" <<<"$defaults_rerun_output"; then
+  pass "8b: 再実行時、default_assignee の収束処理がスキップと報告される"
+else
+  fail "8b: 再実行時に default_assignee のスキップ報告が出力されなかった:
+$defaults_rerun_output"
+fi
+assignee_dup_count="$(grep -Ec '^default_assignee:' "$defaults_config" || true)"
+if [ "$assignee_dup_count" = "1" ]; then
+  pass "8b: 再実行後も default_assignee が重複追記されない"
+else
+  fail "8b: 再実行後、default_assignee が重複している（${assignee_dup_count} 件）"
+fi
+
+# ---- 8c. 既に remote_operations: true を明示している既存 consumer リポジトリでも false に収束すること ----
+TMP_REPO_REMOTE_OPS="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_REMOTE_OPS"
+(cd "$TMP_REPO_REMOTE_OPS" && git init -q)
+mkdir -p "$TMP_REPO_REMOTE_OPS/.backlog"
+cat > "$TMP_REPO_REMOTE_OPS/.backlog/config.yml" <<'YAML'
+project_name: "remote-ops-test"
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+remote_ops_output="$("$SETUP_SCRIPT" "$TMP_REPO_REMOTE_OPS" 2>&1)"
+remote_ops_exit=$?
+if [ "$remote_ops_exit" -eq 0 ]; then
+  pass "8c: remote_operations: true な既存 config.yml に対する実行が成功する（exit 0）"
+else
+  fail "8c: remote_operations: true な既存 config.yml に対する実行が失敗した（exit ${remote_ops_exit}）:
+$remote_ops_output"
+fi
+remote_ops_result="$(cd "$TMP_REPO_REMOTE_OPS" && backlog config get remoteOperations 2>/dev/null)"
+if [ "$remote_ops_result" = "false" ]; then
+  pass "8c: 既存の remote_operations: true が false へ収束した"
+else
+  fail "8c: 既存の remote_operations: true が false へ収束しなかった: '$remote_ops_result'"
+fi
+
+# ---- 8d. defaultAssignee が既にユーザー独自の値で設定されている場合、上書きしない ----
+TMP_REPO_CUSTOM_ASSIGNEE="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_CUSTOM_ASSIGNEE"
+(cd "$TMP_REPO_CUSTOM_ASSIGNEE" && git init -q)
+mkdir -p "$TMP_REPO_CUSTOM_ASSIGNEE/.backlog"
+cat > "$TMP_REPO_CUSTOM_ASSIGNEE/.backlog/config.yml" <<'YAML'
+project_name: "custom-assignee-test"
+default_assignee: ["@someone-else"]
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+custom_assignee_output="$("$SETUP_SCRIPT" "$TMP_REPO_CUSTOM_ASSIGNEE" 2>&1)"
+custom_assignee_exit=$?
+if [ "$custom_assignee_exit" -eq 0 ]; then
+  pass "8d: default_assignee をユーザーが独自設定済みの config.yml に対する実行が成功する（exit 0）"
+else
+  fail "8d: default_assignee をユーザーが独自設定済みの config.yml に対する実行が失敗した（exit ${custom_assignee_exit}）:
+$custom_assignee_output"
+fi
+custom_assignee_config="$TMP_REPO_CUSTOM_ASSIGNEE/.backlog/config.yml"
+if grep -Fxq 'default_assignee: ["@someone-else"]' "$custom_assignee_config"; then
+  pass "8d: ユーザー独自の default_assignee が上書きされずに保持される"
+else
+  fail "8d: ユーザー独自の default_assignee が上書きされた: $(grep -m1 '^default_assignee:' "$custom_assignee_config")"
+fi
+custom_assignee_count="$(grep -Ec '^default_assignee:' "$custom_assignee_config" || true)"
+if [ "$custom_assignee_count" = "1" ]; then
+  pass "8d: default_assignee が重複追記されない"
+else
+  fail "8d: default_assignee が重複している（${custom_assignee_count} 件）"
+fi
+
 finish_tests

@@ -303,6 +303,62 @@ migrate_reviewed_tasks() {
   CREATED+=("status: Reviewed の既存タスク移行 (${#task_ids[@]} 件を Approved へ: ${task_ids[*]})")
 }
 
+# improvement-loop は push を前提としない完全ローカル運用（config.my.yml の
+# auto_merge_reviewed の解説を参照）のため、backlog CLI の remote git 操作
+# （fetch 等）に依存させる理由がない。backlog init --defaults の既定値
+# remoteOperations: true を、ensure_backlog_statuses と同様に対象リポジトリへ
+# 冪等に収束させる。ユーザーが後から明示的に true へ戻した場合はそれを正とし、
+# このスクリプトの再実行では上書きしない（"false である" ことだけを確認し、
+# 既に false ならスキップする）。
+ensure_remote_operations_disabled() {
+  local target_repo_root="$1"
+
+  local current
+  current="$(cd "$target_repo_root" && backlog config get remoteOperations 2>/dev/null)" || current=""
+  if [ "$current" = "false" ]; then
+    log "[skip] backlog config の remoteOperations は既に false。"
+    SKIPPED+=("backlog config remoteOperations (既に false)")
+    return 0
+  fi
+
+  if ! (cd "$target_repo_root" && backlog config set remoteOperations false) >/dev/null; then
+    err "backlog config set remoteOperations false に失敗した。手動で確認すること。"
+    exit 1
+  fi
+  log "[fix]  backlog config set remoteOperations false を実行した。"
+  CREATED+=("backlog config remoteOperations (false に設定)")
+}
+
+# defaultAssignee はタスクの起票者を improvement-loop-bot に統一するための
+# 既定アサイニー設定。backlog CLI 1.48.0（README.md 記載の動作確認済み最小
+# バージョン）にはまだこのキーが存在せず、`backlog config set defaultAssignee`
+# は "Unknown config key" で失敗する（より新しいバージョンで追加された機能）。
+# CLI が対応していれば正規の手段で設定し、対応していない場合は config.yml に
+# 直接追記する（値は将来 CLI がこのキーを読めるようになった時点で自動的に
+# 有効になる）。既に default_assignee が設定されている場合はユーザーの値を
+# 優先し、上書きしない。
+ensure_default_assignee() {
+  local target_repo_root="$1"
+  local config_file="$2"
+  local bot_assignee='@improvement-loop-bot'
+
+  if grep -Eq '^default_assignee:' "$config_file"; then
+    log "[skip] .backlog/config.yml に default_assignee は既に設定されている。"
+    SKIPPED+=(".backlog/config.yml default_assignee (既に設定済み)")
+    return 0
+  fi
+
+  if (cd "$target_repo_root" && backlog config set defaultAssignee "$bot_assignee") >/dev/null 2>&1; then
+    log "[fix]  backlog config set defaultAssignee \"$bot_assignee\" を実行した。"
+    CREATED+=(".backlog/config.yml default_assignee (backlog config set)")
+    return 0
+  fi
+
+  printf '%s\n' "default_assignee: [\"$bot_assignee\"]" >> "$config_file"
+  log "[fix]  backlog CLI が defaultAssignee 未対応のため、.backlog/config.yml に直接追記した: default_assignee: [\"$bot_assignee\"]"
+  CREATED+=(".backlog/config.yml default_assignee (CLI未対応のため直接追記)")
+}
+
 # .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
 # （backlogmd-custom-config/config.my.yml）にあって導入先の既存ファイルに無いキー
 # だけを、テンプレート側のコメント・既定値付きで補う。ensure_backlog_statuses() と
@@ -521,6 +577,10 @@ ensure_backlog_statuses "$BACKLOG_CONFIG_YML"
 # のコメントを参照）。
 migrate_reviewed_tasks "$TARGET_REPO_ROOT"
 migrate_reviewed_status_in_config "$BACKLOG_CONFIG_YML"
+
+# ---- 3c. remoteOperations / defaultAssignee の既定値収束 ----
+ensure_remote_operations_disabled "$TARGET_REPO_ROOT"
+ensure_default_assignee "$TARGET_REPO_ROOT" "$BACKLOG_CONFIG_YML"
 
 # ---- 4. スキルのシンボリックリンク配置 ----
 TARGET_SKILLS_DIR="$TARGET_REPO_ROOT/.claude/skills"
