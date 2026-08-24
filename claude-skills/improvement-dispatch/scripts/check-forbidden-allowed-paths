@@ -43,11 +43,24 @@
 #     許可する）。
 #   - forbidden_paths / allowed_paths が両方とも空、キー自体が無い、または
 #     .backlog/config.my.yml 自体が無い場合は、常に許可（違反なし）とする。
-#   - forbidden_paths / allowed_paths の値は、config.my.yml のコメントに
-#     従いインライン配列（例: ["secrets/", "vendor/"]）としてのみ書かれる
-#     前提でパースする。複数行のYAMLリスト記法はサポート対象外
-#     （config.my.yml のキー補完処理が単一行のキー検出のみに対応している
-#     ことと同じ前提を踏襲する）。
+#   - forbidden_paths / allowed_paths の値は、次の2形式をサポートする
+#     （TASK-56。bin/setup-improvement-loop の parse_statuses_block と
+#     同じ考え方で、.backlog/config.yml の statuses キーと足並みを揃えた）。
+#       - インライン配列: forbidden_paths: ["secrets/", "vendor/"]
+#       - 複数行YAMLリスト:
+#           forbidden_paths:
+#             - "secrets/"
+#             - "vendor/"
+#     どちらの形式でも、書いた要素は同じように配列として読み取られる。
+#   - 上記いずれの形式でもない値（クォート無しの単一パス文字列のような
+#     スカラー値、閉じ括弧の無い "[" 、マッピング等の壊れたYAML）が来た
+#     場合は「サポート対象外の記法」として RESULT: ERROR にする
+#     （安全側に倒す）。forbidden_paths/
+#     allowed_paths はAIエージェントの変更を機械的に止める唯一の
+#     バックストップであり、認識できない記法を空配列（＝無制限）へ黙って
+#     フォールバックすると、本タスクが修正した不具合
+#     （複数行YAMLリストが無音で無制限扱いになっていた）と同じ種類の
+#     問題を再現してしまうため、エラーとして検知する方針を採った。
 #
 # 出力: 標準出力に次の行を出す（最終行が RESULT）。
 #   RESULT: OK         -> 違反なし
@@ -55,8 +68,9 @@
 #     VIOLATION_COUNT: <件数>
 #     VIOLATING_FILES:
 #     <違反ファイルパス>（1行1件、件数分）
-#   RESULT: ERROR      -> 対象リポジトリでない等の環境不備
-#                         （詳細は標準エラーに出す）
+#   RESULT: ERROR      -> 対象リポジトリでない等の環境不備、または
+#                         forbidden_paths/allowed_paths の値がサポート対象外の
+#                         記法だった場合（詳細は標準エラーに出す）
 #
 # 終了ステータス: 0=OK, 1=VIOLATION, 2=ERROR
 #
@@ -101,48 +115,108 @@ trim_and_unquote() {
 }
 
 # $1 = YAML のキー名（forbidden_paths | allowed_paths）。CONFIG_FILE から
-# 該当キーのインライン配列を読み、要素を1行1件で標準出力に出す。キーが無い、
-# 空配列、または CONFIG_FILE 自体が無い場合は何も出力しない
+# 該当キーの値を読み、要素を1行1件で標準出力に出す。次の2形式をサポートする
+# （bin/setup-improvement-loop の parse_statuses_block と同じ考え方。TASK-56）:
+#   - インライン配列: key: ["a", "b"]
+#   - 複数行YAMLリスト: key: の次行以降に続く "  - \"a\"" 形式の行
+# キーが無い、値が空（[] や、次行に複数行リストが続かない空の key:）、
+# または CONFIG_FILE 自体が無い場合は何も出力せず正常終了する
 # （＝呼び出し側で空配列として扱われる）。
+# 戻り値: 0 = 正常（0件以上を出力）。1 = 値がインライン配列・複数行YAMLリスト
+# のいずれでもない「サポート対象外の記法」（詳細は標準エラーに出す）。
+# 呼び出し側は戻り値1を RESULT: ERROR として扱うこと（空配列へフォールバック
+# しない。理由は本ファイル冒頭の判定ロジックのコメントを参照）。
 parse_path_list() {
   local key="$1"
   if [ ! -f "$CONFIG_FILE" ]; then
     return 0
   fi
-  local line
-  line="$(grep -m1 -E "^[[:space:]]*${key}:" "$CONFIG_FILE" || true)"
-  if [ -z "$line" ]; then
+  local line_num
+  line_num="$(grep -n -m1 -E "^[[:space:]]*${key}:" "$CONFIG_FILE" | cut -d: -f1 || true)"
+  if [ -z "$line_num" ]; then
     return 0
   fi
+  local line
+  line="$(sed -n "${line_num}p" "$CONFIG_FILE")"
   local rest="${line#*:}"
   rest="${rest%%#*}"
-  if [[ ! "$rest" =~ \[(.*)\] ]]; then
-    return 0
-  fi
-  local inner="${BASH_REMATCH[1]}"
-  if [ -z "${inner//[[:space:]]/}" ]; then
-    return 0
-  fi
-  local items=()
-  IFS=',' read -ra items <<<"$inner"
-  local raw_item trimmed
-  for raw_item in "${items[@]}"; do
-    trimmed="$(trim_and_unquote "$raw_item")"
-    if [ -n "$trimmed" ]; then
-      printf '%s\n' "$trimmed"
+
+  if [[ "$rest" =~ \[(.*)\] ]]; then
+    # インライン配列形式（例: key: ["secrets/", "vendor/"]）。従来ロジック。
+    local inner="${BASH_REMATCH[1]}"
+    if [ -z "${inner//[[:space:]]/}" ]; then
+      return 0
     fi
+    local items=()
+    IFS=',' read -ra items <<<"$inner"
+    local raw_item trimmed
+    for raw_item in "${items[@]}"; do
+      trimmed="$(trim_and_unquote "$raw_item")"
+      if [ -n "$trimmed" ]; then
+        printf '%s\n' "$trimmed"
+      fi
+    done
+    return 0
+  fi
+
+  local rest_trimmed
+  rest_trimmed="$(trim_and_unquote "$rest")"
+  if [ -n "$rest_trimmed" ]; then
+    # "[" を含まないのに key: の後に何かがある＝インライン配列でも、
+    # 複数行YAMLリスト（key: の後は何も無いはず）でもない、サポート対象外
+    # の記法（壊れたYAML・スカラー値等）。
+    err "${key}: の値がサポート対象外の記法（インライン配列 [...] でも、複数行YAMLリストでもない）: ${line}"
+    return 1
+  fi
+
+  # 複数行YAMLリスト形式（key: の直後から連続する "  - ..." 行を集める）。
+  # 次行以降に "-" で始まる行が無ければ、空配列（key: だけで値が無い）として
+  # 扱う。
+  local total_lines next_line_num list_line item
+  total_lines="$(awk 'END { print NR }' "$CONFIG_FILE")"
+  next_line_num=$((line_num + 1))
+  while [ "$next_line_num" -le "$total_lines" ]; do
+    list_line="$(sed -n "${next_line_num}p" "$CONFIG_FILE")"
+    if ! printf '%s' "$list_line" | grep -Eq '^[[:space:]]*-'; then
+      break
+    fi
+    item="${list_line#*-}"
+    item="${item%%#*}"
+    item="$(trim_and_unquote "$item")"
+    if [ -n "$item" ]; then
+      printf '%s\n' "$item"
+    fi
+    next_line_num=$((next_line_num + 1))
   done
+  return 0
 }
 
+# parse_path_list は process substitution 経由で呼ぶと戻り値（サポート対象外
+# 記法の検知）をここで拾えなくなるため、コマンド置換で標準出力と終了ステータス
+# の両方を捕捉してから配列に分解する。
+FORBIDDEN_RAW="$(parse_path_list forbidden_paths)"
+FORBIDDEN_STATUS=$?
+if [ "$FORBIDDEN_STATUS" -ne 0 ]; then
+  result_error "forbidden_paths の値を読み取れない（詳細は上記のエラーメッセージ参照）"
+fi
 FORBIDDEN=()
-while IFS= read -r p; do
-  FORBIDDEN+=("$p")
-done < <(parse_path_list forbidden_paths)
+if [ -n "$FORBIDDEN_RAW" ]; then
+  while IFS= read -r p; do
+    FORBIDDEN+=("$p")
+  done <<<"$FORBIDDEN_RAW"
+fi
 
+ALLOWED_RAW="$(parse_path_list allowed_paths)"
+ALLOWED_STATUS=$?
+if [ "$ALLOWED_STATUS" -ne 0 ]; then
+  result_error "allowed_paths の値を読み取れない（詳細は上記のエラーメッセージ参照）"
+fi
 ALLOWED=()
-while IFS= read -r p; do
-  ALLOWED+=("$p")
-done < <(parse_path_list allowed_paths)
+if [ -n "$ALLOWED_RAW" ]; then
+  while IFS= read -r p; do
+    ALLOWED+=("$p")
+  done <<<"$ALLOWED_RAW"
+fi
 
 # $1 = 判定対象パス、以降 = プレフィックスの列。いずれか1つにでも前方一致
 # すれば真を返す。
