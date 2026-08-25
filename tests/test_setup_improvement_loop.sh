@@ -983,4 +983,266 @@ else
   fail "8d: default_assignee が重複している（${custom_assignee_count} 件）"
 fi
 
+echo ""
+echo "=== 9. --workspace フラグの検証 ==="
+# --workspace は既定動作（フラグ無し）とは完全に別の経路である。git 判定を
+# スキップし、claude-skills-workspace/ 配下のスキルだけを .claude/skills/ に
+# シンボリックリンクとして配置する。backlog init や .backlog/ 配下の配置は
+# 一切行わない（Scope参照）。
+
+# WORKSPACE_SKILL_NAMES は claude-skills-workspace/ ディレクトリの実体を単一の
+# 情報源として動的に列挙する。bin/setup-improvement-loop 側の
+# SOURCE_WORKSPACE_SKILLS_DIR 動的列挙と同じ方式で導出する。
+shopt -s nullglob
+WORKSPACE_SKILL_NAMES=()
+for skill_dir in "$SOURCE_WORKSPACE_SKILLS_DIR"/*/; do
+  WORKSPACE_SKILL_NAMES+=("$(basename "$skill_dir")")
+done
+shopt -u nullglob
+if [ "${#WORKSPACE_SKILL_NAMES[@]}" -eq 0 ]; then
+  fail "claude-skills-workspace 配下にスキルディレクトリが1つも無い: $SOURCE_WORKSPACE_SKILLS_DIR"
+fi
+
+# ---- 9a. 対象が git リポジトリでなくても成功する ----
+TMP_WORKSPACE_PLAIN="$(mktemp -d)"
+register_tmp_cleanup "$TMP_WORKSPACE_PLAIN"
+
+workspace_plain_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_PLAIN" 2>&1)"
+workspace_plain_exit=$?
+if [ "$workspace_plain_exit" -eq 0 ]; then
+  pass "9a: git リポジトリでない対象ディレクトリに対しても --workspace は成功する（exit 0）"
+else
+  fail "9a: git リポジトリでない対象ディレクトリへの --workspace 実行が失敗した（exit ${workspace_plain_exit}）:
+$workspace_plain_output"
+fi
+
+# ---- claude-skills-workspace/ の2スキルだけが配置される ----
+workspace_plain_links_ok=true
+for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
+  link_path="$TMP_WORKSPACE_PLAIN/.claude/skills/$name"
+  expected_target="$SOURCE_WORKSPACE_SKILLS_DIR/$name"
+  if [ -L "$link_path" ]; then
+    resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
+    expected_resolved="$(cd "$expected_target" && pwd -P)"
+    if [ "$resolved" != "$expected_resolved" ]; then
+      workspace_plain_links_ok=false
+      fail "9a: .claude/skills/$name のリンク先が誤っている（${resolved} != ${expected_resolved}）"
+    fi
+  else
+    workspace_plain_links_ok=false
+    fail "9a: .claude/skills/$name がシンボリックリンクとして存在しない"
+  fi
+done
+if [ "$workspace_plain_links_ok" = true ]; then
+  pass "9a: claude-skills-workspace/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる"
+fi
+
+# 単一リポジトリ用の5スキルが誤って混入していないことも確認する（Decision 6）。
+workspace_plain_no_repo_skills=true
+for name in "${SKILL_NAMES[@]}"; do
+  if [ -e "$TMP_WORKSPACE_PLAIN/.claude/skills/$name" ]; then
+    workspace_plain_no_repo_skills=false
+    fail "9a: --workspace 経路で単一リポジトリ用スキル '$name' が誤って配置された"
+  fi
+done
+if [ "$workspace_plain_no_repo_skills" = true ]; then
+  pass "9a: --workspace 経路では単一リポジトリ用の5スキルが混入しない"
+fi
+
+# 配置される .claude/skills/ の件数が、claude-skills-workspace/ の件数と厳密に一致することも確認する
+# （想定外の余分なエントリが無いことの直接検証）。
+workspace_plain_actual_count="$(find "$TMP_WORKSPACE_PLAIN/.claude/skills" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+if [ "$workspace_plain_actual_count" = "${#WORKSPACE_SKILL_NAMES[@]}" ]; then
+  pass "9a: .claude/skills/ 配下のエントリ数が claude-skills-workspace/ の件数（${#WORKSPACE_SKILL_NAMES[@]}）と一致する"
+else
+  fail "9a: .claude/skills/ 配下のエントリ数が想定と異なる（実際: ${workspace_plain_actual_count}、期待: ${#WORKSPACE_SKILL_NAMES[@]}）"
+fi
+
+# backlog init・.backlog/ 配下の配置は一切行われない
+if [ -e "$TMP_WORKSPACE_PLAIN/.backlog" ]; then
+  fail "9a: --workspace 経路で .backlog/ が作られてしまった（backlog init が実行された疑い）"
+else
+  pass "9a: --workspace 経路では .backlog/ が作られない"
+fi
+
+# git リポジトリでない対象では .git/info/exclude への追記もスキップされる（エラーにはしない）
+if [ -e "$TMP_WORKSPACE_PLAIN/.git" ]; then
+  fail "9a: --workspace 経路で対象に .git が作られてしまった"
+else
+  pass "9a: git リポジトリでない対象では .git が作られない（exclude 追記もスキップされる）"
+fi
+
+# ---- 9b. 冪等性: 再実行しても壊れず、[skip] と報告される ----
+workspace_plain_rerun_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_PLAIN" 2>&1)"
+workspace_plain_rerun_exit=$?
+if [ "$workspace_plain_rerun_exit" -eq 0 ]; then
+  pass "9b: --workspace の再実行が成功する（exit 0）"
+else
+  fail "9b: --workspace の再実行が失敗した（exit ${workspace_plain_rerun_exit}）:
+$workspace_plain_rerun_output"
+fi
+if grep -Fq "は既に正しいリンク先を指している" <<<"$workspace_plain_rerun_output"; then
+  pass "9b: 再実行時、既存の正しいシンボリックリンクが [skip] と報告される"
+else
+  fail "9b: 再実行時に期待する [skip] 報告が出力されなかった:
+$workspace_plain_rerun_output"
+fi
+workspace_plain_rerun_links_ok=true
+for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
+  link_path="$TMP_WORKSPACE_PLAIN/.claude/skills/$name"
+  if [ -L "$link_path" ] && [ -d "$link_path" ]; then
+    : # ok
+  else
+    workspace_plain_rerun_links_ok=false
+    fail "9b: 再実行後、.claude/skills/$name が正しいシンボリックリンクでなくなっている"
+  fi
+done
+if [ "$workspace_plain_rerun_links_ok" = true ]; then
+  pass "9b: 再実行後もすべてのシンボリックリンクが健全である"
+fi
+
+# ---- 9c. 対象パスが git リポジトリでもある場合、.git/info/exclude に追記される ----
+TMP_WORKSPACE_GIT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_WORKSPACE_GIT"
+(cd "$TMP_WORKSPACE_GIT" && git init -q)
+
+workspace_git_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_GIT" 2>&1)"
+workspace_git_exit=$?
+if [ "$workspace_git_exit" -eq 0 ]; then
+  pass "9c: 対象が git リポジトリでもある場合の --workspace 実行が成功する（exit 0）"
+else
+  fail "9c: 対象が git リポジトリでもある場合の --workspace 実行が失敗した（exit ${workspace_git_exit}）:
+$workspace_git_output"
+fi
+
+workspace_git_exclude_file="$TMP_WORKSPACE_GIT/.git/info/exclude"
+if [ -f "$workspace_git_exclude_file" ]; then
+  workspace_git_exclude_ok=true
+  for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
+    if ! grep -Fxq ".claude/skills/$name" "$workspace_git_exclude_file"; then
+      workspace_git_exclude_ok=false
+      fail "9c: .git/info/exclude に '.claude/skills/$name' が無い"
+    fi
+  done
+  if [ "$workspace_git_exclude_ok" = true ]; then
+    pass "9c: 対象が git リポジトリでもある場合、配置したワークスペーススキルが .git/info/exclude に追記される"
+  fi
+  # .backlog は --workspace 経路では配置しないため、exclude にも追記されないことを確認する
+  # （既定経路の EXCLUDE_LINES=(".backlog" ...) との違いの直接検証）。
+  if grep -Fxq ".backlog" "$workspace_git_exclude_file"; then
+    fail "9c: --workspace 経路なのに .git/info/exclude に '.backlog' が追記されている"
+  else
+    pass "9c: --workspace 経路では .git/info/exclude に '.backlog' が追記されない"
+  fi
+else
+  fail "9c: .git/info/exclude が作られなかった"
+fi
+
+# ---- 9d. 衝突検知: シンボリックリンクではない実体が既にある場合はエラーで停止する ----
+TMP_WORKSPACE_COLLISION="$(mktemp -d)"
+register_tmp_cleanup "$TMP_WORKSPACE_COLLISION"
+collision_skill_name="${WORKSPACE_SKILL_NAMES[0]}"
+mkdir -p "$TMP_WORKSPACE_COLLISION/.claude/skills/$collision_skill_name"
+touch "$TMP_WORKSPACE_COLLISION/.claude/skills/$collision_skill_name/dummy-file"
+
+collision_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_COLLISION" 2>&1)"
+collision_exit=$?
+if [ "$collision_exit" -ne 0 ]; then
+  pass "9d: シンボリックリンクではない実体との衝突がエラーで停止する（exit ${collision_exit}）"
+else
+  fail "9d: シンボリックリンクではない実体との衝突がエラーにならなかった:
+$collision_output"
+fi
+if grep -Fq "にはシンボリックリンクではない実体が既に存在する" <<<"$collision_output"; then
+  pass "9d: 衝突時のエラーメッセージが期待通り出力される"
+else
+  fail "9d: 衝突時に期待するエラーメッセージが出力されなかった:
+$collision_output"
+fi
+
+# ---- 9e. --workspace フラグの位置は任意（位置引数の前後どちらでもよい） ----
+TMP_WORKSPACE_FLAG_ORDER="$(mktemp -d)"
+register_tmp_cleanup "$TMP_WORKSPACE_FLAG_ORDER"
+
+flag_order_output="$("$SETUP_SCRIPT" "$TMP_WORKSPACE_FLAG_ORDER" --workspace 2>&1)"
+flag_order_exit=$?
+if [ "$flag_order_exit" -eq 0 ]; then
+  pass "9e: '<パス> --workspace' の順でもフラグが正しく解釈される（exit 0）"
+else
+  fail "9e: '<パス> --workspace' の順での実行が失敗した（exit ${flag_order_exit}）:
+$flag_order_output"
+fi
+if [ -e "$TMP_WORKSPACE_FLAG_ORDER/.claude/skills/${WORKSPACE_SKILL_NAMES[0]}" ]; then
+  pass "9e: 位置引数がフラグより前にあっても正しい対象ディレクトリにスキルが配置される"
+else
+  fail "9e: 位置引数がフラグより前にある場合に、対象ディレクトリへスキルが配置されなかった"
+fi
+
+# ---- 9f. --workspace 無しの既定動作は本セクションの追加後も影響を受けない ----
+# 対象ディレクトリが git リポジトリでなければ、これまで通り --workspace 無しでは
+# エラーで停止することを再確認する（既定動作の回帰防止の直接検証）。
+TMP_NON_GIT_NO_FLAG="$(mktemp -d)"
+register_tmp_cleanup "$TMP_NON_GIT_NO_FLAG"
+no_flag_output="$("$SETUP_SCRIPT" "$TMP_NON_GIT_NO_FLAG" 2>&1)"
+no_flag_exit=$?
+if [ "$no_flag_exit" -ne 0 ] && grep -Fq "対象ディレクトリは git リポジトリではない" <<<"$no_flag_output"; then
+  pass "9f: --workspace を渡さなければ、これまで通り git リポジトリでない対象はエラーで停止する"
+else
+  fail "9f: --workspace 無しの既定動作が変化している（exit ${no_flag_exit}）:
+$no_flag_output"
+fi
+
+# ---- 9g/9h. backlog が PATH に無い環境での回帰ガード（P2 fix: backlog は
+# --workspace 経路では不要）----
+# check_test_dependencies() はファイル冒頭で backlog の存在を前提にしている
+# ため、ここでは呼び出しの瞬間だけ PATH から backlog の解決元ディレクトリを
+# 除いた環境を作り、その中で実行することで「backlog が無い」状態を再現する。
+# git は解決できたままにする必要がある（git は --workspace 経路でも常に必須）。
+BACKLOG_BIN_DIR="$(dirname "$(command -v backlog)")"
+STRIPPED_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fxv "$BACKLOG_BIN_DIR" | tr '\n' ':')"
+STRIPPED_PATH="${STRIPPED_PATH%:}"
+
+if PATH="$STRIPPED_PATH" command -v backlog >/dev/null 2>&1; then
+  skip "9g/9h: PATH から backlog の解決元ディレクトリ（$BACKLOG_BIN_DIR）を除いても backlog が別の場所から解決できてしまうため、backlog 不在環境の検証をスキップした"
+elif ! PATH="$STRIPPED_PATH" command -v git >/dev/null 2>&1; then
+  skip "9g/9h: backlog の解決元ディレクトリを PATH から除くと git も解決できなくなるため、backlog 不在環境の検証をスキップした"
+else
+  # ---- 9g. backlog が PATH に無くても --workspace は成功する ----
+  TMP_WORKSPACE_NO_BACKLOG="$(mktemp -d)"
+  register_tmp_cleanup "$TMP_WORKSPACE_NO_BACKLOG"
+
+  workspace_no_backlog_output="$(PATH="$STRIPPED_PATH" "$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_NO_BACKLOG" 2>&1)"
+  workspace_no_backlog_exit=$?
+  if [ "$workspace_no_backlog_exit" -eq 0 ]; then
+    pass "9g: backlog が PATH に無くても --workspace は成功する（P2 fix の回帰防止）"
+  else
+    fail "9g: backlog が PATH に無いと --workspace が失敗した（exit ${workspace_no_backlog_exit}）:
+$workspace_no_backlog_output"
+  fi
+
+  workspace_no_backlog_links_ok=true
+  for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
+    if [ ! -L "$TMP_WORKSPACE_NO_BACKLOG/.claude/skills/$name" ]; then
+      workspace_no_backlog_links_ok=false
+      fail "9g: backlog が PATH に無い状態で .claude/skills/$name が配置されなかった"
+    fi
+  done
+  if [ "$workspace_no_backlog_links_ok" = true ]; then
+    pass "9g: backlog が PATH に無い状態でもワークスペーススキルが正しく配置される"
+  fi
+
+  # ---- 9h. 対照: 同じ backlog 不在環境で、--workspace を渡さなければ従来通り
+  # backlog 不在エラーで停止する（P2 fix が逆方向に回帰していないことのガード）----
+  TMP_NO_BACKLOG_NO_FLAG="$(mktemp -d)"
+  register_tmp_cleanup "$TMP_NO_BACKLOG_NO_FLAG"
+  no_backlog_no_flag_output="$(PATH="$STRIPPED_PATH" "$SETUP_SCRIPT" "$TMP_NO_BACKLOG_NO_FLAG" 2>&1)"
+  no_backlog_no_flag_exit=$?
+  if [ "$no_backlog_no_flag_exit" -ne 0 ] && grep -Fq "コマンド 'backlog' が見つからない" <<<"$no_backlog_no_flag_output"; then
+    pass "9h: backlog が PATH に無い同じ環境で、--workspace を渡さなければ backlog 不在エラーで停止する（回帰ガード）"
+  else
+    fail "9h: backlog が PATH に無い状態での --workspace 無し実行の挙動が想定と異なる（exit ${no_backlog_no_flag_exit}）:
+$no_backlog_no_flag_output"
+  fi
+fi
+
 finish_tests

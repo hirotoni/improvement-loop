@@ -54,6 +54,41 @@ improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` 
 
 `Proposed` を `To Do` に上げる（着手の承認）のと、`In Review` を `Approved` に上げる（レビュー完了）のは、いずれも人間が行う。
 
+## ワークスペース対応
+
+複数の git リポジトリを直下（深さ1）にクローンした「ワークスペースディレクトリ」を対象に、improvement ループの dispatch / scout を横断的に走らせることができる。**各リポジトリのバックログは独立したまま**であり、ワークスペース全体で1つのタスク一覧を共有する仕組みではない。あくまで「複数リポジトリを1回の起動で巡回する」薄いオーケストレーション層を追加するだけである。
+
+### セットアップ
+
+1. 対象にしたい各リポジトリで、これまで通り `setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作であり、新しいマーカーファイルは無く、`.claude/skills/improvement-dispatch` / `.claude/skills/improvement-scout` のシンボリックリンクの有無だけが判定に使われる。
+2. ワークスペースディレクトリ自体に対して `setup-improvement-loop --workspace [ワークスペースディレクトリのパス]` を実行する（引数を省略した場合は現在のディレクトリを対象とする）。ワークスペースディレクトリが git リポジトリである必要はない。以下を冪等に行う。
+   - `workspace-dispatch` / `workspace-scout` の2スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）。
+   - ワークスペースディレクトリ自体が git リポジトリでもある場合（レアケース）に限り、配置したスキルパスを `.git/info/exclude` に追記する。git リポジトリでなければこの手順はスキップされる（エラーにはならない）。
+
+```
+<ワークスペースディレクトリ>/
+├── repo-a/            # setup-improvement-loop <repo-a> 済み（opt-in）
+│   └── .claude/skills/improvement-dispatch, improvement-scout, ...
+├── repo-b/            # 未 opt-in（workspace-dispatch/workspace-scout の対象外）
+└── .claude/
+    └── skills/
+        ├── workspace-dispatch/**
+        └── workspace-scout/**
+```
+
+### 使い方
+
+ワークスペースディレクトリで `workspace-dispatch` / `workspace-scout` スキルを使うと、直下（深さ1）のサブディレクトリのうち opt-in 済みのリポジトリだけを対象に、既存の `improvement-dispatch` / `improvement-scout` の手順をリポジトリごとに順番へそのまま適用する。
+
+- **workspace-dispatch**: opt-in 済みの各リポジトリへ `cd` し、`improvement-dispatch` の手順（状態を読む、レビュー済みを扱う、必要なら引き渡す、次の起動を決める）をそのまま適用する。あるリポジトリが `GATED`（上限到達）や `NO_CANDIDATE`（候補無し）でも、他のリポジトリの処理は続行する。ゲーティングはリポジトリごとに独立しており、ワークスペース全体としての合計同時実行数の上限は無い（各リポジトリ自身の `.backlog/config.my.yml` の `max_in_progress`/`max_in_review` がそのまま効く）。全リポジトリ処理後、リポジトリごとの結果を要約して報告する。
+- **workspace-scout**: opt-in 済みの各リポジトリへ `cd` し、`improvement-scout` の手順（観点選定、探索、起票）をそのまま適用する。1リポジトリあたり最大3件という起票上限は各リポジトリ単位でそのまま適用され、ワークスペース全体としての合計上限は無い。
+
+いずれも、対象リポジトリの列挙には `bin/lib/list_opted_in_repos.sh` を共通ロジックとして使う（各スキルの `scripts/list-target-repos` が薄いラッパーとして呼び出す）。opt-in していないリポジトリや git リポジトリでないディレクトリは黙って対象から外れる。
+
+worktree の既定の置き場所（`worktree_base_dir`。既定ではリポジトリルートの `.worktree/`）はワークスペース対応によって変更されない。ワークスペースルートに worktree を集約したい場合は、既存の仕組み（`worktree_base_dir` を各リポジトリで手動設定する）で実現できる。
+
+`improvement-add` / `improvement-scout-major` / `improvement-work` はワークスペース対応の対象外である（今回は dispatch と scout のみ）。
+
 ## 開発者向け情報
 
 このリポジトリ（improvement-loop 自身）を開発する人向けの設定。`bin/setup-improvement-loop` や `install.zsh` が配布する対象には含まれない。

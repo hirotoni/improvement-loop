@@ -25,28 +25,31 @@ echo "=== 1. 構文チェック ==="
 # select-next-task の直接呼び出し等）でも同じ変数を使い回すため）。
 #
 # 各要素はパイプ区切りの1行で「<パス変数>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
-# - 追加フラグが必要なのは bin/setup-improvement-loop・install.zsh・
-#   bin/lib/resolve_path.sh の3つ:
-#   -x -P SCRIPTDIR は、TASK-18 で bin/setup-improvement-loop が
-#   bin/lib/resolve_path.sh を source するようになったため、source 先を実際に
-#   追って検査させる指定（無いと常に SC1091 で誤って失敗する）。install.zsh も
-#   同じ resolve_path.sh を source するため同様に必要。
+# - `-x -P SCRIPTDIR` が必要なのは、他のスクリプト/ライブラリを source する
+#   スクリプト（bin/setup-improvement-loop・install.zsh・
+#   bin/lib/list_opted_in_repos.sh・claude-skills-workspace/workspace-dispatch と
+#   workspace-scout の各 scripts/list-target-repos）である。source 先を実際に
+#   追って検査させる指定で、無いと常に SC1091 で誤って失敗する。
 # - install.zsh だけ hard failure にしない（4フィールド目が true）。zsh 専用
 #   スクリプトで、shellcheck は zsh を直接サポートしないため（下のshellcheck
 #   ループのコメントを参照）。
-# - bin/lib/resolve_path.sh は bash/zsh 両方から source される前提でシバンを
-#   持たない（同ファイル冒頭コメント参照）。そのため shellcheck にシバン無し
-#   のまま渡すと、対象シェルが不明として SC2148 (error) になり必ず失敗する
-#   （resolve_path.sh 自体にシバンや shellcheck ディレクティブを足すのは対象
-#   スクリプトへの変更になるため、CHECK_SCRIPTS 側のフラグだけで解決する）。
-#   `--shell=bash` を渡すことで、実際に bash からも source される実態に沿って
-#   解析させ、クリーンに通ることを確認済み。TASK-18 で参照されている install.zsh/
-#   bin/setup-improvement-loop の `-x -P SCRIPTDIR` 経由の間接チェックとは独立に、
-#   ここでは resolve_path.sh 自身を直接の対象として shellcheck にかける。
+# - bin/lib/resolve_path.sh・bin/lib/list_opted_in_repos.sh は、bash/zsh
+#   両方から source される想定（前者）、または他のバッシュスクリプトから
+#   source されるだけ（後者）で、いずれもシバンを持たない（各ファイル冒頭
+#   コメント参照）。そのため shellcheck にシバン無しのまま渡すと、対象シェルが
+#   不明として SC2148 (error) になり必ず失敗する（シバンや shellcheck
+#   ディレクティブをファイル自体に足すのは対象スクリプトへの変更になるため、
+#   CHECK_SCRIPTS 側のフラグだけで解決する）。`--shell=bash` を渡すことで、
+#   実際に bash から source される実態に沿って解析させ、クリーンに通ることを
+#   確認済み。bin/lib/list_opted_in_repos.sh は自身も bin/lib/resolve_path.sh を
+#   source するため、`-x -P SCRIPTDIR` と `--shell=bash` の両方を渡す。
 CHECK_SCRIPTS=(
   "$INSTALL_SCRIPT|install.zsh|-x -P SCRIPTDIR|true"
   "$SETUP_SCRIPT|bin/setup-improvement-loop|-x -P SCRIPTDIR|false"
   "$RESOLVE_PATH_SCRIPT|bin/lib/resolve_path.sh|--shell=bash|false"
+  "$LIST_OPTED_IN_REPOS_SCRIPT|bin/lib/list_opted_in_repos.sh|-x -P SCRIPTDIR --shell=bash|false"
+  "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
+  "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$CREATE_WORKTREE_SCRIPT|claude-skills/improvement-dispatch/scripts/create-worktree||false"
   "$MERGE_SCRIPT|claude-skills/improvement-dispatch/scripts/merge-reviewed-branch||false"
   "$SELECT_SCRIPT|claude-skills/improvement-dispatch/scripts/select-next-task||false"
@@ -105,7 +108,9 @@ fi
 
 echo ""
 echo "=== 1c. SKILL.md 埋め込み bash ブロックの構文チェック ==="
-# claude-skills/improvement-dispatch/SKILL.md と claude-skills/improvement-work/SKILL.md には、
+# claude-skills/improvement-dispatch/SKILL.md、claude-skills/improvement-work/SKILL.md、
+# claude-skills-workspace/workspace-dispatch/SKILL.md、
+# claude-skills-workspace/workspace-scout/SKILL.md には、
 # dispatch/work が実際に実行する bash コードブロックが埋め込まれている
 # （例: improvement-dispatch の手順3・手順5）。ここでは各 ```bash フェンスブロックを抽出し、
 # bash -n で構文チェックする。フェンスは箇条書きの入れ子（行頭に空白のインデント）で
@@ -203,5 +208,7 @@ check_skill_bash_blocks() {
 
 check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-dispatch/SKILL.md" "improvement-dispatch/SKILL.md"
 check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-work/SKILL.md" "improvement-work/SKILL.md"
+check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-dispatch/SKILL.md" "workspace-dispatch/SKILL.md"
+check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-scout/SKILL.md" "workspace-scout/SKILL.md"
 
 finish_tests

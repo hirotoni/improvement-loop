@@ -27,6 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_FILES=(
   "test_syntax.sh"
   "test_setup_improvement_loop.sh"
+  "test_list_opted_in_repos.sh"
   "test_select_next_task.sh"
   "test_merge_reviewed_branch.sh"
   "test_create_worktree.sh"

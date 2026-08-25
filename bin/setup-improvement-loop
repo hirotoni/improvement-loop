@@ -6,8 +6,14 @@
 #
 # 使い方:
 #   setup-improvement-loop [対象リポジトリのパス]
+#   setup-improvement-loop --workspace [対象ワークスペースディレクトリのパス]
 #
 # 引数を省略した場合は現在のディレクトリを対象とする。
+# --workspace を指定すると、対象を単一リポジトリではなくワークスペース
+# ディレクトリとして扱い、workspace-dispatch / workspace-scout スキルを
+# 配置する別経路（setup_workspace）に切り替わる。この経路では backlog init
+# や .backlog/ 配下の配置は一切行わないため、backlog CLI は不要になる
+# （対象ディレクトリが git リポジトリである必要も無い）。
 #
 # 冪等性の方針:
 #   - シンボリックリンクは正しいリンク先を指していれば何もしない。
@@ -359,6 +365,179 @@ ensure_default_assignee() {
   CREATED+=(".backlog/config.yml default_assignee (CLI未対応のため直接追記)")
 }
 
+# place_skill_symlinks: `.claude/skills/$name` へのシンボリックリンクを冪等に
+# 配置する共有関数（従来の手順4のロジックを、単一リポジトリ経路と
+# --workspace 経路の両方から呼べる形に切り出したもの）。
+#   - 既にリンクがあり、正しいリンク先を指していれば何もしない。
+#   - 別の実体（別リンク先のリンクを含む）が既に存在すればエラーで停止する。
+#   - リンクが無ければ新規作成する。
+# グローバル変数 CREATED / SKIPPED、および resolve_path()（bin/lib/resolve_path.sh）
+# に依存する。
+# 引数: $1=ソースディレクトリ, $2=配置先の .claude/skills ディレクトリ,
+#       $3以降=配置するスキル名のリスト
+place_skill_symlinks() {
+  local source_dir="$1"
+  local target_skills_dir="$2"
+  shift 2
+  local -a names=("$@")
+
+  mkdir -p "$target_skills_dir"
+
+  local name src dest resolved_existing resolved_src
+  for name in "${names[@]}"; do
+    src="$source_dir/$name"
+    dest="$target_skills_dir/$name"
+
+    if [ ! -d "$src" ]; then
+      err "配布元にスキルディレクトリが無い: $src"
+      exit 1
+    fi
+
+    if [ -L "$dest" ]; then
+      # 既にシンボリックリンクがある。リンク先の実体を比較して正しいか確認する。
+      # リンク切れ（リンク先が存在しない）の場合 resolve_path（realpath）が
+      # 非ゼロで終了しうる。set -e で落とさず「別のリンク先」として扱う。
+      resolved_existing="$(resolve_path "$dest" 2>/dev/null)" || resolved_existing=""
+      resolved_src="$(resolve_path "$src")"
+      if [ "$resolved_existing" = "$resolved_src" ]; then
+        log "[skip] .claude/skills/$name は既に正しいリンク先を指している。"
+        SKIPPED+=(".claude/skills/$name (既存の正しいリンク)")
+        continue
+      else
+        err ".claude/skills/$name は既に別のリンク先を指すシンボリックリンクである: $(readlink "$dest")"
+        err "手動で確認・削除してから再実行すること。"
+        exit 1
+      fi
+    elif [ -e "$dest" ]; then
+      err ".claude/skills/$name にはシンボリックリンクではない実体が既に存在する: $dest"
+      err "手動で確認・削除してから再実行すること。"
+      exit 1
+    else
+      ln -s "$src" "$dest"
+      log "[new]  .claude/skills/$name -> $src"
+      CREATED+=(".claude/skills/$name (symlink)")
+    fi
+  done
+}
+
+# append_git_exclude_lines: 対象リポジトリの .git/info/exclude に、固定の
+# 見出しコメント "# improvement-loop" と指定された行群を冪等に追記する共有関数
+# （従来の手順6のロジックを、単一リポジトリ経路と --workspace 経路の両方から
+# 呼べる形に切り出したもの）。同じ行が既にあれば追記しない。
+# グローバル変数 CREATED / SKIPPED に依存する。
+# 引数: $1=対象リポジトリのルート（git リポジトリであること）, $2以降=追記する行
+append_git_exclude_lines() {
+  local target_repo_root="$1"
+  shift
+  local -a lines=("$@")
+
+  local git_dir exclude_file
+  git_dir="$(git -C "$target_repo_root" rev-parse --git-dir)"
+  case "$git_dir" in
+    /*) : ;;
+    *) git_dir="$target_repo_root/$git_dir" ;;
+  esac
+  exclude_file="$git_dir/info/exclude"
+  mkdir -p "$git_dir/info"
+  touch "$exclude_file"
+
+  # 追記する行群の由来を示す見出しコメント。既存の `# interview-dev-loop plan docs`
+  # や `# claude-code-runtime` と同じ書式（対象行の直前に置く1行コメント）に倣う。
+  # grep -Fxq で完全一致を見るため、lines の重複検知には影響しない。
+  local exclude_header="# improvement-loop"
+  if grep -Fxq "$exclude_header" "$exclude_file" 2>/dev/null; then
+    log "[skip] .git/info/exclude には既に見出しコメント '$exclude_header' がある。"
+    SKIPPED+=(".git/info/exclude: $exclude_header")
+  else
+    printf '%s\n' "$exclude_header" >> "$exclude_file"
+    log "[new]  .git/info/exclude に見出しコメント '$exclude_header' を追記した。"
+    CREATED+=(".git/info/exclude: $exclude_header")
+  fi
+
+  local line
+  for line in "${lines[@]}"; do
+    if grep -Fxq "$line" "$exclude_file" 2>/dev/null; then
+      log "[skip] .git/info/exclude には既に '$line' がある。"
+      SKIPPED+=(".git/info/exclude: $line")
+    else
+      printf '%s\n' "$line" >> "$exclude_file"
+      log "[new]  .git/info/exclude に '$line' を追記した。"
+      CREATED+=(".git/info/exclude: $line")
+    fi
+  done
+}
+
+# setup_workspace: `--workspace` 経路のセットアップ本体。対象ディレクトリ
+# （git リポジトリである必要はない）に claude-skills-workspace/ 配下の
+# スキル（workspace-dispatch / workspace-scout）を動的に列挙し、
+# `.claude/skills/` へシンボリックリンクとして冪等に配置する。
+# backlog init やバックログ関連ファイル（.backlog/*）の配置は一切行わない。
+# 対象ディレクトリが git リポジトリでもある場合（レアケース）だけ、
+# 配置したスキルパスを .git/info/exclude に追記する。
+setup_workspace() {
+  local target_dir="$1"
+
+  log "対象ワークスペース: $target_dir"
+  log ""
+
+  CREATED=()
+  SKIPPED=()
+
+  if [ ! -d "$SOURCE_WORKSPACE_SKILLS_DIR" ]; then
+    err "配布元の claude-skills-workspace ディレクトリが見つからない: $SOURCE_WORKSPACE_SKILLS_DIR"
+    exit 1
+  fi
+
+  # claude-skills-workspace/ ディレクトリの実体を単一の情報源として動的に列挙する。
+  # 単一リポジトリ経路の SKILL_NAMES（claude-skills/ 配下の動的列挙）と同じ方式。
+  shopt -s nullglob
+  local workspace_skill_names=()
+  local skill_dir
+  for skill_dir in "$SOURCE_WORKSPACE_SKILLS_DIR"/*/; do
+    workspace_skill_names+=("$(basename "$skill_dir")")
+  done
+  shopt -u nullglob
+  if [ "${#workspace_skill_names[@]}" -eq 0 ]; then
+    err "配布元の claude-skills-workspace 配下にスキルディレクトリが1つも無い: $SOURCE_WORKSPACE_SKILLS_DIR"
+    exit 1
+  fi
+
+  local target_skills_dir="$target_dir/.claude/skills"
+  place_skill_symlinks "$SOURCE_WORKSPACE_SKILLS_DIR" "$target_skills_dir" "${workspace_skill_names[@]}"
+
+  if git -C "$target_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local exclude_lines=()
+    local name
+    for name in "${workspace_skill_names[@]}"; do
+      exclude_lines+=(".claude/skills/$name")
+    done
+    append_git_exclude_lines "$target_dir" "${exclude_lines[@]}"
+  fi
+
+  log ""
+  log "=== サマリー ==="
+  log "作成/実行した項目 (${#CREATED[@]} 件):"
+  if [ "${#CREATED[@]}" -eq 0 ]; then
+    log "  (なし)"
+  else
+    for item in "${CREATED[@]}"; do
+      log "  - $item"
+    done
+  fi
+  log "スキップした項目 (${#SKIPPED[@]} 件):"
+  if [ "${#SKIPPED[@]}" -eq 0 ]; then
+    log "  (なし)"
+  else
+    for item in "${SKIPPED[@]}"; do
+      log "  - $item"
+    done
+  fi
+  log ""
+  log "次にすること:"
+  log "  1. ワークスペース配下の各リポジトリで 'setup-improvement-loop <リポジトリのパス>'（--workspace 無し）を実行し、improvement-dispatch / improvement-scout を opt-in させる"
+  log "  2. workspace-dispatch / workspace-scout スキルを、このワークスペースディレクトリで使う（opt-in 済みのリポジトリだけを対象に横断処理する）"
+}
+
 # .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
 # （backlogmd-custom-config/config.my.yml）にあって導入先の既存ファイルに無いキー
 # だけを、テンプレート側のコメント・既定値付きで補う。ensure_backlog_statuses() と
@@ -486,6 +665,11 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 SOURCE_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_SKILLS_DIR="$SOURCE_REPO_ROOT/claude-skills"
 SOURCE_CONFIG_FILE="$SOURCE_REPO_ROOT/backlogmd-custom-config/config.my.yml"
+# claude-skills-workspace/ は --workspace 経路専用のスキル配布元。既存の
+# claude-skills/（SOURCE_SKILLS_DIR、下の動的列挙で SKILL_NAMES を作る単一の
+# 情報源）とは意図的に別ディレクトリにしてある。ここに新スキルを混在させると、
+# 単一リポジトリ経路の動的列挙に自動的に混入してしまうため（Decision 6）。
+SOURCE_WORKSPACE_SKILLS_DIR="$SOURCE_REPO_ROOT/claude-skills-workspace"
 
 # resolve_path() の唯一の定義を source する。以降（シンボリックリンクの
 # 既存リンク先が期待通りか検証する箇所）はここから供給される定義を使う。
@@ -515,29 +699,71 @@ if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# ---- 1. 前提コマンドの確認 ----
+# ---- 1. 引数解析（--workspace フラグと位置引数） ----
+# --workspace はどの位置に来てもよいフラグとして扱う。位置引数（対象パス、
+# 省略時はcwd）の扱いは既存仕様（"${1:-$(pwd)}"）と同じにするため、フラグを
+# 取り除いた残りの引数列の先頭を使う。
+# この段階ではフラグの切り分けのみ行い、対象パスの存在確認等のファイル
+# システムを触る処理は一切行わない（次節の前提コマンド確認より前に、対象
+# ディレクトリの解決を先に済ませてしまわないようにするため。元の実装では
+# 前提コマンドの確認が対象パスの解決より先に行われており、その順序を
+# --workspace 対応後も変えない）。
+WORKSPACE_MODE=false
+POSITIONAL_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --workspace)
+      WORKSPACE_MODE=true
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$arg")
+      ;;
+  esac
+done
+
+# ---- 2. 前提コマンドの確認 ----
 # backlog: Backlog.md CLI（https://backlog.md/）。ここではコマンドの存在確認のみ
 # 行い、バージョンまでは確認しない。動作確認済みの最小バージョンは 1.48.0
 # （README.md「前提: backlog CLI」参照）。それより古いバージョンでは
 # --add-label 等の一部フラグが使えず、improvement-dispatch/improvement-work
 # 実行中に初めてエラーになることがある。
-for cmd in git backlog; do
+# git は --workspace 経路でも対象ディレクトリが git リポジトリかどうかの判定
+# （.git/info/exclude への追記要否）に使うため常に必須とする。backlog init や
+# .backlog/config.my.yml の配置は --workspace 経路では一切行わないため、
+# backlog コマンドの必須化は --workspace 無しのときだけに限定する。
+# 元の実装（--workspace 対応前）ではここが対象パスの解決より先に行われていた。
+# その順序を維持する（前提コマンドが揃っているかどうかの確認を、対象パスが
+# 存在するかどうかの確認より優先する）。
+REQUIRED_CMDS=(git)
+if [ "$WORKSPACE_MODE" != true ]; then
+  REQUIRED_CMDS+=(backlog)
+fi
+for cmd in "${REQUIRED_CMDS[@]}"; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     err "コマンド '$cmd' が見つからない。インストールしてから再実行すること。"
     exit 1
   fi
 done
 
-# ---- 2. 対象パスの解決 ----
-TARGET_DIR_ARG="${1:-$(pwd)}"
+# ---- 3. 対象パスの解決 ----
+TARGET_DIR_ARG="${POSITIONAL_ARGS[0]:-$(pwd)}"
 if [ ! -d "$TARGET_DIR_ARG" ]; then
   err "対象ディレクトリが存在しない: $TARGET_DIR_ARG"
   exit 1
 fi
 TARGET_REPO_ROOT="$(cd "$TARGET_DIR_ARG" && pwd)"
 
+# --workspace が指定された場合は、ここで別経路（setup_workspace）に分岐して
+# 終了する。以降（git リポジトリ判定、backlog init、.backlog/ 配下の配置等）は
+# --workspace 無しの既定動作専用であり、一切変更しない。
+if [ "$WORKSPACE_MODE" = true ]; then
+  setup_workspace "$TARGET_REPO_ROOT"
+  exit 0
+fi
+
 if ! git -C "$TARGET_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   err "対象ディレクトリは git リポジトリではない: $TARGET_REPO_ROOT"
+  err "複数の git リポジトリを含むワークスペースディレクトリを対象にする場合は、--workspace オプションを付けて再実行すること。"
   exit 1
 fi
 
@@ -584,42 +810,7 @@ ensure_default_assignee "$TARGET_REPO_ROOT" "$BACKLOG_CONFIG_YML"
 
 # ---- 4. スキルのシンボリックリンク配置 ----
 TARGET_SKILLS_DIR="$TARGET_REPO_ROOT/.claude/skills"
-mkdir -p "$TARGET_SKILLS_DIR"
-
-for name in "${SKILL_NAMES[@]}"; do
-  src="$SOURCE_SKILLS_DIR/$name"
-  dest="$TARGET_SKILLS_DIR/$name"
-
-  if [ ! -d "$src" ]; then
-    err "配布元にスキルディレクトリが無い: $src"
-    exit 1
-  fi
-
-  if [ -L "$dest" ]; then
-    # 既にシンボリックリンクがある。リンク先の実体を比較して正しいか確認する。
-    # リンク切れ（リンク先が存在しない）の場合 resolve_path（realpath）が
-    # 非ゼロで終了しうる。set -e で落とさず「別のリンク先」として扱う。
-    resolved_existing="$(resolve_path "$dest" 2>/dev/null)" || resolved_existing=""
-    resolved_src="$(resolve_path "$src")"
-    if [ "$resolved_existing" = "$resolved_src" ]; then
-      log "[skip] .claude/skills/$name は既に正しいリンク先を指している。"
-      SKIPPED+=(".claude/skills/$name (既存の正しいリンク)")
-      continue
-    else
-      err ".claude/skills/$name は既に別のリンク先を指すシンボリックリンクである: $(readlink "$dest")"
-      err "手動で確認・削除してから再実行すること。"
-      exit 1
-    fi
-  elif [ -e "$dest" ]; then
-    err ".claude/skills/$name にはシンボリックリンクではない実体が既に存在する: $dest"
-    err "手動で確認・削除してから再実行すること。"
-    exit 1
-  else
-    ln -s "$src" "$dest"
-    log "[new]  .claude/skills/$name -> $src"
-    CREATED+=(".claude/skills/$name (symlink)")
-  fi
-done
+place_skill_symlinks "$SOURCE_SKILLS_DIR" "$TARGET_SKILLS_DIR" "${SKILL_NAMES[@]}"
 
 # ---- 5. config.my.yml の配置 ----
 TARGET_CONFIG_FILE="$TARGET_REPO_ROOT/.backlog/config.my.yml"
@@ -634,43 +825,11 @@ else
 fi
 
 # ---- 6. .git/info/exclude への追記 ----
-GIT_DIR="$(git -C "$TARGET_REPO_ROOT" rev-parse --git-dir)"
-case "$GIT_DIR" in
-  /*) : ;;
-  *) GIT_DIR="$TARGET_REPO_ROOT/$GIT_DIR" ;;
-esac
-EXCLUDE_FILE="$GIT_DIR/info/exclude"
-mkdir -p "$GIT_DIR/info"
-touch "$EXCLUDE_FILE"
-
 EXCLUDE_LINES=(".backlog")
 for name in "${SKILL_NAMES[@]}"; do
   EXCLUDE_LINES+=(".claude/skills/$name")
 done
-
-# 追記する行群の由来を示す見出しコメント。既存の `# interview-dev-loop plan docs`
-# や `# claude-code-runtime` と同じ書式（対象行の直前に置く1行コメント）に倣う。
-# grep -Fxq で完全一致を見るため、EXCLUDE_LINES の重複検知には影響しない。
-EXCLUDE_HEADER="# improvement-loop"
-if grep -Fxq "$EXCLUDE_HEADER" "$EXCLUDE_FILE" 2>/dev/null; then
-  log "[skip] .git/info/exclude には既に見出しコメント '$EXCLUDE_HEADER' がある。"
-  SKIPPED+=(".git/info/exclude: $EXCLUDE_HEADER")
-else
-  printf '%s\n' "$EXCLUDE_HEADER" >> "$EXCLUDE_FILE"
-  log "[new]  .git/info/exclude に見出しコメント '$EXCLUDE_HEADER' を追記した。"
-  CREATED+=(".git/info/exclude: $EXCLUDE_HEADER")
-fi
-
-for line in "${EXCLUDE_LINES[@]}"; do
-  if grep -Fxq "$line" "$EXCLUDE_FILE" 2>/dev/null; then
-    log "[skip] .git/info/exclude には既に '$line' がある。"
-    SKIPPED+=(".git/info/exclude: $line")
-  else
-    printf '%s\n' "$line" >> "$EXCLUDE_FILE"
-    log "[new]  .git/info/exclude に '$line' を追記した。"
-    CREATED+=(".git/info/exclude: $line")
-  fi
-done
+append_git_exclude_lines "$TARGET_REPO_ROOT" "${EXCLUDE_LINES[@]}"
 
 # ---- 7. サマリー ----
 log ""
