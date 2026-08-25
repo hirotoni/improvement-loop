@@ -62,32 +62,34 @@ improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` 
 
 1. 対象にしたい各リポジトリで、これまで通り `setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作であり、新しいマーカーファイルは無く、`.claude/skills/improvement-dispatch` / `.claude/skills/improvement-scout` のシンボリックリンクの有無だけが判定に使われる。
 2. ワークスペースディレクトリ自体に対して `setup-improvement-loop --workspace [ワークスペースディレクトリのパス]` を実行する（引数を省略した場合は現在のディレクトリを対象とする）。ワークスペースディレクトリが git リポジトリである必要はない。以下を冪等に行う。
-   - `workspace-dispatch` / `workspace-scout` の2スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）。
+   - `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` の3スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）。
    - ワークスペースディレクトリ自体が git リポジトリでもある場合（レアケース）に限り、配置したスキルパスを `.git/info/exclude` に追記する。git リポジトリでなければこの手順はスキップされる（エラーにはならない）。
 
 ```
 <ワークスペースディレクトリ>/
 ├── repo-a/            # setup-improvement-loop <repo-a> 済み（opt-in）
-│   └── .claude/skills/improvement-dispatch, improvement-scout, ...
-├── repo-b/            # 未 opt-in（workspace-dispatch/workspace-scout の対象外）
+│   └── .claude/skills/improvement-dispatch, improvement-scout, improvement-scout-major, ...
+├── repo-b/            # 未 opt-in（workspace-dispatch/workspace-scout/workspace-scout-major の対象外）
 └── .claude/
     └── skills/
         ├── workspace-dispatch/**
-        └── workspace-scout/**
+        ├── workspace-scout/**
+        └── workspace-scout-major/**
 ```
 
 ### 使い方
 
-ワークスペースディレクトリで `workspace-dispatch` / `workspace-scout` スキルを使うと、直下（深さ1）のサブディレクトリのうち opt-in 済みのリポジトリだけを対象に、既存の `improvement-dispatch` / `improvement-scout` の手順をリポジトリごとに順番へそのまま適用する。
+ワークスペースディレクトリで `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` スキルを使うと、直下（深さ1）のサブディレクトリのうち opt-in 済みのリポジトリだけが対象になる。
 
-- **workspace-dispatch**: opt-in 済みの各リポジトリへ `cd` し、`improvement-dispatch` の手順（状態を読む、レビュー済みを扱う、必要なら引き渡す、次の起動を決める）をそのまま適用する。あるリポジトリが `GATED`（上限到達）や `NO_CANDIDATE`（候補無し）でも、他のリポジトリの処理は続行する。ゲーティングはリポジトリごとに独立しており、ワークスペース全体としての合計同時実行数の上限は無い（各リポジトリ自身の `.backlog/config.my.yml` の `max_in_progress`/`max_in_review` がそのまま効く）。全リポジトリ処理後、リポジトリごとの結果を要約して報告する。
-- **workspace-scout**: opt-in 済みの各リポジトリへ `cd` し、`improvement-scout` の手順（観点選定、探索、起票）をそのまま適用する。1リポジトリあたり最大3件という起票上限は各リポジトリ単位でそのまま適用され、ワークスペース全体としての合計上限は無い。
+- **workspace-dispatch**: opt-in 済みの各リポジトリへ `cd` し、`improvement-dispatch` の手順（状態を読む、レビュー済みを扱う、必要なら引き渡す、次の起動を決める）をリポジトリごとに順番へそのまま適用する。あるリポジトリが `GATED`（上限到達）や `NO_CANDIDATE`（候補無し）でも、他のリポジトリの処理は続行する。ゲーティングはリポジトリごとに独立しており、ワークスペース全体としての合計同時実行数の上限は無い（各リポジトリ自身の `.backlog/config.my.yml` の `max_in_progress`/`max_in_review` がそのまま効く）。全リポジトリ処理後、リポジトリごとの結果を要約して報告する。
+- **workspace-scout**: opt-in 済みの各リポジトリへ `cd` し、`improvement-scout` の手順（観点選定、探索、起票）をリポジトリごとに順番へそのまま適用する。1リポジトリあたり最大3件という起票上限は各リポジトリ単位でそのまま適用され、ワークスペース全体としての合計上限は無い。
+- **workspace-scout-major**: 上の2スキルとは異なり、opt-in 済みの全リポジトリを横断して1回で調査する。2つ以上のリポジトリにまたがり、かつリポジトリ間に依存順序がある（例: 共有ライブラリ側の契約変更を先に行い、その後で利用側リポジトリを追従させる必要がある）アーキテクチャ級の改善候補だけを対象にし、`improvement-scout-major` と同じ「milestone ＋ 依存順のタスク分解」の思想で、関与する各リポジトリ自身の独立した `Proposed` に milestone とタスクをそれぞれ起票する。backlog の milestone はリポジトリをまたげないため、対応関係は milestone 名を揃えることと共通ラベル `cross-repo:<スラッグ>` で追跡する。**リポジトリ間の依存順序を自動で強制する仕組みは持たない。** 承認順序（どのリポジトリのタスクを先に `Done` まで進めてから、どのリポジトリのタスクを `To Do` に上げるべきか）はタスクの description と報告文に明記されるだけであり、実際に順序を守って承認するのは人間の役割である。1リポジトリに閉じる規模の候補は起票せず、そのリポジトリ向けの `improvement-scout-major`/`improvement-scout` 候補として報告するにとどめる。
 
 いずれも、対象リポジトリの列挙には `bin/lib/list_opted_in_repos.sh` を共通ロジックとして使う（各スキルの `scripts/list-target-repos` が薄いラッパーとして呼び出す）。opt-in していないリポジトリや git リポジトリでないディレクトリは黙って対象から外れる。
 
 worktree の既定の置き場所（`worktree_base_dir`。既定ではリポジトリルートの `.worktree/`）はワークスペース対応によって変更されない。ワークスペースルートに worktree を集約したい場合は、既存の仕組み（`worktree_base_dir` を各リポジトリで手動設定する）で実現できる。
 
-`improvement-add` / `improvement-scout-major` / `improvement-work` はワークスペース対応の対象外である（今回は dispatch と scout のみ）。
+`improvement-add` / `improvement-work` はワークスペース対応の対象外である（今回は dispatch・scout・scout-major のみ）。
 
 ## 開発者向け情報
 

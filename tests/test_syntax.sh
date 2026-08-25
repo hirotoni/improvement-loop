@@ -27,9 +27,9 @@ echo "=== 1. 構文チェック ==="
 # 各要素はパイプ区切りの1行で「<パス変数>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
 # - `-x -P SCRIPTDIR` が必要なのは、他のスクリプト/ライブラリを source する
 #   スクリプト（bin/setup-improvement-loop・install.zsh・
-#   bin/lib/list_opted_in_repos.sh・claude-skills-workspace/workspace-dispatch と
-#   workspace-scout の各 scripts/list-target-repos）である。source 先を実際に
-#   追って検査させる指定で、無いと常に SC1091 で誤って失敗する。
+#   bin/lib/list_opted_in_repos.sh・claude-skills-workspace/workspace-dispatch・
+#   workspace-scout・workspace-scout-major の各 scripts/list-target-repos）である。
+#   source 先を実際に追って検査させる指定で、無いと常に SC1091 で誤って失敗する。
 # - install.zsh だけ hard failure にしない（4フィールド目が true）。zsh 専用
 #   スクリプトで、shellcheck は zsh を直接サポートしないため（下のshellcheck
 #   ループのコメントを参照）。
@@ -50,6 +50,7 @@ CHECK_SCRIPTS=(
   "$LIST_OPTED_IN_REPOS_SCRIPT|bin/lib/list_opted_in_repos.sh|-x -P SCRIPTDIR --shell=bash|false"
   "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
+  "$WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-scout-major/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$CREATE_WORKTREE_SCRIPT|claude-skills/improvement-dispatch/scripts/create-worktree||false"
   "$MERGE_SCRIPT|claude-skills/improvement-dispatch/scripts/merge-reviewed-branch||false"
   "$SELECT_SCRIPT|claude-skills/improvement-dispatch/scripts/select-next-task||false"
