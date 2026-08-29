@@ -82,6 +82,13 @@ array_index_of() {
 #   PARSED_STATUSES_LINE_RAW     statuses 行そのものの生テキスト
 #   PARSED_STATUSES_ITEMS        既存要素の配列（順序保持、ユーザー独自ステータス含む）
 # python3 等の追加依存を避け、grep/sed/awk のみで実装する。
+# 各要素の引用符除去（シングル/ダブル対称）は bin/lib/yaml_unquote.sh の
+# trim_and_unquote() を使う（TASK-62。以前はここでダブルクォートしか
+# 剥がさない独自の grep/sed 実装を使っており、.backlog/config.yml の
+# statuses をシングルクォートで書くと無音で壊れる不具合があった。
+# claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
+# parse_path_list も同じ trim_and_unquote を使うため、引用符除去の挙動は
+# 両者で一致する）。
 parse_statuses_block() {
   local config_file="$1"
 
@@ -96,12 +103,26 @@ parse_statuses_block() {
   PARSED_STATUSES_ITEMS=()
 
   if [[ "$PARSED_STATUSES_LINE_RAW" == *'['* ]]; then
-    # インライン配列形式（例: statuses: ["To Do", "Done"]）。従来ロジック。
-    while IFS= read -r item; do
-      PARSED_STATUSES_ITEMS+=("$item")
-    done < <(printf '%s\n' "$PARSED_STATUSES_LINE_RAW" | grep -o '"[^"]*"' | sed 's/^"//; s/"$//')
+    # インライン配列形式（例: statuses: ["To Do", "Done"] や statuses: ['To Do', 'Done']）。
+    # "[" と "]" の間をカンマ区切りで分割し、要素ごとに trim_and_unquote する
+    # （check-forbidden-allowed-paths の parse_path_list と同じ考え方）。
+    local inline_content=""
+    if [[ "$PARSED_STATUSES_LINE_RAW" =~ \[(.*)\] ]]; then
+      inline_content="${BASH_REMATCH[1]}"
+    fi
+    if [ -n "${inline_content//[[:space:]]/}" ]; then
+      local raw_items=() raw_item trimmed
+      IFS=',' read -ra raw_items <<<"$inline_content"
+      for raw_item in "${raw_items[@]}"; do
+        trimmed="$(trim_and_unquote "$raw_item")"
+        if [ -n "$trimmed" ]; then
+          PARSED_STATUSES_ITEMS+=("$trimmed")
+        fi
+      done
+    fi
   else
-    # 複数行YAMLリスト形式（statuses: の次行以降に "  - \"To Do\"" のように列挙）。
+    # 複数行YAMLリスト形式（statuses: の次行以降に "  - \"To Do\"" や
+    # "  - 'To Do'" のように列挙）。
     # statuses: の直後から連続する "- ..." 行を集め、それぞれの値を積む。
     local total_lines next_line_num list_line item
     total_lines="$(awk 'END { print NR }' "$config_file")"
@@ -111,7 +132,7 @@ parse_statuses_block() {
       if ! printf '%s' "$list_line" | grep -Eq '^[[:space:]]*-'; then
         break
       fi
-      item="$(printf '%s\n' "$list_line" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')"
+      item="$(trim_and_unquote "${list_line#*-}")"
       PARSED_STATUSES_ITEMS+=("$item")
       PARSED_STATUSES_END_LINE_NUM=$next_line_num
       next_line_num=$((next_line_num + 1))
@@ -675,6 +696,11 @@ SOURCE_WORKSPACE_SKILLS_DIR="$SOURCE_REPO_ROOT/claude-skills-workspace"
 # 既存リンク先が期待通りか検証する箇所）はここから供給される定義を使う。
 # shellcheck source=lib/resolve_path.sh
 source "$SCRIPT_DIR/lib/resolve_path.sh"
+
+# trim_and_unquote() の唯一の定義を source する。parse_statuses_block が使う
+# （TASK-62）。
+# shellcheck source=lib/yaml_unquote.sh
+source "$SCRIPT_DIR/lib/yaml_unquote.sh"
 
 if [ ! -d "$SOURCE_SKILLS_DIR" ]; then
   err "配布元の claude-skills ディレクトリが見つからない: $SOURCE_SKILLS_DIR"

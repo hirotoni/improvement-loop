@@ -447,6 +447,120 @@ fi
 assert_statuses_present "$multiline_result_config" "複数行リスト形式からの正規化後、再実行後"
 
 echo ""
+echo "=== 5b. statuses のシングルクォート形式に対する回帰テスト（TASK-62） ==="
+# parse_statuses_block はダブルクォートしか剥がさない不具合があった
+# （claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
+# trim_and_unquote はシングル/ダブル両方を対称に剥がすのに、
+# parse_statuses_block 側は非対称だった）。有効な YAML であるシングルクォートで
+# statuses を書いた場合に、既存要素が空扱いになったり、引用符付きのまま
+# 残って REQUIRED_STATUSES と文字列一致せず重複挿入されたりしないことを確認する。
+
+# 与えた config.yml の statuses に、REQUIRED_STATUSES の各要素が「ちょうど1回」
+# ダブルクォート付きで含まれること（重複挿入されていないこと）を検証する。
+assert_no_duplicate_status_insertion() {
+  local config_file="$1"
+  local label="$2"
+  local status_line
+  status_line="$(grep -m1 '^statuses:' "$config_file" || true)"
+  local status count dup_found=0
+  for status in "${REQUIRED_STATUSES[@]}"; do
+    count="$(grep -o "\"${status}\"" <<<"$status_line" | wc -l | tr -d '[:space:]')"
+    if [ "$count" -ne 1 ]; then
+      fail "$label: '${status}' の出現回数が1ではない（${count}回）: $status_line"
+      dup_found=1
+    fi
+  done
+  if [ "$dup_found" -eq 0 ]; then
+    pass "$label: REQUIRED_STATUSES の各要素がちょうど1回だけ含まれる（重複挿入されていない）"
+  fi
+}
+
+echo ""
+echo "--- 5b-1. statuses をシングルクォートのインライン配列で書いた場合（AC#3） ---"
+TMP_REPO_SINGLEQUOTE_INLINE="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_INLINE"
+
+(cd "$TMP_REPO_SINGLEQUOTE_INLINE" && git init -q)
+mkdir -p "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog"
+cat > "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog/config.yml" <<'YAML'
+project_name: "singlequote-inline-test"
+default_status: "To Do"
+statuses: ['Proposed', 'To Do', 'Done']
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+singlequote_inline_output="$("$SETUP_SCRIPT" "$TMP_REPO_SINGLEQUOTE_INLINE" 2>&1)"
+singlequote_inline_exit=$?
+if [ "$singlequote_inline_exit" -eq 0 ]; then
+  pass "statuses がシングルクォートのインライン配列な config.yml に対しても setup-improvement-loop が成功する（exit 0）"
+else
+  fail "statuses がシングルクォートのインライン配列な config.yml で setup-improvement-loop が失敗した（exit ${singlequote_inline_exit}）:
+$singlequote_inline_output"
+fi
+
+singlequote_inline_config="$TMP_REPO_SINGLEQUOTE_INLINE/.backlog/config.yml"
+assert_statuses_present "$singlequote_inline_config" "シングルクォートのインライン配列からの補完後（AC#3: 空扱いになっていない）"
+assert_no_duplicate_status_insertion "$singlequote_inline_config" "シングルクォートのインライン配列からの補完後（AC#3）"
+
+echo ""
+echo "--- 5b-2. statuses をシングルクォートの複数行YAMLリストで書いた場合（AC#1） ---"
+TMP_REPO_SINGLEQUOTE_MULTILINE="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_MULTILINE"
+
+(cd "$TMP_REPO_SINGLEQUOTE_MULTILINE" && git init -q)
+mkdir -p "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog"
+cat > "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog/config.yml" <<'YAML'
+project_name: "singlequote-multiline-test"
+default_status: "To Do"
+statuses:
+  - 'Proposed'
+  - 'To Do'
+  - 'Done'
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: true
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+singlequote_multiline_output="$("$SETUP_SCRIPT" "$TMP_REPO_SINGLEQUOTE_MULTILINE" 2>&1)"
+singlequote_multiline_exit=$?
+if [ "$singlequote_multiline_exit" -eq 0 ]; then
+  pass "statuses がシングルクォートの複数行YAMLリストな config.yml に対しても setup-improvement-loop が成功する（exit 0）"
+else
+  fail "statuses がシングルクォートの複数行YAMLリストな config.yml で setup-improvement-loop が失敗した（exit ${singlequote_multiline_exit}）:
+$singlequote_multiline_output"
+fi
+
+singlequote_multiline_config="$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog/config.yml"
+assert_statuses_present "$singlequote_multiline_config" "シングルクォートの複数行YAMLリストからの補完後（AC#1: 要素に引用符が残ったまま比較されていない）"
+assert_no_duplicate_status_insertion "$singlequote_multiline_config" "シングルクォートの複数行YAMLリストからの補完後（AC#1）"
+
+if grep -m1 '^statuses:' "$singlequote_multiline_config" | grep -Fq "'"; then
+  fail "5b-2: 補完後の statuses 行にシングルクォートの文字が残っている（引用符が剥がれていない）: $(grep -m1 '^statuses:' "$singlequote_multiline_config")"
+else
+  pass "5b-2: 補完後の statuses 行にシングルクォートの文字が残っていない（正しく引用符除去された）"
+fi
+
+echo ""
 echo "=== 6. config.my.yml の不足キー補完（マイグレーション）の回帰テスト ==="
 # 配布元テンプレート（backlogmd-custom-config/config.my.yml）に新しいキーが
 # 追加された状況を、「導入先の config.my.yml に一部キーが欠けている」状態として
