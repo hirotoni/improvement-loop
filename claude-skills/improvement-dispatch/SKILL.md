@@ -272,9 +272,15 @@ git diff <デフォルトブランチ>..<作業ブランチ> --stat
 - `forbidden_paths`/`allowed_paths` のバックストップ検証。上記と同じ2つのブランチ間の変更ファイル一覧を、機械的な照合スクリプトに突き合わせる。
 
   ```bash
+  CHANGED_FILES=()
+  while IFS= read -r f; do
+    [ -n "$f" ] && CHANGED_FILES+=("$f")
+  done < <(git diff <デフォルトブランチ>..<作業ブランチ> --name-only)
   .claude/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths \
-    $(git diff <デフォルトブランチ>..<作業ブランチ> --name-only)
+    "${CHANGED_FILES[@]}"
   ```
+
+  変更ファイル一覧は改行区切りで配列 `CHANGED_FILES` に読み込んでから `"${CHANGED_FILES[@]}"` として展開する。`$(git diff ...)` をクォート無しで直接展開すると、ファイル名中の半角スペースでも単語分割され、1つのパスが複数の偽の引数に壊れる。
 
   終了ステータスと標準出力の `RESULT: <値>` の行で判別する（0=OK, 1=VIOLATION, 2=ERROR）。`forbidden_paths`/`allowed_paths` が両方空、キー自体が無い、または `.backlog/config.my.yml` 自体が無い場合、このスクリプトは常に `RESULT: OK` で終わる（スクリプト自身の仕様）。そのため未設定のときはこの検証を実行しても判定は常に無違反となり、既存の手順6の実行フローに変化は生じない。`RESULT: VIOLATION` のときは標準出力の `VIOLATING_FILES` に違反ファイルが列挙される。`RESULT: ERROR` のときは標準エラー出力を確認し、環境不備（対象リポジトリでない等）を解消したうえで手順6をやり直す。backlog タスクの状態はこのスクリプト自体では変更しない。
 - 報告に挙がった検証コマンドを 1 つ選び、自分で実行して結果が一致するか確かめる。

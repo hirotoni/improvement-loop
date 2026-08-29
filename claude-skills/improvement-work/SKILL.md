@@ -154,13 +154,16 @@ git diff <デフォルトブランチ>...HEAD
 
 ```bash
 git add <変更したファイル>
-CHANGED_FILES="$(git diff --name-only --cached)"
-CHECK_OUTPUT="$(claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths $CHANGED_FILES 2>&1)"
+CHANGED_FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && CHANGED_FILES+=("$f")
+done < <(git diff --name-only --cached)
+CHECK_OUTPUT="$(claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths "${CHANGED_FILES[@]}" 2>&1)"
 CHECK_EXIT=$?
 printf '%s\n' "$CHECK_OUTPUT"
 ```
 
-- `git add` の直後、`git commit` の前に、`claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`（ワークツリー内に実体としてチェックアウトされている `claude-skills/` 配下の tracked パスを直接参照する。`.claude/skills/...` のシンボリックリンク経由では参照しない）に、ステージした変更ファイル一覧（`git diff --name-only --cached`）を渡し、`.backlog/config.my.yml` の `forbidden_paths`/`allowed_paths` と機械的に突き合わせる。
+- `git add` の直後、`git commit` の前に、`claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`（ワークツリー内に実体としてチェックアウトされている `claude-skills/` 配下の tracked パスを直接参照する。`.claude/skills/...` のシンボリックリンク経由では参照しない）に、ステージした変更ファイル一覧（`git diff --name-only --cached`）を渡し、`.backlog/config.my.yml` の `forbidden_paths`/`allowed_paths` と機械的に突き合わせる。ファイル名に半角スペースが含まれていても1ファイル=1引数のまま壊れないよう、`git diff` の出力を改行区切りで1行ずつ配列 `CHANGED_FILES` に読み込み、`"${CHANGED_FILES[@]}"` として展開する（`$CHANGED_FILES` のようにクォート無しで直接展開すると、ファイル名中の空白でも単語分割されて1つのパスが複数の偽の引数に壊れる）。
 - `forbidden_paths`/`allowed_paths` が両方空、またはキー自体が無い場合、このスクリプトは常に `RESULT: OK`・終了コード `0` で終わる。したがってこの手順を追加しても、両方未設定の既存タスクの実行フローは変化しない（そのまま `git commit` に進むだけである）。
 - `$CHECK_EXIT` の値で分岐する。
   - `0`（`RESULT: OK`）：違反なし。そのまま `git commit` する。
