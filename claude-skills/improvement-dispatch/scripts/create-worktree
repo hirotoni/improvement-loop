@@ -84,6 +84,50 @@ fi
 cd "$REPO_ROOT"
 REPO_NAME="$(basename "$REPO_ROOT")"
 
+# worktree_porcelain_pairs() の唯一の定義は bin/lib/worktree_porcelain.sh に
+# あり、それを source して使う（TASK-64）。このスクリプト自身は
+# claude-skills/improvement-dispatch/scripts/ 配下に置かれ、`.claude/skills/
+# improvement-dispatch` シンボリックリンク（配布元ディレクトリ丸ごとへの
+# リンク）経由で実行されることがあるため、bin/lib/worktree_porcelain.sh を
+# source するにはまず配布元リポジトリのルートを知る必要がある。
+# check-forbidden-allowed-paths（TASK-62）と同じ理由・同じロジックで、
+# まず自分自身の実パスを解決する。
+#
+# 配置場所についての注意（TASK-58回帰対策）: この source は、上の
+# git rev-parse --show-toplevel（git が PATH に無い環境で最初に失敗する
+# 外部コマンド呼び出し）より後に置くこと。tests/test_create_worktree.sh の
+# 9c（TASK-58）は「git 以外の外部コマンドはこれより前に登場しない」ことを
+# 前提に、git を含まない最小 PATH で git 不在時の診断メッセージ
+# （err() 経由、生の "command not found" が出ない）を検証している。
+# _bootstrap_resolve_own_path 自体は realpath/readlink/dirname/basename と
+# いった外部コマンドを使うため、git 呼び出しより前に置くとこのテストの
+# 前提が崩れ、git 不在時に本来の診断より先に "dirname: command not found"
+# 等の生エラーが出てしまう。
+#
+# 注意: ここで解決する配布元リポジトリのルート（DIST_REPO_ROOT）は、上の
+# REPO_ROOT（このスクリプトが実際にワークツリーを作成する対象リポジトリの
+# ルート）とは別物であり、混同しないこと。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元リポジトリ>/claude-skills/improvement-dispatch/scripts。
+# 3階層上が配布元リポジトリのルートである。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# shellcheck source=../../../bin/lib/worktree_porcelain.sh
+source "$DIST_REPO_ROOT/bin/lib/worktree_porcelain.sh"
+
 # git-common-dir は cwd 相対のパスを返すことがあるため、絶対パスへ正規化する。
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir)"
 case "$GIT_COMMON_DIR" in
@@ -172,11 +216,11 @@ existing_worktree_branch=""
 if [ -d "$WORKTREE_DIR" ]; then
   # パスに半角スペースを含むと awk のデフォルトフィールド分割（$2）では
   # スペース以降が切り捨てられ、$WORKTREE_DIR と一致しなくなる（TASK-55）。
-  # merge-reviewed-branch:196-199 と同じ substr(index()) パターンで、
-  # "worktree " 以降の行全体をパスとして復元する。
-  existing_worktree_branch="$(git worktree list --porcelain | awk -v d="$WORKTREE_DIR" '
-    $1 == "worktree" { cur = substr($0, index($0, $2)); next }
-    $1 == "branch" && cur == d { sub("^refs/heads/", "", $2); print $2; exit }
+  # そのパス復元ロジックは bin/lib/worktree_porcelain.sh の
+  # worktree_porcelain_pairs() に集約されている（TASK-64。以前はここに
+  # merge-reviewed-branch と同じ substr(index()) パターンを独立実装していた）。
+  existing_worktree_branch="$(git worktree list --porcelain | worktree_porcelain_pairs | awk -F'\t' -v d="$WORKTREE_DIR" '
+    $1 == d { print $2; exit }
   ')"
 fi
 

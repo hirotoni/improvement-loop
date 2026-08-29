@@ -111,10 +111,14 @@ cleanup_worktree_and_branch() {
   local repo_root="$1"
   local branch="$2"
 
+  # パスに半角スペースを含む場合の復元ロジックは bin/lib/worktree_porcelain.sh の
+  # worktree_porcelain_pairs() に集約されている（TASK-64。以前はここに
+  # create-worktree と同じ substr(index()) パターンを独立実装していた）。
+  # worktree_porcelain_pairs() は branch を refs/heads/ を除いた短縮名で
+  # 出すので、比較対象も "refs/heads/$branch" ではなく $branch にする。
   local worktree_path
-  worktree_path="$(git -C "$repo_root" worktree list --porcelain | awk -v branch="refs/heads/$branch" '
-    /^worktree / { path = substr($0, index($0, $2)) }
-    /^branch /   { if ($2 == branch) print path }
+  worktree_path="$(git -C "$repo_root" worktree list --porcelain | worktree_porcelain_pairs | awk -F'\t' -v branch="$branch" '
+    $2 == branch { print $1 }
   ')"
 
   if [ -n "$worktree_path" ]; then
@@ -155,6 +159,46 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
   emit_result "ERROR"
   exit 3
 fi
+
+# worktree_porcelain_pairs() の唯一の定義は bin/lib/worktree_porcelain.sh に
+# あり、それを source して使う（TASK-64）。このスクリプト自身は
+# claude-skills/improvement-dispatch/scripts/ 配下に置かれ、`.claude/skills/
+# improvement-dispatch` シンボリックリンク（配布元ディレクトリ丸ごとへの
+# リンク）経由で実行されることがあるため、bin/lib/worktree_porcelain.sh を
+# source するにはまず配布元リポジトリのルートを知る必要がある。
+# check-forbidden-allowed-paths（TASK-62）と同じ理由・同じロジックで、
+# まず自分自身の実パスを解決する。
+#
+# 配置場所についての注意（create-worktree:TASK-58回帰対策と揃える）: この
+# source は、上の git rev-parse --show-toplevel（git 不在時に最初に失敗する
+# 外部コマンド呼び出し）より後に置く。_bootstrap_resolve_own_path 自体が
+# realpath/readlink/dirname/basename という外部コマンドを使うため、これより
+# 前に置くと、git が PATH に無い環境で本来の診断より先に生の
+# "command not found" が出てしまう（create-worktree で実際に踏んだ回帰）。
+#
+# 注意: ここで解決する配布元リポジトリのルート（DIST_REPO_ROOT）は、上の
+# REPO_ROOT（マージ・ワークツリー片付けの対象リポジトリのルート）とは
+# 別物であり、混同しないこと。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元リポジトリ>/claude-skills/improvement-dispatch/scripts。
+# 3階層上が配布元リポジトリのルートである。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# shellcheck source=../../../bin/lib/worktree_porcelain.sh
+source "$DIST_REPO_ROOT/bin/lib/worktree_porcelain.sh"
 
 # ---- 1. 前提条件: メインの作業木がクリーンか ----
 # git status 自体の失敗（リポジトリの破損、ロック等）を、クリーンである

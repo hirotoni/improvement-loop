@@ -34,6 +34,7 @@ CHECK_FORBIDDEN_ALLOWED_SCRIPT="$REPO_ROOT/claude-skills/improvement-dispatch/sc
 RESOLVE_PATH_SCRIPT="$REPO_ROOT/bin/lib/resolve_path.sh"
 YAML_UNQUOTE_SCRIPT="$REPO_ROOT/bin/lib/yaml_unquote.sh"
 LIST_OPTED_IN_REPOS_SCRIPT="$REPO_ROOT/bin/lib/list_opted_in_repos.sh"
+WORKTREE_PORCELAIN_SCRIPT="$REPO_ROOT/bin/lib/worktree_porcelain.sh"
 WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT="$REPO_ROOT/claude-skills-workspace/workspace-dispatch/scripts/list-target-repos"
 WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT="$REPO_ROOT/claude-skills-workspace/workspace-scout/scripts/list-target-repos"
 WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT="$REPO_ROOT/claude-skills-workspace/workspace-scout-major/scripts/list-target-repos"
