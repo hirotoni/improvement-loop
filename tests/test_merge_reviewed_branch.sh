@@ -328,4 +328,56 @@ else
   fail "7g: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_nobranch_output"
 fi
 
+echo ""
+echo "--- 7h. デフォルトブランチが main 以外（master）でも ff-only マージが成功する（TASK-61 AC#1） ---"
+# メインの作業木用ディレクトリは、デフォルトブランチが "master" のソース
+# リポジトリを git clone して作る。git clone はローカルパスの clone でも
+# refs/remotes/origin/HEAD を自動設定するため、ネットワーク無しで
+# merge-reviewed-branch の symbolic-ref 経由のデフォルトブランチ判定
+# （create-worktree と同じ核心ロジック）を再現できる。
+TMP_MERGE_MASTER_SRC="$(mktemp -d)"
+register_tmp_cleanup "$TMP_MERGE_MASTER_SRC"
+(cd "$TMP_MERGE_MASTER_SRC" && git init -q -b master && git commit -q --allow-empty -m init)
+
+TMP_MERGE_MASTER_PARENT="$(mktemp -d)"
+TMP_MERGE_MASTER="$TMP_MERGE_MASTER_PARENT/clone"
+register_tmp_cleanup "$TMP_MERGE_MASTER_PARENT" "$TMP_MERGE_MASTER-wt"
+git clone -q "$TMP_MERGE_MASTER_SRC" "$TMP_MERGE_MASTER"
+
+(cd "$TMP_MERGE_MASTER" && git worktree add -q -b feature-master "$TMP_MERGE_MASTER-wt" master)
+(cd "$TMP_MERGE_MASTER-wt" && git commit -q --allow-empty -m "feature master work")
+
+merge_master_output="$(cd "$TMP_MERGE_MASTER" && "$MERGE_SCRIPT" feature-master 2>&1)"
+merge_master_exit=$?
+if [ "$merge_master_exit" -eq 0 ]; then
+  pass "7h: デフォルトブランチが master のリポジトリでも ff-only マージが終了ステータス 0 (MERGED) で成功する（AC#1）"
+else
+  fail "7h: デフォルトブランチが master の場合のマージが失敗した（${merge_master_exit}）: $merge_master_output"
+fi
+if grep -Fq "RESULT: MERGED" <<<"$merge_master_output"; then
+  pass "7h: 出力に RESULT: MERGED が含まれる（AC#1）"
+else
+  fail "7h: 出力に RESULT: MERGED が含まれない: $merge_master_output"
+fi
+if [ "$(cd "$TMP_MERGE_MASTER" && git log -1 --format=%s master)" = "feature master work" ]; then
+  pass "7h: master が feature-master の内容までマージされている（AC#1）"
+else
+  fail "7h: master が feature-master の内容までマージされていない"
+fi
+if [ -d "$TMP_MERGE_MASTER-wt" ]; then
+  fail "7h: マージ完了後も対応するワークツリーが片付けられていない"
+else
+  pass "7h: マージ完了後、対応するワークツリーが自動で片付けられる"
+fi
+if [ -z "$(cd "$TMP_MERGE_MASTER" && git branch --list feature-master)" ]; then
+  pass "7h: マージ完了後、対応する作業ブランチが自動で削除される"
+else
+  fail "7h: マージ完了後も対応する作業ブランチが削除されていない"
+fi
+if [ -z "$(cd "$TMP_MERGE_MASTER" && git branch --list main)" ]; then
+  pass "7h: main ブランチは作成も参照もされない（デフォルトブランチ名の解決が固定 main に依存していない）"
+else
+  fail "7h: 想定外の main ブランチが作成されている（main へのハードコードが残っている疑い）"
+fi
+
 finish_tests

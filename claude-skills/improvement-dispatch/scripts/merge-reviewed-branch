@@ -2,8 +2,16 @@
 # merge-reviewed-branch
 #
 # Reviewed になった improvement-loop の作業ブランチを、決定論的な手順で
-# main にマージする（improvement-dispatch 手順3の auto_merge_reviewed: true
-# パートに対応する）。
+# デフォルトブランチ（通常は main）にマージする（improvement-dispatch 手順3の
+# auto_merge_reviewed: true パートに対応する）。
+#
+# デフォルトブランチ名は claude-skills/improvement-dispatch/scripts/create-worktree
+# （161-166行目）と同じ核心ロジックで判定する：`git symbolic-ref --short
+# refs/remotes/origin/HEAD` を試し、解決できなければ "main" にフォールバックする。
+# create-worktree と異なり、このスクリプトは `git fetch origin` を行わない
+# （このスクリプトの決定論性・オフライン動作の方針を優先し、ローカルに既に
+# キャッシュされている refs/remotes/origin/HEAD をそのまま使う。通常は
+# git clone の時点で設定済みである。TASK-61）。
 #
 # 使い方:
 #   .claude/skills/improvement-dispatch/scripts/merge-reviewed-branch <作業ブランチ名>
@@ -15,8 +23,8 @@
 #
 # 行うこと（すべて機械的に判定できる分岐のみ）:
 #   1. メインの作業木がクリーンか（git status --porcelain が空か）を確認する。
-#   2. 対象ブランチが存在し、main との差分があるかを確認する。
-#      差分が無い（既に main にマージ済み）場合でも、対応するワークツリー・
+#   2. 対象ブランチが存在し、デフォルトブランチとの差分があるかを確認する。
+#      差分が無い（既にデフォルトブランチにマージ済み）場合でも、対応するワークツリー・
 #      作業ブランチの片付け（手順5-6）が未完了なら、ここでその片付けだけを
 #      再試行する（TASK-57）。これは過去の呼び出しでマージ自体は成功した
 #      ものの、対象ワークツリーが dirty 等の理由で片付け（手順5-6）が
@@ -39,7 +47,7 @@
 #   exit 0, RESULT: MERGED               マージ完了（ff-only または衝突無し3-way）
 #   exit 1, RESULT: PRECONDITION_NOT_MET マージ未実施。メインの作業木が汚れている、
 #                                         対象ブランチが存在しない、または
-#                                         main との差分が無い（この場合、対応する
+#                                         デフォルトブランチとの差分が無い（この場合、対応する
 #                                         ワークツリー・ブランチの片付けが未完了
 #                                         なら再試行される。片付けの成否は標準
 #                                         出力・標準エラー出力のメッセージで判別
@@ -94,7 +102,7 @@ abort_and_verify_restored() {
 }
 
 # 対応するワークツリー（存在すれば）と作業ブランチ自体を片付ける。
-# マージ完了直後の片付け（手順5-6）と、main との差分が既に無い場合の
+# マージ完了直後の片付け（手順5-6）と、デフォルトブランチとの差分が既に無い場合の
 # 片付け再試行（TASK-57）の両方から呼ぶ共通処理である。
 # git worktree remove / git branch -d はいずれも安全側の操作のみで、
 # --force/-D はしない。失敗してもエラーメッセージを出すだけで、
@@ -171,17 +179,25 @@ if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   exit 1
 fi
 
-# ---- 3. 前提条件: main との差分があるか ----
-if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/main"; then
-  err "main ブランチが存在しない"
+# ---- 3. 前提条件: デフォルトブランチとの差分があるか ----
+# デフォルトブランチ名は create-worktree と同じ核心ロジックで判定する
+# （git symbolic-ref --short refs/remotes/origin/HEAD、解決できなければ main
+# にフォールバック。fetch はしない。理由はファイル冒頭のコメントを参照。TASK-61）。
+DEFAULT_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+if [ -z "$DEFAULT_BRANCH" ]; then
+  DEFAULT_BRANCH="main"
+fi
+
+if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$DEFAULT_BRANCH"; then
+  err "デフォルトブランチが存在しない: $DEFAULT_BRANCH"
   emit_result "PRECONDITION_NOT_MET"
   exit 1
 fi
 
-commit_count="$(git -C "$REPO_ROOT" rev-list --count "main..$BRANCH" 2>/dev/null || true)"
+commit_count="$(git -C "$REPO_ROOT" rev-list --count "$DEFAULT_BRANCH..$BRANCH" 2>/dev/null || true)"
 if [ -z "$commit_count" ] || [ "$commit_count" -eq 0 ]; then
-  err "作業ブランチ '$BRANCH' に main との差分が無い"
-  # 差分が無い＝ブランチの内容は既に main に取り込み済みである。過去の
+  err "作業ブランチ '$BRANCH' に $DEFAULT_BRANCH との差分が無い"
+  # 差分が無い＝ブランチの内容は既にデフォルトブランチに取り込み済みである。過去の
   # 呼び出しでマージ自体は成功したが、対応するワークツリー・ブランチの
   # 片付け（手順5-6）が失敗して残っている可能性があるため、ここで
   # その片付けだけを再試行する（TASK-57）。今回は新規のマージを行って
@@ -193,9 +209,9 @@ if [ -z "$commit_count" ] || [ "$commit_count" -eq 0 ]; then
   exit 1
 fi
 
-# ---- 4. main に切り替える ----
-if ! git -C "$REPO_ROOT" switch main >/dev/null 2>&1; then
-  err "main への切り替えに失敗した"
+# ---- 4. デフォルトブランチに切り替える ----
+if ! git -C "$REPO_ROOT" switch "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+  err "$DEFAULT_BRANCH への切り替えに失敗した"
   emit_result "ERROR"
   exit 3
 fi
@@ -250,7 +266,7 @@ else
 fi
 
 merged_sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
-echo "main の位置: $merged_sha"
+echo "$DEFAULT_BRANCH の位置: $merged_sha"
 
 # ---- 7-8. 対応するワークツリー・作業ブランチを片付ける ----
 # git branch -d は安全削除（HEAD にマージ済みでないブランチは拒否する）であり、
