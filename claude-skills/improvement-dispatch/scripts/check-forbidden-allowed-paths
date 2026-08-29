@@ -61,6 +61,11 @@
 #     フォールバックすると、本タスクが修正した不具合
 #     （複数行YAMLリストが無音で無制限扱いになっていた）と同じ種類の
 #     問題を再現してしまうため、エラーとして検知する方針を採った。
+#   - 各要素の引用符除去（シングル/ダブル対称）は bin/lib/yaml_unquote.sh の
+#     trim_and_unquote() を使う（TASK-62。以前はこのファイル内に同じ内容の
+#     関数を独立定義しており、bin/setup-improvement-loop の
+#     parse_statuses_block 側のダブルクォート限定の実装との食い違いが
+#     不具合の原因だったため、唯一の定義に集約した）。
 #
 # 出力: 標準出力に次の行を出す（最終行が RESULT）。
 #   RESULT: OK         -> 違反なし
@@ -90,29 +95,46 @@ result_error() {
   exit 2
 }
 
+# trim_and_unquote() の唯一の定義は bin/lib/yaml_unquote.sh にあり、本来は
+# それを source して使う（TASK-62）。このスクリプト自身は
+# claude-skills/improvement-dispatch/scripts/ 配下に置かれ、`.claude/skills/
+# improvement-dispatch` シンボリックリンク（配布元ディレクトリ丸ごとへの
+# リンク。bin/setup-improvement-loop が配置する）経由で実行されることが
+# あるため、bin/lib/yaml_unquote.sh を source するにはまず配布元リポジトリの
+# ルートを知る必要がある。bin/setup-improvement-loop 冒頭のブートストラップ
+# 処理・claude-skills-workspace/*/scripts/list-target-repos と同じ理由・
+# 同じロジックで、まず自分自身の実パスを解決する。
+#
+# 注意: ここで解決する配布元リポジトリのルート（DIST_REPO_ROOT）は、下で
+# `git rev-parse --show-toplevel` により求める REPO_ROOT（このスクリプトが
+# 実際に判定対象とする対象リポジトリのルート。forbidden_paths/allowed_paths
+# はここの .backlog/config.my.yml から読む）とは別物であり、混同しないこと。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元リポジトリ>/claude-skills/improvement-dispatch/scripts。
+# 3階層上が配布元リポジトリのルートである。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# shellcheck source=../../../bin/lib/yaml_unquote.sh
+source "$DIST_REPO_ROOT/bin/lib/yaml_unquote.sh"
+
 if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
   result_error "カレントディレクトリが git リポジトリの中ではない: $REPO_ROOT"
 fi
 
 CONFIG_FILE="$REPO_ROOT/.backlog/config.my.yml"
-
-# $1 = 配列要素の生文字列（前後に空白・引用符を含みうる）。前後の空白と、
-# それを囲む引用符（シングル/ダブル、両端が対になっている場合のみ）を
-# 取り除いた結果を標準出力に出す。sed 等の外部コマンドを使わず純粋な
-# bash 展開のみで行う（local宣言とコマンド置換代入を同時に行うのを避ける
-# 規約（SC2155 対策）に、この関数自体も従っている）。
-trim_and_unquote() {
-  local s="$1"
-  s="${s#"${s%%[![:space:]]*}"}"
-  s="${s%"${s##*[![:space:]]}"}"
-  if [ "${#s}" -ge 2 ]; then
-    case "$s" in
-      \"*\") s="${s:1:${#s}-2}" ;;
-      \'*\') s="${s:1:${#s}-2}" ;;
-    esac
-  fi
-  printf '%s' "$s"
-}
 
 # $1 = YAML のキー名（forbidden_paths | allowed_paths）。CONFIG_FILE から
 # 該当キーの値を読み、要素を1行1件で標準出力に出す。次の2形式をサポートする

@@ -28,15 +28,18 @@ echo "=== 1. 構文チェック ==="
 # - `-x -P SCRIPTDIR` が必要なのは、他のスクリプト/ライブラリを source する
 #   スクリプト（bin/setup-improvement-loop・install.zsh・
 #   bin/lib/list_opted_in_repos.sh・claude-skills-workspace/workspace-dispatch・
-#   workspace-scout・workspace-scout-major の各 scripts/list-target-repos）である。
-#   source 先を実際に追って検査させる指定で、無いと常に SC1091 で誤って失敗する。
+#   workspace-scout・workspace-scout-major の各 scripts/list-target-repos・
+#   claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths）
+#   である。source 先を実際に追って検査させる指定で、無いと常に SC1091 で
+#   誤って失敗する。
 # - install.zsh だけ hard failure にしない（4フィールド目が true）。zsh 専用
 #   スクリプトで、shellcheck は zsh を直接サポートしないため（下のshellcheck
 #   ループのコメントを参照）。
-# - bin/lib/resolve_path.sh・bin/lib/list_opted_in_repos.sh は、bash/zsh
-#   両方から source される想定（前者）、または他のバッシュスクリプトから
-#   source されるだけ（後者）で、いずれもシバンを持たない（各ファイル冒頭
-#   コメント参照）。そのため shellcheck にシバン無しのまま渡すと、対象シェルが
+# - bin/lib/resolve_path.sh・bin/lib/list_opted_in_repos.sh・
+#   bin/lib/yaml_unquote.sh は、bash/zsh 両方から source される想定
+#   （resolve_path.sh）、または他のバッシュスクリプトから source される
+#   だけ（他の2つ）で、いずれもシバンを持たない（各ファイル冒頭コメント
+#   参照）。そのため shellcheck にシバン無しのまま渡すと、対象シェルが
 #   不明として SC2148 (error) になり必ず失敗する（シバンや shellcheck
 #   ディレクティブをファイル自体に足すのは対象スクリプトへの変更になるため、
 #   CHECK_SCRIPTS 側のフラグだけで解決する）。`--shell=bash` を渡すことで、
@@ -47,6 +50,7 @@ CHECK_SCRIPTS=(
   "$INSTALL_SCRIPT|install.zsh|-x -P SCRIPTDIR|true"
   "$SETUP_SCRIPT|bin/setup-improvement-loop|-x -P SCRIPTDIR|false"
   "$RESOLVE_PATH_SCRIPT|bin/lib/resolve_path.sh|--shell=bash|false"
+  "$YAML_UNQUOTE_SCRIPT|bin/lib/yaml_unquote.sh|--shell=bash|false"
   "$LIST_OPTED_IN_REPOS_SCRIPT|bin/lib/list_opted_in_repos.sh|-x -P SCRIPTDIR --shell=bash|false"
   "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
@@ -57,7 +61,7 @@ CHECK_SCRIPTS=(
   "$CHECK_HANDOFF_SCRIPT|claude-skills/improvement-work/scripts/check-handoff||false"
   "$PRECOMMIT_HOOK|githooks/pre-commit||false"
   "$CHECK_RECOVERY_SCRIPT|claude-skills/improvement-dispatch/scripts/check-progress-recovery||false"
-  "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths||false"
+  "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
 )
 
 SYNTAX_ERR_FILE="/tmp/tests-run-sh-syntax-err.$$"

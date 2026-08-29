@@ -38,6 +38,13 @@ echo "=== 14. claude-skills/improvement-dispatch/scripts/check-forbidden-allowed
 #   14m. forbidden_paths の値が配列でもスカラーでもない壊れたYAML/サポート
 #        対象外の記法（例: クォートされていない単一のパス文字列）のとき、
 #        RESULT: ERROR（exit 2）になる（TASK-56 AC#3）
+#   14n. forbidden_paths をシングルクォートのインライン配列で書いた場合、
+#        ダブルクォート版と同じ判定結果になる（TASK-62 AC#2: 引用符除去は
+#        bin/lib/yaml_unquote.sh の trim_and_unquote に集約されており、
+#        bin/setup-improvement-loop の parse_statuses_block と挙動が
+#        一致することをここでも確認する）
+#   14o. forbidden_paths をシングルクォートの複数行YAMLリストで書いた場合、
+#        ダブルクォート版と同じ判定結果になる（TASK-62 AC#2）
 
 TMP_CFA_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
@@ -274,6 +281,48 @@ if [ "$cfa_exit_m" -eq 2 ] && printf '%s\n' "$cfa_out_m" | grep -Fxq 'RESULT: ER
 else
   fail "14m: 期待した結果と異なる（exit ${cfa_exit_m}）:
 $cfa_out_m"
+fi
+
+echo ""
+echo "--- 14n. forbidden_paths をシングルクォートのインライン配列で書いた場合、ダブルクォート版と同じ判定結果になる（TASK-62 AC#2） ---"
+write_cfa_config "['secrets/', 'vendor/']" '[]'
+cfa_out_n1="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
+cfa_exit_n1=$?
+if [ "$cfa_exit_n1" -eq 1 ] && printf '%s\n' "$cfa_out_n1" | grep -Fxq 'RESULT: VIOLATION' \
+    && printf '%s\n' "$cfa_out_n1" | grep -Fxq 'VIOLATION_COUNT: 1' \
+    && printf '%s\n' "$cfa_out_n1" | grep -Fxq 'secrets/token.txt'; then
+  pass "14n: シングルクォートのインライン配列の forbidden_paths でも、ダブルクォート版（14a）と同じ RESULT: VIOLATION（TASK-62 AC#2）"
+else
+  fail "14n: 期待した結果と異なる（exit ${cfa_exit_n1}）:
+$cfa_out_n1"
+fi
+cfa_out_n2="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
+cfa_exit_n2=$?
+if [ "$cfa_exit_n2" -eq 0 ] && printf '%s\n' "$cfa_out_n2" | grep -Fxq 'RESULT: OK'; then
+  pass "14n: シングルクォートのインライン配列の forbidden_paths に一致しない変更ファイルのときは RESULT: OK"
+else
+  fail "14n: 期待した結果と異なる（exit ${cfa_exit_n2}）:
+$cfa_out_n2"
+fi
+
+echo ""
+echo "--- 14o. forbidden_paths をシングルクォートの複数行YAMLリストで書いた場合、ダブルクォート版と同じ判定結果になる（TASK-62 AC#2） ---"
+cat >"$CFA_CONFIG" <<'EOF'
+improvement_loop:
+  forbidden_paths:
+    - 'secrets/'
+    - 'vendor/'
+  allowed_paths: []
+EOF
+cfa_out_o="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
+cfa_exit_o=$?
+if [ "$cfa_exit_o" -eq 1 ] && printf '%s\n' "$cfa_out_o" | grep -Fxq 'RESULT: VIOLATION' \
+    && printf '%s\n' "$cfa_out_o" | grep -Fxq 'VIOLATION_COUNT: 1' \
+    && printf '%s\n' "$cfa_out_o" | grep -Fxq 'secrets/token.txt'; then
+  pass "14o: シングルクォートの複数行YAMLリストの forbidden_paths でも、ダブルクォート版（14j）と同じ RESULT: VIOLATION（TASK-62 AC#2）"
+else
+  fail "14o: 期待した結果と異なる（exit ${cfa_exit_o}）:
+$cfa_out_o"
 fi
 
 # 後片付け: write_cfa_config で使う想定のインライン配列形式に戻しておく
