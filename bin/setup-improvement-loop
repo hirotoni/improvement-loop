@@ -10,8 +10,9 @@
 #
 # 引数を省略した場合は現在のディレクトリを対象とする。
 # --workspace を指定すると、対象を単一リポジトリではなくワークスペース
-# ディレクトリとして扱い、workspace-dispatch / workspace-scout スキルを
-# 配置する別経路（setup_workspace）に切り替わる。この経路では backlog init
+# ディレクトリとして扱い、claude-skills-workspace/ 配下のスキル一式
+# （動的に列挙されるため個数・名前は固定ではない）を配置する別経路
+# （setup_workspace）に切り替わる。この経路では backlog init
 # や .backlog/ 配下の配置は一切行わないため、backlog CLI は不要になる
 # （対象ディレクトリが git リポジトリである必要も無い）。
 #
@@ -469,7 +470,7 @@ append_git_exclude_lines() {
 
 # setup_workspace: `--workspace` 経路のセットアップ本体。対象ディレクトリ
 # （git リポジトリである必要はない）に claude-skills-workspace/ 配下の
-# スキル（workspace-dispatch / workspace-scout）を動的に列挙し、
+# スキル一式（個数・名前は固定ではなく実行時に動的列挙される）を
 # `.claude/skills/` へシンボリックリンクとして冪等に配置する。
 # backlog init やバックログ関連ファイル（.backlog/*）の配置は一切行わない。
 # 対象ディレクトリが git リポジトリでもある場合（レアケース）だけ、
@@ -532,10 +533,23 @@ setup_workspace() {
       log "  - $item"
     done
   fi
+  # 実際に配置したスキル名（workspace_skill_names）から、次の案内ログで
+  # 使う一覧文字列を組み立てる。ハードコードした名前ではなく実体の動的
+  # 列挙結果をそのまま使うことで、将来スキルが増減しても案内が自動追従する。
+  local placed_skill_list=""
+  local placed_skill_name
+  for placed_skill_name in "${workspace_skill_names[@]}"; do
+    if [ -z "$placed_skill_list" ]; then
+      placed_skill_list="$placed_skill_name"
+    else
+      placed_skill_list="$placed_skill_list / $placed_skill_name"
+    fi
+  done
+
   log ""
   log "次にすること:"
   log "  1. ワークスペース配下の各リポジトリで 'setup-improvement-loop <リポジトリのパス>'（--workspace 無し）を実行し、improvement-dispatch / improvement-scout を opt-in させる"
-  log "  2. workspace-dispatch / workspace-scout スキルを、このワークスペースディレクトリで使う（opt-in 済みのリポジトリだけを対象に横断処理する）"
+  log "  2. $placed_skill_list スキルを、このワークスペースディレクトリで使う（opt-in 済みのリポジトリだけを対象に横断処理する）"
 }
 
 # .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
