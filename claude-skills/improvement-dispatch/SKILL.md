@@ -263,19 +263,21 @@ BRANCH=<割り当てた作業ブランチ名>
 ```bash
 backlog task view TASK-<n> --plain
 git log <デフォルトブランチ>..<作業ブランチ> --oneline
-git diff <デフォルトブランチ>..<作業ブランチ> --stat
+git diff <デフォルトブランチ>...<作業ブランチ> --stat
 ```
+
+`git diff` は3ドット（`A...B` = `git diff $(git merge-base A B) B`、マージベース起点）で取る。2ドット（`A..B` = 両端の比較）にすると、分岐後にデフォルトブランチが進んでいる場合に、デフォルトブランチ側だけで変わったファイルまで差分に載る。手順6が動く時点では、In Review が複数件並ぶ間に別のタスクがマージされてデフォルトブランチが進んでいるのが通常であり、下の範囲レビューとバックストップ検証の根拠が汚れる。3ドットならマージベース起点になり、この作業ブランチが加えた変更だけを見る。`git log` の方は2ドットのままでよい。`git log A..B` は「B にあって A に無いコミット」であり、これは既に作業ブランチ側だけを見る指定である（`git log` の3ドットは対称差で、デフォルトブランチ側のコミットまで含んでしまい逆に壊れる）。同じ3ドットの指定を improvement-work/SKILL.md 手順6のレビューパスと check-forbidden-allowed-paths の使用例でも使っている。
 
 - status が `In Review` になっているか。
 - 受入基準がチェックされ、notes に検証の証跡（実行したコマンドと結果）があるか。
 - ブランチにコミットがあるか。差分が受入基準の範囲に収まっているか。
-- `forbidden_paths`/`allowed_paths` のバックストップ検証。上記と同じ2つのブランチ間の変更ファイル一覧を、機械的な照合スクリプトに突き合わせる。
+- `forbidden_paths`/`allowed_paths` のバックストップ検証。上記の `--stat` と同じ範囲（マージベース起点の3ドット）で取った変更ファイル一覧を、機械的な照合スクリプトに突き合わせる。
 
   ```bash
   CHANGED_FILES=()
   while IFS= read -r f; do
     [ -n "$f" ] && CHANGED_FILES+=("$f")
-  done < <(git diff <デフォルトブランチ>..<作業ブランチ> --name-only)
+  done < <(git diff <デフォルトブランチ>...<作業ブランチ> --name-only)
   .claude/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths \
     "${CHANGED_FILES[@]}"
   ```
