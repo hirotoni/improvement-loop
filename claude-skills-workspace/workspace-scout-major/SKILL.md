@@ -189,8 +189,13 @@ backlog task create --help
 ```
 
 `Proposed` が `statuses` に無ければ `.backlog/config.yml`（または `backlog/config.yml`）の
-`statuses` に先頭で追加する（`backlog config set` では変更できない）。読み取り系コマンドには
-必ず `--plain` を付ける。
+`statuses` に先頭で追加する（`backlog config set` では変更できない）。上のブロックの
+`backlog config get` と `backlog instructions` は、`backlog config list` と同様に `--plain` を
+受け付けない。渡すと `error: unknown option '--plain'` を出して終了コード1で終わるため、
+`--plain` 無しで実行する（対話 UI にはならない）。`--plain` が必要なのは `backlog task list` /
+`backlog task view` / `backlog search` / `backlog milestone list` の側であり、こちらは付けないと
+対話 UI が起動してセッションが止まる。判断に迷うコマンドは `backlog <サブコマンド> --help` の
+Input schema に `--plain` があるかで確かめる。
 
 ### 6.3 各リポジトリで milestone を起票する
 
