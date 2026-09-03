@@ -23,13 +23,35 @@ description: improvement-dispatch から引き渡された Backlog.md タスク�
 cd "<引き渡された作業ディレクトリ>"
 backlog instructions task-execution
 backlog task view TASK-<n> --plain
-claude-skills/improvement-work/scripts/check-handoff "<引き渡された作業ディレクトリ>" "<引き渡されたブランチ名>"
+# check-handoff の実体を探す（探索順とその理由は下の箇条書きを参照）。
+HANDOFF_SCRIPT=""
+MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+for candidate in \
+  "claude-skills/improvement-work/scripts/check-handoff" \
+  "$MAIN_WORKTREE_ROOT/.claude/skills/improvement-work/scripts/check-handoff"; do
+  if [ -x "$candidate" ]; then
+    HANDOFF_SCRIPT="$candidate"
+    break
+  fi
+done
+if [ -n "$HANDOFF_SCRIPT" ]; then
+  "$HANDOFF_SCRIPT" "<引き渡された作業ディレクトリ>" "<引き渡されたブランチ名>"
+  HANDOFF_EXIT=$?
+else
+  echo "エラー: check-handoff の実体が見つからない" >&2
+  HANDOFF_EXIT=2
+fi
+echo "HANDOFF_EXIT=$HANDOFF_EXIT"
 ```
 
-- `check-handoff` は、作業ディレクトリ一致・ブランチ一致・`.backlog` シンボリックリンクの健全性という、引き渡しが完全かどうかを機械的に判定できる3条件をまとめて確認する（`claude-skills/improvement-work/scripts/check-handoff` 参照）。3条件すべてを満たせば終了コード0、いずれかを満たさなければ標準エラーにどの条件が満たされていないかを明示して非0の終了コードで終わる。
-- 引数には、引き渡された作業ディレクトリの絶対パスと、引き渡されたブランチ名をそのまま渡す。
+- `check-handoff` は、作業ディレクトリ一致・ブランチ一致・`.backlog` シンボリックリンクの健全性という、引き渡しが完全かどうかを機械的に判定できる3条件をまとめて確認する（スクリプトの中身は配布元の `claude-skills/improvement-work/scripts/check-handoff` を読むこと。実行時にどのパスで呼ぶかは下の探索順で決める）。3条件すべてを満たせば終了コード0、いずれかを満たさなければ標準エラーにどの条件が満たされていないかを明示して非0の終了コードで終わる。
+- 引数には、引き渡された作業ディレクトリの絶対パスと、引き渡されたブランチ名をそのまま渡す。呼び出し側は `cd` 済みのワークツリーをカレントディレクトリとして持っていればよく、スクリプトをどのパスから呼んでも判定結果は変わらない（このスクリプト自身は `cd` せず、カレントディレクトリと引数だけで3条件を判定する）。
+- 参照パスは固定しない。次の順に探し、最初に見つかった実行可能な実体を使う。これは手順8が `check-forbidden-allowed-paths` に対して行う探索とまったく同じで、理由（導入先リポジトリには `claude-skills/` が無く、`bin/setup-improvement-loop` が配る `.claude/skills/<スキル名>` シンボリックリンクは git 管理外でワークツリーに複製されないこと、メインの作業木のパスを `git worktree list --porcelain` の1行目から取ること）は手順8の該当箇所に書いてある（TASK-68・TASK-71）。同じ説明をここに繰り返さない。
+  1. `claude-skills/improvement-work/scripts/check-handoff`（このワークツリー内。improvement-loop 自身のリポジトリで解決する）。
+  2. `<メインの作業木>/.claude/skills/improvement-work/scripts/check-handoff`（improvement-loop 以外の導入先リポジトリで解決する）。
+- どちらのパスにも実体が無い場合（`setup-improvement-loop` による導入が済んでいない等）は、スクリプトを実行せずに `HANDOFF_EXIT=2`（環境不備）として扱い、下の「非0で終了した場合」と同じように報告して止まる。以前はワークツリー内の tracked パスだけを直接参照していたため、improvement-loop 以外の導入先では引き渡しが正常でも必ず `127` になり、毎回「引き渡し不備」と誤診断されていた（TASK-71）。
 - 指定された作業ディレクトリ（ワークツリー、例: `<リポジトリルート>/.worktree/task-<n>-<スラッグ>`）へは自分で `cd` する。自分でブランチを作成・切り替え（`git switch`、`git checkout` 等）しない。ワークツリーは引き渡し時点で既に指定のブランチを checkout 済みである。
-- `check-handoff` が非0で終了した場合（作業ディレクトリが存在しない、`.backlog/` が見当たらない・シンボリックリンクになっていない等）は、dispatch の引き渡しが不完全なので、標準エラーの内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側（自分自身）が行う。
+- `check-handoff` が非0で終了した場合（`$HANDOFF_EXIT` が0以外。作業ディレクトリが存在しない、`.backlog/` が見当たらない・シンボリックリンクになっていない等）は、dispatch の引き渡しが不完全なので、標準エラーの内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側（自分自身）が行う。
 - `check-handoff` はこの3条件のみを機械的に確認する。ワークツリー自体が `git worktree list` に登録されているか（worktree の管理情報が壊れているケース等）は範囲外なので、疑わしい場合は別途 `git worktree list` で確認すること。
 - `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。dispatch が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。
 - このディレクトリはメインの作業木（人間が普段作業する場所）とは別の独立したワークツリーである。メインの作業木のファイルには一切触れない。
