@@ -45,6 +45,15 @@ echo "=== 14. claude-skills/improvement-dispatch/scripts/check-forbidden-allowed
 #        一致することをここでも確認する）
 #   14o. forbidden_paths をシングルクォートの複数行YAMLリストで書いた場合、
 #        ダブルクォート版と同じ判定結果になる（TASK-62 AC#2）
+#   14p. .git/info/exclude で除外された .backlog/ 配下の変更は git diff 由来の
+#        変更ファイル一覧に載らないため、forbidden_paths に ".backlog/" を
+#        書いても RESULT: OK のまま止まらない。一方、同じパスを引数で明示的に
+#        渡せば VIOLATION になる（TASK-69 AC#1。死角は判定側ではなく一覧の
+#        作り方の側にあることを固定する）
+#   14q. .claude/skills/<スキル名> 配下についても同じ（TASK-69 AC#2）
+#   14r. その限界が、設定箇所（backlogmd-custom-config/config.my.yml）と
+#        スクリプトの契約コメントの両方に明記されている（TASK-69 AC#1/AC#2。
+#        記述が黙って消えるのを防ぐ）
 
 TMP_CFA_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
@@ -323,6 +332,107 @@ if [ "$cfa_exit_o" -eq 1 ] && printf '%s\n' "$cfa_out_o" | grep -Fxq 'RESULT: VI
 else
   fail "14o: 期待した結果と異なる（exit ${cfa_exit_o}）:
 $cfa_out_o"
+fi
+
+echo ""
+echo "--- 14p. git 管理外（.git/info/exclude で除外）の .backlog/ 配下は git diff 由来の一覧に載らず機械的に止まらないが、引数で明示すれば判定される（TASK-69 AC#1） ---"
+# bin/setup-improvement-loop 手順6が導入先の .git/info/exclude に .backlog と
+# .claude/skills/<スキル名> を登録するため、この2つは git 管理外になる。
+# 呼び出し側2箇所は変更ファイル一覧を git diff から作るので、これらのパスは
+# 一覧に載らず、forbidden_paths に書いても機械的には止まらない。
+# 一方でスクリプト自身はパスの追跡状態を見ないため、引数として渡されさえすれば
+# 判定する。この「死角は判定側ではなく一覧の作り方の側にある」という切り分けを
+# 固定するのがこの2ケースである（限界の記述そのものは 14r で確認する）。
+TMP_CFA_IGNORED="$(mktemp -d)"
+TMP_CFA_IGNORED="$(cd "$TMP_CFA_IGNORED" && pwd -P)"
+register_tmp_cleanup "$TMP_CFA_IGNORED"
+(
+  cd "$TMP_CFA_IGNORED" || exit 1
+  git init -q -b main
+  git commit -q --allow-empty -m init
+  printf '.backlog\n.claude/skills/improvement-dispatch\n' >> .git/info/exclude
+  mkdir -p .backlog .claude/skills/improvement-dispatch/scripts
+  cat > .backlog/config.my.yml <<'CFG'
+improvement_loop:
+  forbidden_paths: [".backlog/", ".claude/"]
+  allowed_paths: []
+CFG
+  printf 'changed\n' > .claude/skills/improvement-dispatch/scripts/create-worktree
+  printf 'src\n' > app.txt
+  git add app.txt
+) >/dev/null 2>&1
+
+cfa_ignored_changed=()
+while IFS= read -r cfa_line; do
+  [ -n "$cfa_line" ] && cfa_ignored_changed+=("$cfa_line")
+done < <(cd "$TMP_CFA_IGNORED" && git diff --name-only --cached)
+
+if [ "${#cfa_ignored_changed[@]}" -eq 1 ] && [ "${cfa_ignored_changed[0]}" = "app.txt" ]; then
+  pass "14p: git 管理外の .backlog/config.my.yml を書き換えても git diff --name-only --cached の一覧には現れない"
+else
+  fail "14p: 変更ファイル一覧が期待と異なる（${#cfa_ignored_changed[@]} 件）:
+${cfa_ignored_changed[*]+${cfa_ignored_changed[*]}}"
+fi
+
+cfa_out_p="$(cd "$TMP_CFA_IGNORED" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" ${cfa_ignored_changed[@]+"${cfa_ignored_changed[@]}"} 2>&1)"
+cfa_exit_p=$?
+if [ "$cfa_exit_p" -eq 0 ] && printf '%s\n' "$cfa_out_p" | grep -Fxq 'RESULT: OK'; then
+  pass "14p: forbidden_paths に \".backlog/\" があっても、git 差分由来の一覧を渡す限り RESULT: OK（機械的には止まらない。この限界は設定箇所とスクリプトのヘッダーに明記されている）"
+else
+  fail "14p: 期待した結果と異なる（exit ${cfa_exit_p}）:
+$cfa_out_p"
+fi
+
+cfa_out_p2="$(cd "$TMP_CFA_IGNORED" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" ".backlog/config.my.yml" 2>&1)"
+cfa_exit_p2=$?
+if [ "$cfa_exit_p2" -eq 1 ] && printf '%s\n' "$cfa_out_p2" | grep -Fxq 'RESULT: VIOLATION' \
+    && printf '%s\n' "$cfa_out_p2" | grep -Fxq '.backlog/config.my.yml'; then
+  pass "14p: 同じ .backlog/config.my.yml を引数で明示的に渡せば RESULT: VIOLATION（スクリプトはパスの追跡状態を見ない）"
+else
+  fail "14p: 期待した結果と異なる（exit ${cfa_exit_p2}）:
+$cfa_out_p2"
+fi
+
+echo ""
+echo "--- 14q. git 管理外の .claude/skills/<スキル名> 配下も同じく git に見えず機械的に止まらないが、引数で明示すれば判定される（TASK-69 AC#2） ---"
+cfa_status_q="$(cd "$TMP_CFA_IGNORED" && git status --porcelain)"
+if ! printf '%s\n' "$cfa_status_q" | grep -Fq '.claude/skills/improvement-dispatch'; then
+  pass "14q: .claude/skills/improvement-dispatch 配下の書き換えは git status --porcelain にも現れない（配布元リポジトリの実体への波及が導入先の git に見えないのと同じ理由）"
+else
+  fail "14q: 期待に反して git status に現れた:
+$cfa_status_q"
+fi
+
+cfa_out_q="$(cd "$TMP_CFA_IGNORED" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" ".claude/skills/improvement-dispatch/scripts/create-worktree" 2>&1)"
+cfa_exit_q=$?
+if [ "$cfa_exit_q" -eq 1 ] && printf '%s\n' "$cfa_out_q" | grep -Fxq 'RESULT: VIOLATION' \
+    && printf '%s\n' "$cfa_out_q" | grep -Fxq '.claude/skills/improvement-dispatch/scripts/create-worktree'; then
+  pass "14q: .claude/skills/<スキル名> 配下のパスを引数で明示的に渡せば RESULT: VIOLATION"
+else
+  fail "14q: 期待した結果と異なる（exit ${cfa_exit_q}）:
+$cfa_out_q"
+fi
+
+echo ""
+echo "--- 14r. 機械的に止まらない範囲が、設定箇所（config.my.yml テンプレート）とスクリプトの契約コメントの両方に明記されている（TASK-69 AC#1/AC#2） ---"
+# 14p/14q が固定しているのは「止まらない」という事実だけである。受入基準が
+# 求めているのは、その事実が設定する人の読む場所に書かれていることなので、
+# 記述が黙って消えないようここで確認する。
+if grep -Fq 'git 管理外' "$SOURCE_CONFIG" \
+    && grep -Fq '.git/info/exclude' "$SOURCE_CONFIG" \
+    && grep -Fq '.backlog/' "$SOURCE_CONFIG" \
+    && grep -Fq '.claude/skills/' "$SOURCE_CONFIG"; then
+  pass "14r: config.my.yml テンプレートの forbidden_paths/allowed_paths のコメントに、git 管理外パス（.backlog/ ・.claude/skills/ ・.git/info/exclude）が機械的に止まらない旨が書かれている"
+else
+  fail "14r: config.my.yml テンプレートに git 管理外パスの限界の記述が無い: $SOURCE_CONFIG"
+fi
+
+if grep -Fq 'git 管理外' "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" \
+    && grep -Fq '.backlog/' "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" \
+    && grep -Fq '.claude/skills/' "$CHECK_FORBIDDEN_ALLOWED_SCRIPT"; then
+  pass "14r: check-forbidden-allowed-paths の契約コメントに、判定が及ばない範囲（git 管理外パス）が書かれている"
+else
+  fail "14r: check-forbidden-allowed-paths のヘッダーに限界の記述が無い: $CHECK_FORBIDDEN_ALLOWED_SCRIPT"
 fi
 
 # 後片付け: write_cfa_config で使う想定のインライン配列形式に戻しておく
