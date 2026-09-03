@@ -155,16 +155,38 @@ git diff <デフォルトブランチ>...HEAD
 
 ```bash
 git add <変更したファイル>
+# check-forbidden-allowed-paths の実体を探す（探索順とその理由は下の箇条書きを参照）。
+CHECK_SCRIPT=""
+MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+for candidate in \
+  "claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths" \
+  "$MAIN_WORKTREE_ROOT/.claude/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths"; do
+  if [ -x "$candidate" ]; then
+    CHECK_SCRIPT="$candidate"
+    break
+  fi
+done
 CHANGED_FILES=()
 while IFS= read -r f; do
   [ -n "$f" ] && CHANGED_FILES+=("$f")
 done < <(git diff --name-only --cached)
-CHECK_OUTPUT="$(claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths "${CHANGED_FILES[@]}" 2>&1)"
-CHECK_EXIT=$?
+if [ -n "$CHECK_SCRIPT" ]; then
+  CHECK_OUTPUT="$("$CHECK_SCRIPT" "${CHANGED_FILES[@]}" 2>&1)"
+  CHECK_EXIT=$?
+else
+  CHECK_OUTPUT="RESULT: ERROR (check-forbidden-allowed-paths の実体が見つからない)"
+  CHECK_EXIT=2
+fi
 printf '%s\n' "$CHECK_OUTPUT"
+echo "CHECK_EXIT=$CHECK_EXIT"
 ```
 
-- `git add` の直後、`git commit` の前に、`claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`（ワークツリー内に実体としてチェックアウトされている `claude-skills/` 配下の tracked パスを直接参照する。`.claude/skills/...` のシンボリックリンク経由では参照しない）に、ステージした変更ファイル一覧（`git diff --name-only --cached`）を渡し、`.backlog/config.my.yml` の `forbidden_paths`/`allowed_paths` と機械的に突き合わせる。ファイル名に半角スペースが含まれていても1ファイル=1引数のまま壊れないよう、`git diff` の出力を改行区切りで1行ずつ配列 `CHANGED_FILES` に読み込み、`"${CHANGED_FILES[@]}"` として展開する（`$CHANGED_FILES` のようにクォート無しで直接展開すると、ファイル名中の空白でも単語分割されて1つのパスが複数の偽の引数に壊れる）。
+- `git add` の直後、`git commit` の前に、`check-forbidden-allowed-paths` に、ステージした変更ファイル一覧（`git diff --name-only --cached`）を渡し、`.backlog/config.my.yml` の `forbidden_paths`/`allowed_paths` と機械的に突き合わせる。ファイル名に半角スペースが含まれていても1ファイル=1引数のまま壊れないよう、`git diff` の出力を改行区切りで1行ずつ配列 `CHANGED_FILES` に読み込み、`"${CHANGED_FILES[@]}"` として展開する（`$CHANGED_FILES` のようにクォート無しで直接展開すると、ファイル名中の空白でも単語分割されて1つのパスが複数の偽の引数に壊れる）。
+- 参照パスは固定しない。次の順に探し、最初に見つかった実行可能な実体を使う（TASK-68）。
+  1. `claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`（このワークツリー内）。improvement-loop 自身のリポジトリでは `claude-skills/` が tracked なのでワークツリーにも実体としてチェックアウトされている。この場合は作業ブランチ側の内容が使われる。
+  2. `<メインの作業木>/.claude/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`。improvement-loop 以外の導入先リポジトリには `claude-skills/` が無く、`bin/setup-improvement-loop` が配るのは `.claude/skills/<スキル名>` というシンボリックリンクだけである。しかもそれは `.git/info/exclude` に登録されて git 管理外なので、`git worktree add` で作られたワークツリーには複製されない。つまり導入先ではこの実体はメインの作業木にしか存在しない。メインの作業木のパスは `git worktree list --porcelain` の1行目（`worktree <パス>`）から取る。
+- メインの作業木側の実体を呼んでも判定対象は変わらない。このスクリプトはカレントディレクトリから `git rev-parse --show-toplevel` で対象リポジトリを決め、その直下の `.backlog/config.my.yml`（ワークツリーでは `.backlog` シンボリックリンク経由でメインの作業木の実体を指す）を読むためである。スクリプト自身も自分の実パスから配布元リポジトリのルートを解決するので、シンボリックリンク経由でも `bin/lib/` の読み込みは壊れない。
+- どちらのパスにも実体が無い場合（`setup-improvement-loop` による導入が済んでいない等）は、スクリプトを実行せずに `CHECK_EXIT=2`（環境不備）として扱う。見つからないまま `git commit` に進まない。以前はワークツリー内の tracked パスだけを直接参照していたため、improvement-loop 以外の導入先では必ず終了コード `127` になり、下の `0`/`1`/`2` のどの分岐にも当たらなかった（TASK-68）。
 - `forbidden_paths`/`allowed_paths` が両方空、またはキー自体が無い場合、このスクリプトは常に `RESULT: OK`・終了コード `0` で終わる。したがってこの手順を追加しても、両方未設定の既存タスクの実行フローは変化しない（そのまま `git commit` に進むだけである）。
 - `$CHECK_EXIT` の値で分岐する。
   - `0`（`RESULT: OK`）：違反なし。そのまま `git commit` する。
@@ -179,7 +201,7 @@ printf '%s\n' "$CHECK_OUTPUT"
          --comment-author @improvement-work --plain
        ```
        報告に `blocked` である旨と違反内容を書いて終える。
-  - `2`（`RESULT: ERROR`）：スクリプトが対象リポジトリを認識できない等の環境不備。コミットしない。これは製品判断ではなく環境不備なので `blocked:needs-decision` は付けず、手順1の `check-handoff` が非0終了したときと同じ扱い（`CHECK_OUTPUT` の内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側である自分が行う）にする。
+  - `2`（`RESULT: ERROR`、または上記の探索でスクリプトの実体が見つからず `CHECK_EXIT=2` とした場合）：スクリプトが対象リポジトリを認識できない、実体が見つからない等の環境不備。コミットしない。これは製品判断ではなく環境不備なので `blocked:needs-decision` は付けず、手順1の `check-handoff` が非0終了したときと同じ扱い（`CHECK_OUTPUT` の内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側である自分が行う）にする。
 - 作業ディレクトリ（ワークツリー）内でコミットする。このディレクトリのブランチはこのタスクのために作られている。メインの作業木には一切コミットしない。
 - コミットメッセージはリポジトリの既存の書式に合わせる。ハーネスがトレーラを要求している場合はそれに従う。
 - `push` しない。`merge` しない。PR を作らない。リモートに触らない。`git worktree remove` もしない。ワークツリーの片付けは dispatch がマージ後に行う。
