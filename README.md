@@ -44,32 +44,39 @@ npm install -g backlog.md
 
 ## 使い方
 
-improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の5スキルが分担して動かす。状態遷移の正本は `claude-code/skills/status-table.md` にある。各スキルの詳細（引数、手順、入出力例）はこの README には書かず、対応する `claude-code/skills/<name>/SKILL.md` を参照すること。
+improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の5スキルが分担して動かす。状態遷移の正本は `claude-code/skills/status-table.md` にある。
+各スキルの詳細（引数、手順、入出力例）はこの README には書かず、対応する `claude-code/skills/<name>/SKILL.md` を参照すること。
 
 - **improvement-add**: 人間が伝えた改善要望を、そのまま `Proposed` として起票する。
-- **improvement-scout**: コードベースを探索し、改善候補を選別して `Proposed` として起票する（1回の実行で最大3件）。
-- **improvement-scout-major**: アーキテクチャ級の大きい改善候補を、milestone とその配下の複数タスクに分解して `Proposed` として起票する。
-- **improvement-dispatch**: `To Do` のタスクを検知し、作業ブランチ・ワークツリーを用意して `In Progress` にし、improvement-work サブエージェントに引き渡す。
+- **improvement-scout**: コードベースを探索し、改善候補を `Proposed` として起票する。
+- **improvement-scout-major**: アーキテクチャ級の改善候補を、milestone と配下のタスクに分解して `Proposed` として起票する。
+- **improvement-dispatch**: `To Do` のタスクにワークツリーを用意して `In Progress` にし、improvement-work サブエージェントに引き渡す。
 - **improvement-work**: 引き渡されたタスクを実装・検証・コミットし、`In Review` にして人間のレビューを待つ。
 
 `Proposed` を `To Do` に上げる（着手の承認）のと、`In Review` を `Approved` に上げる（レビュー完了）のは、いずれも人間が行う。
 
 ## ワークスペース対応
 
-複数の git リポジトリを直下（深さ1）にクローンした「ワークスペースディレクトリ」を対象に、improvement ループの dispatch / scout を横断的に走らせることができる。**各リポジトリのバックログは独立したまま**であり、ワークスペース全体で1つのタスク一覧を共有する仕組みではない。あくまで「複数リポジトリを1回の起動で巡回する」薄いオーケストレーション層を追加するだけである。
+複数の git リポジトリを直下（深さ1）にクローンした「ワークスペースディレクトリ」を対象に、improvement ループの dispatch / scout を横断的に走らせることができる。
+**各リポジトリのバックログは独立したまま**であり、ワークスペース全体で1つのタスク一覧を共有する仕組みではない。`improvement-add` / `improvement-work` はワークスペース対応の対象外である。
+各スキルの詳細はこの README には書かず、対応する `claude-code/workspace-skills/<name>/SKILL.md` を参照すること。
+
+- **workspace-dispatch**: opt-in 済みの各リポジトリへ順に `improvement-dispatch` を適用する。
+- **workspace-scout**: opt-in 済みの各リポジトリへ順に `improvement-scout` を適用する。
+- **workspace-scout-major**: opt-in 済みの全リポジトリを横断して1回で調査し、リポジトリをまたぐ改善候補を関与する各リポジトリに起票する。
 
 ### セットアップ
 
-1. 対象にしたい各リポジトリで、これまで通り `setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作であり、新しいマーカーファイルは無く、`.claude/skills/improvement-dispatch` / `.claude/skills/improvement-scout` のシンボリックリンクの有無だけが判定に使われる。
+1. 対象にしたい各リポジトリで、これまで通り `setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作である。
 2. ワークスペースディレクトリ自体に対して `setup-improvement-loop --workspace [ワークスペースディレクトリのパス]` を実行する（引数を省略した場合は現在のディレクトリを対象とする）。ワークスペースディレクトリが git リポジトリである必要はない。以下を冪等に行う。
-   - `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` の3スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）。
-   - ワークスペースディレクトリ自体が git リポジトリでもある場合（レアケース）に限り、配置したスキルパスを `.git/info/exclude` に追記する。git リポジトリでなければこの手順はスキップされる（エラーにはならない）。
+   - `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` の3スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）
+   - ワークスペースディレクトリ自体が git リポジトリでもある場合に限り、配置したスキルパスを `.git/info/exclude` に追記する（git リポジトリでなければスキップされ、エラーにはならない）
 
 ```
 <ワークスペースディレクトリ>/
 ├── repo-a/            # setup-improvement-loop <repo-a> 済み（opt-in）
 │   └── .claude/skills/improvement-dispatch, improvement-scout, improvement-scout-major, ...
-├── repo-b/            # 未 opt-in（workspace-dispatch/workspace-scout/workspace-scout-major の対象外）
+├── repo-b/            # 未 opt-in（workspace-* スキルの対象外）
 └── .claude/
     └── skills/
         ├── workspace-dispatch/**
@@ -77,19 +84,8 @@ improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` 
         └── workspace-scout-major/**
 ```
 
-### 使い方
-
-ワークスペースディレクトリで `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` スキルを使うと、直下（深さ1）のサブディレクトリのうち opt-in 済みのリポジトリだけが対象になる。
-
-- **workspace-dispatch**: opt-in 済みの各リポジトリへ `cd` し、`improvement-dispatch` の手順（状態を読む、レビュー済みを扱う、必要なら引き渡す、次の起動を決める）をリポジトリごとに順番へそのまま適用する。あるリポジトリが `GATED`（上限到達）や `NO_CANDIDATE`（候補無し）でも、他のリポジトリの処理は続行する。ゲーティングはリポジトリごとに独立しており、ワークスペース全体としての合計同時実行数の上限は無い（各リポジトリ自身の `.backlog/config.my.yml` の `max_in_progress`/`max_in_review` がそのまま効く）。全リポジトリ処理後、リポジトリごとの結果を要約して報告する。
-- **workspace-scout**: opt-in 済みの各リポジトリへ `cd` し、`improvement-scout` の手順（観点選定、探索、起票）をリポジトリごとに順番へそのまま適用する。1リポジトリあたり最大3件という起票上限は各リポジトリ単位でそのまま適用され、ワークスペース全体としての合計上限は無い。
-- **workspace-scout-major**: 上の2スキルとは異なり、opt-in 済みの全リポジトリを横断して1回で調査する。2つ以上のリポジトリにまたがり、かつリポジトリ間に依存順序がある（例: 共有ライブラリ側の契約変更を先に行い、その後で利用側リポジトリを追従させる必要がある）アーキテクチャ級の改善候補だけを対象にし、`improvement-scout-major` と同じ「milestone ＋ 依存順のタスク分解」の思想で、関与する各リポジトリ自身の独立した `Proposed` に milestone とタスクをそれぞれ起票する。backlog の milestone はリポジトリをまたげないため、対応関係は milestone 名を揃えることと共通ラベル `cross-repo:<スラッグ>` で追跡する。**リポジトリ間の依存順序を自動で強制する仕組みは持たない。** 承認順序（どのリポジトリのタスクを先に `Done` まで進めてから、どのリポジトリのタスクを `To Do` に上げるべきか）はタスクの description と報告文に明記されるだけであり、実際に順序を守って承認するのは人間の役割である。1リポジトリに閉じる規模の候補は起票せず、そのリポジトリ向けの `improvement-scout-major`/`improvement-scout` 候補として報告するにとどめる。
-
-いずれも、対象リポジトリの列挙には `bin/lib/list_opted_in_repos.sh` を共通ロジックとして使う（各スキルの `scripts/list-target-repos` が薄いラッパーとして呼び出す）。opt-in していないリポジトリや git リポジトリでないディレクトリは黙って対象から外れる。
-
-worktree の既定の置き場所（`worktree_base_dir`。既定ではリポジトリルートの `.worktree/`）はワークスペース対応によって変更されない。ワークスペースルートに worktree を集約したい場合は、既存の仕組み（`worktree_base_dir` を各リポジトリで手動設定する）で実現できる。
-
-`improvement-add` / `improvement-work` はワークスペース対応の対象外である（今回は dispatch・scout・scout-major のみ）。
+opt-in の判定に使うのは `.claude/skills/improvement-dispatch` 等のシンボリックリンクの有無だけであり、専用のマーカーファイルは無い。opt-in していないリポジトリや git リポジトリでないディレクトリは黙って対象から外れる。
+対象リポジトリの列挙ロジックは `bin/lib/list_opted_in_repos.sh` に一本化されており、各スキルの `scripts/list-target-repos` が薄いラッパーとして呼び出す。
 
 ## 開発者向け情報
 
@@ -101,7 +97,9 @@ worktree の既定の置き場所（`worktree_base_dir`。既定ではリポジ�
 git config core.hooksPath githooks
 ```
 
-有効化すると、以降このリポジトリで行う `git commit` のたびに `tests/run.sh` が実行され、FAIL があればコミットが中断される。`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash/zsh・git・backlog）が欠けている場合は、対象テストが SKIP として報告される。GitHub Actions 等の CI はこのリポジトリでは対象外とする。
+有効化すると、以降このリポジトリで行う `git commit` のたびに `tests/run.sh` が実行され、FAIL があればコミットが中断される。
+`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash/zsh・git・backlog）が欠けている場合は、対象テストが SKIP として報告される。
+GitHub Actions 等の CI はこのリポジトリでは対象外とする。
 
 ## ライセンス
 
