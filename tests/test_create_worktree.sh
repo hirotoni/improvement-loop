@@ -268,7 +268,7 @@ else
 fi
 
 echo ""
-echo "=== 9b. BASE_REF 解決失敗時（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
+echo "=== 9b. BASE_REF 起因の worktree add 失敗（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
 # リモート未設定かつローカルのデフォルトブランチが "main" 以外のリポジトリでは、
 # フォールバックにより BASE_REF="main" になるが、その "main" は実在しない。この場合に
 # 生の git エラーで異常終了せず、err() 形式の診断と明示的な exit code（1）で終わることを
@@ -310,6 +310,58 @@ if [ ! -d "$TMP_CW_NOMAIN_REPO/.worktree/$(basename "$TMP_CW_NOMAIN_REPO")/$CW_N
   pass "ワークツリー作成に失敗した場合、想定パスにディレクトリが作られない"
 else
   fail "ワークツリー作成に失敗したはずなのに、想定パスにディレクトリが作られている"
+fi
+
+echo ""
+echo "=== 9b-2. BASE_REF 以外の理由による worktree add 失敗の動作確認（TASK-87） ==="
+# 9b と対になるセクション。BASE_REF（ここでは実在する main）は解決できるのに worktree add が
+# 失敗するケースでは、9b と同じ「BASE_REF の解決に失敗した」という断定ではなく、git 自身が
+# 出した実際の失敗理由が利用者に届く必要がある。
+#
+# 再現手段: 冪等性ガードは `[ -d "$WORKTREE_DIR" ]` で既存ディレクトリだけを見るので、
+# 同じパスに通常ファイルを置くとガードをすり抜けて新規作成分岐に落ち、git が
+# "already exists" で失敗する。
+
+TMP_CW_COLLIDE_REPO="$(mktemp -d)"
+TMP_CW_COLLIDE_REPO="$(cd "$TMP_CW_COLLIDE_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_COLLIDE_REPO"
+
+(cd "$TMP_CW_COLLIDE_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+
+CW_COLLIDE_TASK_ID="task-87-worktree-path-collision"
+CW_COLLIDE_WORKTREE_DIR="$TMP_CW_COLLIDE_REPO/.worktree/$(basename "$TMP_CW_COLLIDE_REPO")/$CW_COLLIDE_TASK_ID"
+mkdir -p "$(dirname "$CW_COLLIDE_WORKTREE_DIR")"
+: > "$CW_COLLIDE_WORKTREE_DIR"
+
+cw_collide_output="$(cd "$TMP_CW_COLLIDE_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_COLLIDE_TASK_ID" 2>&1)"
+cw_collide_exit=$?
+
+if [ "$cw_collide_exit" -eq 1 ]; then
+  pass "BASE_REF 以外の理由で worktree add が失敗した場合も、明示的な exit code（1）で終了する（AC#1 の扱いを保つ）"
+else
+  fail "BASE_REF 以外の理由で worktree add が失敗した場合の exit code が想定と異なる（期待: 1, 実際: ${cw_collide_exit}):
+$cw_collide_output"
+fi
+
+if printf '%s\n' "$cw_collide_output" | grep -Fq "エラー: "; then
+  pass "BASE_REF 以外の失敗でも err() 形式の診断メッセージが出る"
+else
+  fail "BASE_REF 以外の失敗で err() 形式の診断メッセージが出力されていない:
+$cw_collide_output"
+fi
+
+if printf '%s\n' "$cw_collide_output" | grep -Fq "already exists"; then
+  pass "git 自身が出した実際の失敗理由（\"already exists\"）が出力に残る（AC#2）"
+else
+  fail "git 自身が出した実際の失敗理由が出力から失われている:
+$cw_collide_output"
+fi
+
+if printf '%s\n' "$cw_collide_output" | grep -Fq "の解決に失敗し"; then
+  fail "BASE_REF は解決できているのに、BASE_REF 起因と断定する診断が出ている:
+$cw_collide_output"
+else
+  pass "BASE_REF 起因と断定する診断（9b 用のメッセージ）が出ていない（AC#3: 2つの失敗を区別している）"
 fi
 
 echo ""

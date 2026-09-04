@@ -318,11 +318,34 @@ elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   git worktree add "$WORKTREE_DIR" "$BRANCH" >&2
 else
   # BASE_REF は main へのフォールバック値になりうるので、実在しない参照のことがある。
-  # 生のエラーで落ちないよう、他の失敗経路と同様に err() で診断してから終了する。
-  if ! git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF" >&2 2>/dev/null; then
+  # 生のエラーで落ちないよう、他の失敗経路と同様に err() で診断してから終了する（TASK-38）。
+  #
+  # ただし worktree add は BASE_REF 以外の理由でも失敗する（同じパスにファイルがある、
+  # 親ディレクトリに書き込めない、ブランチ参照がロックされている等）。失敗理由を
+  # BASE_REF に決め打ちしないよう、worktree add を実行する前に BASE_REF が解決できるかを
+  # 確かめて切り分ける。git のエラー文言で分類しないのは、文言が git のバージョンや
+  # ロケールで変わるためである。事前に弾くので BASE_REF 不在の経路では
+  # git worktree add 自体が動かず、生の "fatal:" は出ない（TASK-87）。
+  if ! git rev-parse --verify --quiet "${BASE_REF}^{commit}" >/dev/null 2>&1; then
     err "BASE_REF ($BASE_REF) の解決に失敗し、ワークツリーを作成できなかった"
     err "リモート 'origin' が設定されているか、ローカルのデフォルトブランチ名が \"main\" と一致するか確認すること。一致しない場合は create-worktree 内の main フォールバック値を実際のデフォルトブランチ名に書き換える必要がある。"
     exit 1
+  fi
+
+  # BASE_REF は解決できる。ここから先の失敗理由は git 自身しか知らないので、出力を
+  # 捨てずに捕捉して利用者に渡す。標準出力は出力契約専用なので、捕捉した出力は
+  # 成功時・失敗時とも標準エラーへ出す（既存ブランチ側の分岐と行き先を揃える）。
+  worktree_add_output=""
+  if ! worktree_add_output="$(git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF" 2>&1)"; then
+    err "ワークツリーの作成に失敗した: git worktree add \"$WORKTREE_DIR\" -b \"$BRANCH\" \"$BASE_REF\""
+    err "BASE_REF ($BASE_REF) 自体は解決できているので、原因は起点の参照ではない。以下の git の出力を確認すること。"
+    if [ -n "$worktree_add_output" ]; then
+      printf '%s\n' "$worktree_add_output" >&2
+    fi
+    exit 1
+  fi
+  if [ -n "$worktree_add_output" ]; then
+    printf '%s\n' "$worktree_add_output" >&2
   fi
 fi
 
