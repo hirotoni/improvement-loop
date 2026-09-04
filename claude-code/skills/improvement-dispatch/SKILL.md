@@ -241,6 +241,12 @@ STALE_REASON=<reused_branch_behind_base | diverged_default_branch | branch_behin
 MISSING_COMMITS=<参照名>:<含まれていないコミット数>
 ```
 
+以前の `worktree_base_dir` に対応する除外行が `.git/info/exclude` に残っている場合は、`RESULT` の値にかかわらず（`OK` でも `STALE_BASE` でも）次の行が同じ区間に入る。
+
+```
+STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexisting>
+```
+
 `WORKTREE_DIR` と `BRANCH` が標準出力の最後の2行であることは変わらない。
 
 `&&` でつないでいるため、`create-worktree` が失敗（非ゼロ終了）した場合は後続の `backlog task edit` は実行されない。同じタスク番号・スラッグで再実行しても、既存のワークツリー・ブランチ・exclude の記述を再利用し、エラーにならない（冪等性は `.claude/skills/improvement-dispatch/scripts/create-worktree` 内で保証されている）。
@@ -265,6 +271,8 @@ MISSING_COMMITS=<参照名>:<含まれていないコミット数>
 | `STALE_BASE` / `STALE_REASON=diverged_default_branch` | ローカルとリモートのデフォルトブランチが分岐しており、どちらを起点にしても片方のコミットが欠ける | 引き渡さない。dispatch は `merge`・`rebase`・`push` でこれを解消しない（禁止事項）。分岐している事実と `MISSING_COMMITS` を報告し、人間の判断に回す。 |
 | `STALE_BASE` / `STALE_REASON=branch_behind_default_branch` | 起点以外の候補（`auto_merge_reviewed: true` のときのもう一方のデフォルトブランチ）を含まない | `reused_branch_behind_base` と同じ扱いにする。欠けているコミットがタスクの前提かどうかで判断する。 |
 | `STALE_BASE` / `STALE_REASON=base_ref_unresolved` | 起点そのものを解決できない（リモートが消えた等） | 引き渡さない。環境の不備として報告する。 |
+
+`STALE_EXCLUDE` は上の表とは独立している（TASK-79）。`worktree_base_dir` を変更したときに、以前の値で書かれた `.git/info/exclude` の除外行がそのまま残っていることを示す。残った行は既に失効した理由で git の追跡を黙って止め続けるが、これはローカルの設定ファイルの問題であり、引き渡しを止める理由にはならない。**引き渡しはそのまま進め、`STALE_EXCLUDE` の内容（残っている行と、それを improvement-loop が追記したのか元からあったのか）を手順7の報告に含める。** 削除するかどうかは人間が決める。`create-worktree` は共有物である `.git/info/exclude` の既存行を削除・書き換えしない（自分が書いた管理記録のコメント行だけを更新する）。
 
 `RESULT: STALE_BASE` でも `create-worktree` 自体は 0 で終了する（`&&` は切れず、後続の `backlog task edit` は実行される）。引き渡すかどうかの判断は上の表のとおり dispatch の責務であり、引き渡さないと判断した場合は `backlog task edit TASK-<n> -s "To Do" --comment '<STALE_BASE の内容>' --comment-author @dispatch --plain` で `To Do` に戻す。
 

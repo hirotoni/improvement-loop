@@ -688,4 +688,227 @@ else
   fail "worktree_base_dir（.worktree-custom）が .git/info/exclude に追記されていない"
 fi
 
+echo ""
+echo "=== 10b. 失効した worktree_base_dir 除外行の検知（TASK-79） ==="
+# .git/info/exclude への追記は追記専用であり、worktree_base_dir を変更すると
+# 古い値の除外行が残り続ける。create-worktree は管理対象の除外行をマーカー
+# コメント1行として .git/info/exclude 自身に記録し、失効を検知して報告する
+# （削除・書き換えはしない）。ここではその検知と、共有物である
+# .git/info/exclude の既存行を一切壊さないことを確認する。
+
+TMP_CW_STALE_REPO="$(mktemp -d)"
+TMP_CW_STALE_REPO="$(cd "$TMP_CW_STALE_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_STALE_REPO"
+
+(cd "$TMP_CW_STALE_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+mkdir -p "$TMP_CW_STALE_REPO/.backlog"
+cat > "$TMP_CW_STALE_REPO/.backlog/config.my.yml" <<'YAML'
+improvement_loop:
+  worktree_base_dir: ""
+YAML
+
+# ユーザーが手で書いた行と、他ツール由来の見出し付き行群を先に入れておく。
+# 受入基準 #2（これらが変更・削除されないこと）の対象である。
+CW_STALE_EXCLUDE_FILE="$TMP_CW_STALE_REPO/.git/info/exclude"
+cat >> "$CW_STALE_EXCLUDE_FILE" <<'EOF'
+# interview-dev-loop plan docs
+docs/plans/
+# claude-code-runtime
+**/.claude/scheduled_tasks.lock
+my-own-scratch/
+EOF
+cp "$CW_STALE_EXCLUDE_FILE" "$TMP_CW_STALE_REPO/exclude.pristine"
+
+CW_STALE_MARKER_RE='^# improvement-loop worktree_base_dir added=(yes|no) path='
+
+# ---- 初回実行: 管理対象の除外行をマーカーコメントとして記録する ----
+cw_stale_out1="$(cd "$TMP_CW_STALE_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-first 2>/dev/null)"
+
+if grep -Fxq "# improvement-loop worktree_base_dir added=yes path=.worktree" "$CW_STALE_EXCLUDE_FILE"; then
+  pass "初回実行で管理対象の除外行がマーカーコメントとして .git/info/exclude に記録される"
+else
+  fail "マーカーコメントが記録されていない。実際の .git/info/exclude:
+$(cat "$CW_STALE_EXCLUDE_FILE")"
+fi
+
+if printf '%s\n' "$cw_stale_out1" | grep -q '^STALE_EXCLUDE='; then
+  fail "worktree_base_dir を変更していない初回実行で STALE_EXCLUDE が出力された:
+$cw_stale_out1"
+else
+  pass "worktree_base_dir を変更していない初回実行では STALE_EXCLUDE を出力しない"
+fi
+
+# bin/setup-improvement-loop の append_git_exclude_lines() は
+# grep -Fxq "# improvement-loop"（完全一致）で見出しの有無を判定する。
+# マーカー行がその見出しとして誤検知されると、setup 側が見出しを書かなくなる。
+if grep -Fxq "# improvement-loop" "$CW_STALE_EXCLUDE_FILE"; then
+  fail "マーカー行が bin/setup-improvement-loop の見出しコメント '# improvement-loop' として誤検知される"
+else
+  pass "マーカー行は bin/setup-improvement-loop の見出しコメント '# improvement-loop' とは完全一致しない"
+fi
+
+# ---- 冪等性（AC#3）: worktree_base_dir を変えていない再実行では
+#      .git/info/exclude も標準出力も変化しない ----
+cp "$CW_STALE_EXCLUDE_FILE" "$TMP_CW_STALE_REPO/exclude.after1"
+cw_stale_out2="$(cd "$TMP_CW_STALE_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-first 2>/dev/null)"
+
+if diff -q "$TMP_CW_STALE_REPO/exclude.after1" "$CW_STALE_EXCLUDE_FILE" >/dev/null; then
+  pass "worktree_base_dir を変えない再実行では .git/info/exclude が1バイトも変わらない（AC#3）"
+else
+  fail "worktree_base_dir を変えない再実行で .git/info/exclude が変化した:
+$(diff "$TMP_CW_STALE_REPO/exclude.after1" "$CW_STALE_EXCLUDE_FILE")"
+fi
+
+if [ "$cw_stale_out1" = "$cw_stale_out2" ]; then
+  pass "worktree_base_dir を変えない再実行では標準出力が従来と同じである（AC#3）"
+else
+  fail "worktree_base_dir を変えない再実行で標準出力が変化した。1回目:
+$cw_stale_out1
+2回目:
+$cw_stale_out2"
+fi
+
+# ---- worktree_base_dir を変更した再実行: 失効を検知して報告する ----
+cat > "$TMP_CW_STALE_REPO/.backlog/config.my.yml" <<'YAML'
+improvement_loop:
+  worktree_base_dir: "tmp-wt"
+YAML
+
+cw_stale_err_file="$TMP_CW_STALE_REPO/stderr.txt"
+cw_stale_out3="$(cd "$TMP_CW_STALE_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-second 2>"$cw_stale_err_file")"
+cw_stale_exit3=$?
+
+if [ "$cw_stale_exit3" -eq 0 ]; then
+  pass "失効した除外行を検知しても create-worktree は 0 で終了する（引き渡しを止めない）"
+else
+  fail "失効した除外行の検知で create-worktree が非ゼロ終了した（exit ${cw_stale_exit3}）:
+$cw_stale_out3"
+fi
+
+if printf '%s\n' "$cw_stale_out3" | grep -Fxq "STALE_EXCLUDE=.worktree:added_by_improvement_loop"; then
+  pass "worktree_base_dir を変更すると、失効した除外行が STALE_EXCLUDE として出力される（AC#1）"
+else
+  fail "STALE_EXCLUDE の出力が想定と異なる。期待: STALE_EXCLUDE=.worktree:added_by_improvement_loop, 実際の出力:
+$cw_stale_out3"
+fi
+
+if grep -q '警告' "$cw_stale_err_file" && grep -q '\.worktree' "$cw_stale_err_file"; then
+  pass "失効した除外行について、標準エラーに人間向けの警告が出る（AC#1）"
+else
+  fail "標準エラーの警告が想定と異なる:
+$(cat "$cw_stale_err_file")"
+fi
+
+if printf '%s\n' "$cw_stale_out3" | head -1 | grep -Fxq "RESULT: OK"; then
+  pass "STALE_EXCLUDE は RESULT: の値を変えない（引き渡しの判断に載せない）"
+else
+  fail "STALE_EXCLUDE の検知で RESULT: 行が変化した:
+$cw_stale_out3"
+fi
+
+if printf '%s\n' "$cw_stale_out3" | tail -2 | head -1 | grep -q '^WORKTREE_DIR=' &&
+   printf '%s\n' "$cw_stale_out3" | tail -1 | grep -q '^BRANCH='; then
+  pass "STALE_EXCLUDE を出しても標準出力の最後の2行は WORKTREE_DIR と BRANCH のままである"
+else
+  fail "標準出力の最後の2行が WORKTREE_DIR/BRANCH でない:
+$cw_stale_out3"
+fi
+
+# ---- AC#2: 既存行が変更・削除されないこと ----
+# 起点（ユーザーが手で書いた行と他ツール由来の行群を入れた状態）との差分が
+# 追加行だけであることを確認する。削除・書き換えがあれば diff に "<" 行が出る。
+if diff "$TMP_CW_STALE_REPO/exclude.pristine" "$CW_STALE_EXCLUDE_FILE" | grep -q '^< '; then
+  fail "既存の .git/info/exclude の行が変更・削除された（AC#2）:
+$(diff "$TMP_CW_STALE_REPO/exclude.pristine" "$CW_STALE_EXCLUDE_FILE")"
+else
+  pass "ユーザーが書いた行と他ツール由来の行群は変更も削除もされない（追加のみ。AC#2）"
+fi
+
+cw_stale_preserved_ok=1
+for cw_stale_line in \
+  "# interview-dev-loop plan docs" \
+  "docs/plans/" \
+  "# claude-code-runtime" \
+  "**/.claude/scheduled_tasks.lock" \
+  "my-own-scratch/"; do
+  if ! grep -Fxq "$cw_stale_line" "$CW_STALE_EXCLUDE_FILE"; then
+    cw_stale_preserved_ok=0
+    fail "既存行が .git/info/exclude から失われた（AC#2）: $cw_stale_line"
+  fi
+done
+if [ "$cw_stale_preserved_ok" -eq 1 ]; then
+  pass "# interview-dev-loop plan docs / # claude-code-runtime 由来の行群とユーザー独自の行がすべて残っている（AC#2）"
+fi
+
+# マーカー行は improvement-loop 自身のものなので、現在の値へ更新される。
+# 一方で古い除外行 .worktree は残したままである（削除しない）。
+if [ "$(grep -cE "$CW_STALE_MARKER_RE" "$CW_STALE_EXCLUDE_FILE")" -eq 1 ] &&
+   grep -Fxq "# improvement-loop worktree_base_dir added=yes path=tmp-wt" "$CW_STALE_EXCLUDE_FILE"; then
+  pass "マーカー行は増殖せず、現在の worktree_base_dir の値へ更新される"
+else
+  fail "マーカー行の更新が想定と異なる。実際の .git/info/exclude:
+$(cat "$CW_STALE_EXCLUDE_FILE")"
+fi
+
+if grep -Fxq ".worktree" "$CW_STALE_EXCLUDE_FILE"; then
+  pass "失効した除外行そのものは削除されない（報告のみ。AC#2）"
+else
+  fail "失効した除外行 .worktree が削除された。このスクリプトは共有物の既存行を削除しない"
+fi
+
+# ---- worktree_base_dir をリポジトリ外の絶対パスへ移した場合も検知する ----
+TMP_CW_STALE_OUTSIDE="$(mktemp -d)"
+TMP_CW_STALE_OUTSIDE="$(cd "$TMP_CW_STALE_OUTSIDE" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_STALE_OUTSIDE"
+cat > "$TMP_CW_STALE_REPO/.backlog/config.my.yml" <<YAML
+improvement_loop:
+  worktree_base_dir: "$TMP_CW_STALE_OUTSIDE"
+YAML
+
+cw_stale_out4="$(cd "$TMP_CW_STALE_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-outside 2>/dev/null)"
+if printf '%s\n' "$cw_stale_out4" | grep -Fxq "STALE_EXCLUDE=tmp-wt:added_by_improvement_loop"; then
+  pass "worktree_base_dir をリポジトリ外の絶対パスへ移した場合も、失効した除外行を検知する（AC#1）"
+else
+  fail "リポジトリ外へ移した場合の STALE_EXCLUDE が出ていない:
+$cw_stale_out4"
+fi
+
+# ---- ユーザーが先に書いていた行は preexisting として報告する ----
+# improvement-loop が追記したのではない行は、削除してよいと言い切れない。
+# STALE_EXCLUDE の由来欄でその区別を利用者に伝える。
+TMP_CW_PREEXIST_REPO="$(mktemp -d)"
+TMP_CW_PREEXIST_REPO="$(cd "$TMP_CW_PREEXIST_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_PREEXIST_REPO"
+
+(cd "$TMP_CW_PREEXIST_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
+mkdir -p "$TMP_CW_PREEXIST_REPO/.backlog"
+cat > "$TMP_CW_PREEXIST_REPO/.backlog/config.my.yml" <<'YAML'
+improvement_loop:
+  worktree_base_dir: ""
+YAML
+# improvement-loop が触る前に、ユーザーが自分で .worktree を除外している状態。
+echo ".worktree" >> "$TMP_CW_PREEXIST_REPO/.git/info/exclude"
+
+(cd "$TMP_CW_PREEXIST_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-pre-first >/dev/null 2>&1)
+
+if grep -Fxq "# improvement-loop worktree_base_dir added=no path=.worktree" "$TMP_CW_PREEXIST_REPO/.git/info/exclude"; then
+  pass "improvement-loop が追記していない既存行は added=no として記録される"
+else
+  fail "既存行の由来が added=no として記録されていない。実際の .git/info/exclude:
+$(cat "$TMP_CW_PREEXIST_REPO/.git/info/exclude")"
+fi
+
+cat > "$TMP_CW_PREEXIST_REPO/.backlog/config.my.yml" <<'YAML'
+improvement_loop:
+  worktree_base_dir: "tmp-wt"
+YAML
+cw_preexist_out="$(cd "$TMP_CW_PREEXIST_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-pre-second 2>/dev/null)"
+
+if printf '%s\n' "$cw_preexist_out" | grep -Fxq "STALE_EXCLUDE=.worktree:preexisting"; then
+  pass "improvement-loop が追記していない失効行は preexisting として報告される（所有者を断定しない。AC#2）"
+else
+  fail "preexisting の報告が想定と異なる:
+$cw_preexist_out"
+fi
+
 finish_tests
