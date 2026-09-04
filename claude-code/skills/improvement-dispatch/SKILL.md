@@ -54,11 +54,11 @@ git worktree list
 cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を使う
 ```
 
-進行中のサブエージェントがあるかも確認する。`TaskList` と `TaskOutput` を使う（schema が未ロードなら `ToolSearch` で `select:TaskList,TaskOutput` を取得する）。`ListAgents`/`TaskList` 等が示す running/completed（busy/idle）の表示は、同一サブエージェントに対してすら呼び出しごとに running→completed→running のように矛盾して変化することが実際に観測されている。次の手順 2 で判定するときも、これらは補助情報にとどめ、単独の根拠にしない。
+進行中のサブエージェントがあるかも確認する。稼働中のサブエージェントの列挙には `ListAgents` を使う（ツール一覧に最初からあり、schema のロードは要らない）。個々のサブエージェントの出力を見るときは `TaskOutput` を使う（schema が未ロードなら `ToolSearch` で `select:TaskOutput` を取得する）。`ToolSearch` の `select:` は、存在しないツール名を渡されても何の診断も出さず無音で欠落させるだけである。だからここには実在するツール名しか書かない（以前は実在しないツール名が書かれており、取得できていないことに気付けないまま手順 2 の判定材料が1つ欠けていた。TASK-88）。`ListAgents` が示す running/completed（busy/idle）の表示は、同一サブエージェントに対してすら呼び出しごとに running→completed→running のように矛盾して変化することが実際に観測されている。次の手順 2 で判定するときも、この表示は補助情報にとどめ、単独の根拠にしない。
 
 ### 2. 進行中のものを突合する
 
-`In Progress` のタスクがある場合、次の優先順位で状態を判定する。**`ListAgents`/`TaskList` 等の running/completed（busy/idle）表示だけを根拠に完了・停止を断定しない。**
+`In Progress` のタスクがある場合、次の優先順位で状態を判定する。**`ListAgents` の running/completed（busy/idle）表示だけを根拠に完了・停止を断定しない。**
 
 #### 2-1. 完了の確定
 
@@ -70,7 +70,7 @@ cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を�
 
 #### 2-2. 稼働中の確認
 
-2-1 が成立せず、`ListAgents`/`TaskList` 等でそのサブエージェントがまだ動いている（running/busy）と分かる場合 → 今回の起動でやることはない。手順 7 に進む。
+2-1 が成立せず、`ListAgents` でそのサブエージェントがまだ動いている（running/busy）と分かる場合 → 今回の起動でやることはない。手順 7 に進む。
 
 ただし、この「動いている」表示だけを鵜呑みにして無期限に信用しない。同じタスクについて起動のたびに「動いている」と表示され続けている一方で、2-3 の観測（コミットハッシュ・`git status --porcelain`）が全く変化していない場合は、その表示自体を疑い、2-2 で止まらず 2-3 の判定に進む。
 
