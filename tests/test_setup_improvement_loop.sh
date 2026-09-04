@@ -614,6 +614,164 @@ else
 fi
 
 echo ""
+echo "=== 5c. statuses 書き換えが config.yml のパーミッションを変えないこと（TASK-85） ==="
+# write_statuses_block が mktemp の一時ファイルを mv で置き換えると、inode ごと
+# 差し替わって mktemp 由来の 0600 になり、.backlog/config.yml のパーミッションが
+# 黙って狭まる。git は実行ビット以外を追跡しないので diff にも現れない。
+
+# ファイルのパーミッションを 8 進数の文字列で返す。BSD（macOS）と GNU で stat の
+# フラグが違うので両方試し、どちらも無ければ ls -l の表示を使う。比較は同じ関数の
+# 実行前後の出力どうしで行うので、どの表現に落ちても判定は成立する。
+file_mode() {
+  local path="$1"
+  local mode
+  if mode="$(stat -f '%Lp' "$path" 2>/dev/null)" && [ -n "$mode" ]; then
+    printf '%s\n' "$mode"
+  elif mode="$(stat -c '%a' "$path" 2>/dev/null)" && [ -n "$mode" ]; then
+    printf '%s\n' "$mode"
+  else
+    # 対象はこのテストが mktemp で作った既知のパスなので、ls の出力を解析しても
+    # 特殊な文字名で壊れる余地は無い。
+    # shellcheck disable=SC2012
+    ls -l "$path" | awk '{ print substr($1, 1, 10) }'
+  fi
+}
+
+# statuses に不足がある config.yml を持つ git リポジトリを作り、指定モードを設定する。
+# remote_operations と default_assignee は収束済みの値を入れてあるので、この経路で
+# 動く config.yml の書き換えは write_statuses_block だけになる。
+# 引数: 作成先ディレクトリ, project_name, chmod に渡すモード
+make_perm_test_repo() {
+  local repo_dir="$1"
+  local project_name="$2"
+  local mode="$3"
+
+  (cd "$repo_dir" && git init -q)
+  mkdir -p "$repo_dir/.backlog"
+  cat > "$repo_dir/.backlog/config.yml" <<YAML
+project_name: "$project_name"
+default_assignee: ["@improvement-loop-bot"]
+default_status: "To Do"
+statuses: ["To Do", "In Progress", "Done"]  # 末尾コメント
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+  chmod "$mode" "$repo_dir/.backlog/config.yml"
+}
+
+# ---- 5c-1. statuses に不足があるリポジトリでの初回実行（AC#1）----
+TMP_REPO_PERM_644="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_PERM_644"
+make_perm_test_repo "$TMP_REPO_PERM_644" "perm-644-test" 644
+
+perm_644_config="$TMP_REPO_PERM_644/.backlog/config.yml"
+perm_644_before="$(file_mode "$perm_644_config")"
+perm_644_output="$("$SETUP_SCRIPT" "$TMP_REPO_PERM_644" 2>&1)"
+perm_644_exit=$?
+perm_644_after="$(file_mode "$perm_644_config")"
+
+if [ "$perm_644_exit" -eq 0 ]; then
+  pass "5c-1: statuses に不足がある config.yml (0644) に対して setup-improvement-loop が成功する（exit 0）"
+else
+  fail "5c-1: statuses に不足がある config.yml (0644) で setup-improvement-loop が失敗した（exit ${perm_644_exit}）:
+$perm_644_output"
+fi
+
+# statuses が実際に書き換えられたことを先に確かめる。書き換えが起きていなければ
+# パーミッションが変わらないのは当たり前で、回帰テストとして意味を成さない。
+if grep -Fq "[fix]  .backlog/config.yml の statuses を更新した" <<<"$perm_644_output"; then
+  pass "5c-1: このケースで実際に statuses の書き換え（write_statuses_block）が起きている"
+else
+  fail "5c-1: statuses の書き換えが起きていない。前提が崩れているのでパーミッションの検証が意味を持たない:
+$perm_644_output"
+fi
+assert_statuses_present "$perm_644_config" "5c-1: 0644 のまま補完後"
+
+if [ "$perm_644_after" = "$perm_644_before" ]; then
+  pass "5c-1(AC#1): statuses 書き換え後も config.yml のパーミッションが実行前と同じ（${perm_644_before}）"
+else
+  fail "5c-1(AC#1): statuses 書き換えで config.yml のパーミッションが変わった（${perm_644_before} → ${perm_644_after}）"
+fi
+
+# ---- 5c-2. statuses が既に揃っているリポジトリへの再実行（AC#2）----
+perm_rerun_before="$(file_mode "$perm_644_config")"
+perm_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_PERM_644" 2>&1)"
+perm_rerun_exit=$?
+perm_rerun_after="$(file_mode "$perm_644_config")"
+
+if [ "$perm_rerun_exit" -eq 0 ]; then
+  pass "5c-2: statuses が揃った状態での再実行が成功する（exit 0）"
+else
+  fail "5c-2: statuses が揃った状態での再実行が失敗した（exit ${perm_rerun_exit}）:
+$perm_rerun_output"
+fi
+
+# 再実行の直前の値だけでなく、最初に設定したモードとも比較する。直前の値だけを見ると、
+# 1回目の実行で既に狭められた後の状態を「変化なし」と判定してしまう。
+if [ "$perm_rerun_after" = "$perm_rerun_before" ] && [ "$perm_rerun_after" = "$perm_644_before" ]; then
+  pass "5c-2(AC#2): statuses が揃った状態での再実行でも config.yml のパーミッションが当初のまま（${perm_644_before}）"
+else
+  fail "5c-2(AC#2): 再実行後の config.yml のパーミッションが当初と異なる（当初 ${perm_644_before} / 再実行前 ${perm_rerun_before} → 再実行後 ${perm_rerun_after}）"
+fi
+
+# ---- 5c-3. 0644 以外のモードでも保たれる（AC#1 の一般性）----
+# 「たまたま 0644 に戻している」実装では通らないように、別のモードでも確認する。
+TMP_REPO_PERM_640="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_PERM_640"
+make_perm_test_repo "$TMP_REPO_PERM_640" "perm-640-test" 640
+
+perm_640_config="$TMP_REPO_PERM_640/.backlog/config.yml"
+perm_640_before="$(file_mode "$perm_640_config")"
+perm_640_output="$("$SETUP_SCRIPT" "$TMP_REPO_PERM_640" 2>&1)"
+perm_640_exit=$?
+perm_640_after="$(file_mode "$perm_640_config")"
+
+if [ "$perm_640_exit" -eq 0 ] && [ "$perm_640_after" = "$perm_640_before" ]; then
+  pass "5c-3(AC#1): 0640 の config.yml でも statuses 書き換え後にパーミッションが変化しない（${perm_640_before}）"
+else
+  fail "5c-3(AC#1): 0640 の config.yml で挙動が想定と異なる（exit ${perm_640_exit}, ${perm_640_before} → ${perm_640_after}）:
+$perm_640_output"
+fi
+
+# ---- 5c-4. 書き換え後の内容が現在の挙動と同一であること（AC#3）----
+# パーミッションを保つために書き戻し方法を変えても、生成される内容は変えていないこと。
+perm_status_line="$(grep -m1 '^statuses:' "$perm_644_config" || true)"
+if [ "$perm_status_line" = 'statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]  # 末尾コメント' ]; then
+  pass "5c-4(AC#3): 補完後の statuses 行が既存の補完規則どおり（既存要素の順序を保ち、末尾コメントも保持されている）"
+else
+  fail "5c-4(AC#3): 補完後の statuses 行が想定と異なる: $perm_status_line"
+fi
+
+perm_content_ok=true
+for perm_expected_line in 'project_name: "perm-644-test"' 'default_assignee: ["@improvement-loop-bot"]' 'labels: []' 'remote_operations: false' 'task_prefix: "task"'; do
+  if ! grep -Fxq "$perm_expected_line" "$perm_644_config"; then
+    fail "5c-4(AC#3): 書き換え後の config.yml から既存の行が失われた: $perm_expected_line"
+    perm_content_ok=false
+  fi
+done
+if [ "$perm_content_ok" = true ]; then
+  pass "5c-4(AC#3): statuses 以外の既存キーが書き換え後もそのまま残っている"
+fi
+
+# mktemp が作った一時ファイル（config.yml.XXXXXX）が消し残されていないことも確認する。
+perm_leftover="$(find "$TMP_REPO_PERM_644/.backlog" -maxdepth 1 -name 'config.yml.*' 2>/dev/null || true)"
+if [ -z "$perm_leftover" ]; then
+  pass "5c-4: 書き戻しに使った一時ファイルが .backlog/ に残っていない"
+else
+  fail "5c-4: 書き戻しに使った一時ファイルが残っている: $perm_leftover"
+fi
+
+echo ""
 echo "=== 6. config.my.yml の不足キー補完（マイグレーション）の回帰テスト ==="
 # テンプレートに新しいキーが追加された状況を「導入先の config.my.yml に一部キーが
 # 欠けている」状態として再現する。欠けているキーだけがテンプレート側のコメント・既定値

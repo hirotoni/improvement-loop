@@ -156,7 +156,11 @@ write_statuses_block() {
     NR > start && NR <= end { next }
     { print }
   ' "$config_file" > "$tmp_file"
-  mv "$tmp_file" "$config_file"
+  # 書き戻しは mv ではなく元ファイルへの上書きで行う。mv だと mktemp が作った 0600 と
+  # inode ごと差し替わり、共有されうる .backlog/config.yml のパーミッション・所有者を
+  # 黙って変えてしまう（git は実行ビット以外を追跡しないので diff にも現れない）。
+  cat "$tmp_file" > "$config_file"
+  rm -f "$tmp_file"
 
   printf '%s\n' "$new_line"
 }
