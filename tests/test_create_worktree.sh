@@ -387,6 +387,268 @@ else
 fi
 
 echo ""
+echo "=== 9d. 起点（BASE_REF）の決定と鮮度検査（TASK-75） ==="
+# 9/9b/9c の一時リポジトリはいずれもリモート未設定であり、create-worktree の
+# `git fetch origin` が必ず失敗するため、origin 起点の経路が一度も実行されて
+# いなかった。ここでは疑似 origin（同じ一時ディレクトリ内の bare リポジトリ）を
+# 持つリポジトリを組み立て、次の4点を守る。
+#   - auto_merge_reviewed: true でローカルのデフォルトブランチが先行している
+#     場合、ワークツリーにその先行コミット（＝先行タスクの成果）が入る（AC#1）。
+#   - 起点が保証できない状況（既存ブランチの再利用で起点の先端を含まない／
+#     ローカルとリモートが分岐）を RESULT: STALE_BASE として出力する（AC#2）。
+#   - ローカルのデフォルトブランチが origin より古い場合は従来どおり
+#     origin/<デフォルトブランチ> から分岐する（AC#3）。
+#   - auto_merge_reviewed が false またはキー自体が無い場合（PR 運用・既定）は、
+#     ローカルが先行していても従来どおり origin/<デフォルトブランチ> 起点の
+#     ままである（AC#4）。
+#
+# ここでの `git push` はテスト用の疑似 origin（ローカルの bare リポジトリ）に
+# 対するフィクスチャの組み立てであり、create-worktree 自身が push しないという
+# 制約とは別物である。
+#
+# このセクションの実行結果は 2>&1 ではなく標準出力だけを取る。RESULT が
+# 1行目である・WORKTREE_DIR/BRANCH が最後の2行であるという出力契約を行位置で
+# 検証するため、git worktree add が標準エラーに出す進捗メッセージ
+# （"HEAD is now at ..." 等）が混ざると判定できないためである。
+
+# cw_make_remote_repo: 疑似 origin を持つ一時リポジトリを作り、そのローカル側の
+# 絶対パスを標準出力に出す。
+#   $1 = ローカルリポジトリのディレクトリ名
+#   $2 = .backlog/config.my.yml に書く auto_merge_reviewed の値
+#        （空文字ならキー自体を書かない＝既定値の経路を通す）
+cw_make_remote_repo() {
+  local dir_name="$1"
+  local amr="$2"
+  local parent
+  parent="$(mktemp -d)"
+  parent="$(cd "$parent" && pwd -P)"
+  register_tmp_cleanup "$parent"
+  git init -q --bare -b main "$parent/origin.git"
+  git init -q -b main "$parent/$dir_name"
+  (
+    cd "$parent/$dir_name" || exit 1
+    git remote add origin "$parent/origin.git"
+    mkdir -p .backlog
+    if [ -n "$amr" ]; then
+      printf 'improvement_loop:\n  auto_merge_reviewed: %s\n' "$amr" > .backlog/config.my.yml
+    else
+      printf 'improvement_loop:\n  worktree_base_dir: ""\n' > .backlog/config.my.yml
+    fi
+    echo "v1" > file.txt
+    git add file.txt
+    git commit -qm "A: 初期"
+    git push -q origin main
+    git remote set-head origin main
+  ) >/dev/null 2>&1
+  printf '%s\n' "$parent/$dir_name"
+}
+
+# cw_advance_origin: ローカルのデフォルトブランチを動かさずに origin/main だけを
+# 1コミット進める（別クローン経由で push し、元のリポジトリで fetch する）。
+cw_advance_origin() {
+  local repo="$1"
+  local clone="${repo}.remote-clone"
+  rm -rf "$clone"
+  git clone -q "$repo/../origin.git" "$clone" >/dev/null 2>&1
+  (
+    cd "$clone" || exit 1
+    echo "リモート側の更新" > remote.txt
+    git add remote.txt
+    git commit -qm "R: origin 側だけの更新"
+    git push -q origin main
+  ) >/dev/null 2>&1
+  rm -rf "$clone"
+  (cd "$repo" && git fetch -q origin) >/dev/null 2>&1
+}
+
+# ---- AC#1: auto_merge_reviewed: true でローカルが先行している場合、
+# ローカルのデフォルトブランチを起点にする ----
+CW_AHEAD_REPO="$(cw_make_remote_repo local-ahead true)"
+(
+  cd "$CW_AHEAD_REPO" || exit 1
+  echo "v2-先行タスクの成果" > file.txt
+  git add file.txt
+  git commit -qm "B: 先行タスクの成果（push しない）"
+) >/dev/null 2>&1
+CW_AHEAD_TASK_ID="task-75-local-ahead"
+CW_AHEAD_WORKTREE="$CW_AHEAD_REPO/.worktree/$(basename "$CW_AHEAD_REPO")/$CW_AHEAD_TASK_ID"
+cw_ahead_output="$(cd "$CW_AHEAD_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_AHEAD_TASK_ID" 2>/dev/null)"
+
+if printf '%s\n' "$cw_ahead_output" | grep -Fxq "BASE_REF=main"; then
+  pass "auto_merge_reviewed: true でローカルが先行している場合、起点がローカルの main になる（AC#1）"
+else
+  fail "auto_merge_reviewed: true でローカルが先行しているのに起点が main ではない（AC#1）:
+$cw_ahead_output"
+fi
+
+if [ "$(cat "$CW_AHEAD_WORKTREE/file.txt" 2>/dev/null)" = "v2-先行タスクの成果" ]; then
+  pass "ローカルの main にしか無い先行タスクの成果がワークツリーに入っている（AC#1）"
+else
+  fail "先行タスクの成果がワークツリーに入っていない（AC#1）: $(cat "$CW_AHEAD_WORKTREE/file.txt" 2>/dev/null)"
+fi
+
+if printf '%s\n' "$cw_ahead_output" | head -1 | grep -Fxq "RESULT: OK"; then
+  pass "起点が保証できている場合は1行目に RESULT: OK を出す（AC#2）"
+else
+  fail "1行目が RESULT: OK になっていない（AC#2）:
+$cw_ahead_output"
+fi
+
+if [ "$(printf '%s\n' "$cw_ahead_output" | tail -2 | head -1)" = "WORKTREE_DIR=$CW_AHEAD_WORKTREE" ] && \
+   [ "$(printf '%s\n' "$cw_ahead_output" | tail -1)" = "BRANCH=improvement/$CW_AHEAD_TASK_ID" ]; then
+  pass "診断行を追加しても、標準出力の最後の2行が WORKTREE_DIR/BRANCH である契約が保たれている"
+else
+  fail "標準出力の最後の2行が WORKTREE_DIR/BRANCH になっていない:
+$cw_ahead_output"
+fi
+
+# ---- AC#2: 既存ブランチを再利用する経路（再引き渡し）で、そのブランチが
+# 起点の先端を含まない場合に STALE_BASE として検知する ----
+(
+  cd "$CW_AHEAD_REPO" || exit 1
+  echo "v3-別の先行タスクの成果" > file.txt
+  git add file.txt
+  git commit -qm "D: 別の先行タスクの成果"
+) >/dev/null 2>&1
+cw_stale_output="$(cd "$CW_AHEAD_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_AHEAD_TASK_ID" 2>/dev/null)"
+
+if printf '%s\n' "$cw_stale_output" | head -1 | grep -Fxq "RESULT: STALE_BASE"; then
+  pass "既存ブランチの再利用で起点の先端を含まない場合、RESULT: STALE_BASE を出す（AC#2）"
+else
+  fail "既存ブランチが起点の先端を含まないのに RESULT: STALE_BASE が出ていない（AC#2）:
+$cw_stale_output"
+fi
+
+if printf '%s\n' "$cw_stale_output" | grep -Fxq "STALE_REASON=reused_branch_behind_base" && \
+   printf '%s\n' "$cw_stale_output" | grep -Fxq "MISSING_COMMITS=main:1"; then
+  pass "STALE_BASE の理由と、含まれていないコミット数を出力する（AC#2）"
+else
+  fail "STALE_REASON/MISSING_COMMITS の出力が想定と異なる（AC#2）:
+$cw_stale_output"
+fi
+
+cw_stale_exit_check="$(cd "$CW_AHEAD_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_AHEAD_TASK_ID" >/dev/null 2>&1; echo $?)"
+if [ "$cw_stale_exit_check" = "0" ]; then
+  pass "STALE_BASE でも終了ステータスは 0 のまま（引き渡しを機械的に止めず、判断は dispatch に委ねる）"
+else
+  fail "STALE_BASE で終了ステータスが 0 以外になった（${cw_stale_exit_check}）"
+fi
+
+# ---- AC#3: auto_merge_reviewed: true でも、ローカルが origin より古い場合は
+# 従来どおり origin/<デフォルトブランチ> から分岐する ----
+CW_BEHIND_REPO="$(cw_make_remote_repo local-behind true)"
+cw_advance_origin "$CW_BEHIND_REPO"
+CW_BEHIND_TASK_ID="task-75-local-behind"
+CW_BEHIND_WORKTREE="$CW_BEHIND_REPO/.worktree/$(basename "$CW_BEHIND_REPO")/$CW_BEHIND_TASK_ID"
+cw_behind_output="$(cd "$CW_BEHIND_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_BEHIND_TASK_ID" 2>/dev/null)"
+
+if printf '%s\n' "$cw_behind_output" | grep -Fxq "BASE_REF=origin/main"; then
+  pass "ローカルが origin より古い場合、auto_merge_reviewed: true でも origin/main を起点にする（AC#3）"
+else
+  fail "ローカルが古いのに origin/main を起点にしていない（AC#3）:
+$cw_behind_output"
+fi
+
+if [ -f "$CW_BEHIND_WORKTREE/remote.txt" ]; then
+  pass "origin にしか無い最新コミットがワークツリーに入っている（AC#3）"
+else
+  fail "origin にしか無い最新コミットがワークツリーに入っていない（AC#3）"
+fi
+
+# ---- AC#2: ローカルと origin が分岐している場合、どちらを起点にしても
+# 片方のコミットが欠けるため STALE_BASE として検知する ----
+CW_DIVERGED_REPO="$(cw_make_remote_repo local-diverged true)"
+cw_advance_origin "$CW_DIVERGED_REPO"
+(
+  cd "$CW_DIVERGED_REPO" || exit 1
+  echo "v2-ローカル側だけの変更" > file.txt
+  git add file.txt
+  git commit -qm "L: ローカル側だけの変更"
+) >/dev/null 2>&1
+cw_diverged_output="$(cd "$CW_DIVERGED_REPO" && "$CREATE_WORKTREE_SCRIPT" task-75-diverged 2>/dev/null)"
+
+if printf '%s\n' "$cw_diverged_output" | head -1 | grep -Fxq "RESULT: STALE_BASE" && \
+   printf '%s\n' "$cw_diverged_output" | grep -Fxq "STALE_REASON=diverged_default_branch"; then
+  pass "ローカルと origin が分岐している場合、RESULT: STALE_BASE と分岐の理由を出す（AC#2）"
+else
+  fail "分岐している場合に STALE_BASE/diverged_default_branch が出ていない（AC#2）:
+$cw_diverged_output"
+fi
+
+if printf '%s\n' "$cw_diverged_output" | grep -Fxq "MISSING_COMMITS=origin/main:1"; then
+  pass "分岐時に、起点へ含められなかった側のコミット数を出力する（AC#2）"
+else
+  fail "分岐時の MISSING_COMMITS の出力が想定と異なる（AC#2）:
+$cw_diverged_output"
+fi
+
+# ---- AC#4: auto_merge_reviewed: false（PR 運用）では、ローカルが先行していても
+# 従来どおり origin/<デフォルトブランチ> 起点のままである ----
+CW_PR_REPO="$(cw_make_remote_repo pr-mode false)"
+(
+  cd "$CW_PR_REPO" || exit 1
+  echo "v2-未 push のローカルコミット" > file.txt
+  git add file.txt
+  git commit -qm "B: 未 push のローカルコミット"
+) >/dev/null 2>&1
+CW_PR_TASK_ID="task-75-pr-mode"
+CW_PR_WORKTREE="$CW_PR_REPO/.worktree/$(basename "$CW_PR_REPO")/$CW_PR_TASK_ID"
+cw_pr_output="$(cd "$CW_PR_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_PR_TASK_ID" 2>/dev/null)"
+
+if printf '%s\n' "$cw_pr_output" | grep -Fxq "BASE_REF=origin/main"; then
+  pass "auto_merge_reviewed: false ではローカルが先行していても origin/main 起点のまま（AC#4）"
+else
+  fail "auto_merge_reviewed: false で起点が origin/main から変わった（AC#4）:
+$cw_pr_output"
+fi
+
+if [ "$(cat "$CW_PR_WORKTREE/file.txt" 2>/dev/null)" = "v1" ]; then
+  pass "auto_merge_reviewed: false では未 push のローカルコミットがワークツリーに混ざらない（AC#4）"
+else
+  fail "auto_merge_reviewed: false なのに未 push のローカルコミットが混ざった（AC#4）: $(cat "$CW_PR_WORKTREE/file.txt" 2>/dev/null)"
+fi
+
+if printf '%s\n' "$cw_pr_output" | head -1 | grep -Fxq "RESULT: OK"; then
+  pass "auto_merge_reviewed: false ではローカルの先行を STALE 扱いしない（AC#4）"
+else
+  fail "auto_merge_reviewed: false でローカルの先行が STALE 扱いされた（AC#4）:
+$cw_pr_output"
+fi
+
+# ---- AC#4: auto_merge_reviewed のキー自体が無い場合（既定値 false）も、
+# false を明示した場合と同じ挙動になる ----
+CW_DEFAULT_REPO="$(cw_make_remote_repo default-mode "")"
+(
+  cd "$CW_DEFAULT_REPO" || exit 1
+  echo "v2-未 push のローカルコミット" > file.txt
+  git add file.txt
+  git commit -qm "B: 未 push のローカルコミット"
+) >/dev/null 2>&1
+cw_default_output="$(cd "$CW_DEFAULT_REPO" && "$CREATE_WORKTREE_SCRIPT" task-75-default-mode 2>/dev/null)"
+
+if printf '%s\n' "$cw_default_output" | grep -Fxq "BASE_REF=origin/main"; then
+  pass "auto_merge_reviewed のキーが無い場合も既定（false）として origin/main 起点になる（AC#4）"
+else
+  fail "auto_merge_reviewed のキーが無い場合の起点が origin/main ではない（AC#4）:
+$cw_default_output"
+fi
+
+# ---- リモート未設定（9/9b/9c と同じ構成）でも RESULT 行が出ることの確認 ----
+TMP_CW_NOREMOTE_REPO="$(mktemp -d)"
+TMP_CW_NOREMOTE_REPO="$(cd "$TMP_CW_NOREMOTE_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_NOREMOTE_REPO"
+(cd "$TMP_CW_NOREMOTE_REPO" && git init -q -b main && git commit -q --allow-empty -m init) >/dev/null 2>&1
+cw_noremote_output="$(cd "$TMP_CW_NOREMOTE_REPO" && "$CREATE_WORKTREE_SCRIPT" task-75-no-remote 2>/dev/null)"
+
+if printf '%s\n' "$cw_noremote_output" | head -1 | grep -Fxq "RESULT: OK" && \
+   printf '%s\n' "$cw_noremote_output" | grep -Fxq "BASE_REF=main"; then
+  pass "リモート未設定のリポジトリでも main 起点で RESULT: OK を出す（既存経路の維持）"
+else
+  fail "リモート未設定のリポジトリでの出力が想定と異なる:
+$cw_noremote_output"
+fi
+
+echo ""
 echo "=== 10. claude-code/skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
 # （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、

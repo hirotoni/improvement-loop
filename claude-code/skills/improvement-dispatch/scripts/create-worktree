@@ -19,12 +19,13 @@
 #      この配下にさらにリポジトリ名で名前空間分けする。
 #   2. ベースディレクトリがリポジトリ内を指す場合だけ、.git/info/exclude に
 #      除外パターンを追記する（リポジトリ外を指す場合は追記しない）。
-#   3. git worktree prune の後、デフォルトブランチを判定する
-#      （フェッチできれば origin/HEAD、できなければ main にフォールバック）。
+#   3. git worktree prune の後、デフォルトブランチを判定し（フェッチできれば
+#      origin/HEAD、できなければ main にフォールバック）、起点（BASE_REF）を
+#      決める（下記「起点の決め方」を参照）。
 #   4. 作業ブランチのワークツリーを作る。既にワークツリーが存在し、割り当て
 #      ブランチが一致する場合は何もしない（再実行の冪等性）。ワークツリーは
 #      無いがブランチだけ存在する場合は、新規作成せずそのブランチを割り当てる
-#      （再引き渡し等）。どちらも無ければ、デフォルトブランチを起点に新規作成する。
+#      （再引き渡し等）。どちらも無ければ、起点（BASE_REF）から新規作成する。
 #   5. .backlog/ を git 管理外のシンボリックリンクとしてワークツリーへ張る
 #      （メインの作業木の .backlog/ を指す。既に存在すれば何もしない）。
 #   6. .git/info/exclude に .backlog の除外パターンを追記する（無ければ）。
@@ -32,6 +33,33 @@
 #      （新規作成・既存ワークツリー再利用のどちらの経路でも実行する。
 #      形式は下記「占有記録の形式」を参照）。
 #   8. .git/info/exclude に .worktree-occupancy の除外パターンを追記する（無ければ）。
+#   9. 割り当てたブランチが起点の先端を含んでいるかを検査し、結果を
+#      RESULT: 行として出力する（下記「起点の鮮度検査」を参照）。
+#
+# 起点の決め方（TASK-75）:
+#   improvement_loop.auto_merge_reviewed（.backlog/config.my.yml、既定 false）で
+#   分岐する。
+#     false（既定・PR 運用）: 従来どおり、フェッチできれば
+#       origin/<デフォルトブランチ>、できなければ main を起点にする。ローカルの
+#       デフォルトブランチが古くても最新から分岐できるようにするためであり、
+#       レビューを通っていない未 push のローカルコミットを起点に混ぜないという
+#       意味も持つ。
+#     true（push しない完全ローカル運用）: origin は原理的に進まないため、
+#       ローカルとリモートのデフォルトブランチの包含関係で起点を選ぶ。
+#       ローカルが origin を含む（先行・同一）ならローカル、ローカルが遅れて
+#       いるなら origin を起点にする。分岐している場合はローカルを起点にした
+#       うえで STALE_BASE として報告する（マージも rebase もしない）。
+#
+# 起点の鮮度検査（TASK-75）:
+#   ワークツリーの作成・再利用が済んだ後、割り当てブランチが「含んでいるべき
+#   参照」を実際に含むかを git merge-base --is-ancestor で確認する。含んで
+#   いるべき参照は、採用した起点（BASE_REF）と、auto_merge_reviewed: true の
+#   ときは採用しなかった側の候補である。既存のワークツリー/ブランチを再利用
+#   する経路では BASE_REF がそもそも使われないため、この検査が無いと
+#   デフォルトブランチが進んだ後の再引き渡しで古い起点のまま気づかずに
+#   引き渡されうる。検査結果は RESULT: 行として出力するだけで、引き渡しを
+#   止めるかどうかの判断は呼び出し側（dispatch）が行う（下記「責務外」）。
+#   終了ステータスは検査結果によって変えない（STALE_BASE でも 0 で終わる）。
 #
 # 冪等性: 同じ <task-id> で複数回実行しても、既存のブランチ・ワークツリー・
 # シンボリックリンク・.git/info/exclude の記述を再利用/スキップし、
@@ -53,11 +81,30 @@
 #
 # 責務外: backlog タスクのステータス変更（In Progress への遷移）はこの
 # スクリプトの外（呼び出し側）で行う。このスクリプトは git ワークツリーの
-# 作成・配置にのみ責任を持つ。
+# 作成・配置と、起点の鮮度の診断にのみ責任を持つ。RESULT: STALE_BASE を
+# 受けて引き渡しを止めるか進めるかの判断も呼び出し側（dispatch）が行う。
+# push・merge・rebase は一切行わない（SKILL.md 禁止事項）。
 #
-# 標準出力の最後に次の2行を出力する（呼び出し側が後続手順で使う）。
-#   WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
-#   BRANCH=<割り当てた作業ブランチ名>
+# 標準出力の契約:
+#   1行目に RESULT: <値> を出す。
+#     RESULT: OK          割り当てブランチが含んでいるべき参照をすべて含む
+#     RESULT: STALE_BASE  含んでいない参照がある（下の STALE_REASON を参照）
+#   続けて次の2行を出す。
+#     BASE_REF=<採用した起点の参照名>
+#     BASE_COMMIT=<その短縮ハッシュ。解決できない場合は N/A>
+#   STALE_BASE のときだけ、理由と欠けているコミット数を1件1行で出す
+#   （複数該当する場合は複数行になる）。
+#     STALE_REASON=reused_branch_behind_base   既存ブランチの再利用で起点の
+#                                              先端を含まない（再引き渡し等）
+#     STALE_REASON=diverged_default_branch     ローカルとリモートのデフォルト
+#                                              ブランチが分岐している
+#     STALE_REASON=branch_behind_default_branch 起点以外の候補を含まない
+#     STALE_REASON=base_ref_unresolved         起点そのものを解決できない
+#     MISSING_COMMITS=<参照名>:<含まれていないコミット数>
+#   最後に次の2行を出力する（呼び出し側が後続手順で使う。この2行が最後で
+#   あることは従来からの契約であり、上の診断行は必ずこれより前に出る）。
+#     WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
+#     BRANCH=<割り当てた作業ブランチ名>
 
 set -euo pipefail
 
@@ -135,21 +182,40 @@ case "$GIT_COMMON_DIR" in
   *) GIT_COMMON_DIR="$REPO_ROOT/$GIT_COMMON_DIR" ;;
 esac
 
-# ---- improvement_loop.worktree_base_dir を .backlog/config.my.yml から読む ----
-# ファイルが無い、またはキーが無い場合は空文字（既定値扱い）とする。
+# ---- .backlog/config.my.yml の improvement_loop 配下のスカラー値を読む ----
+# ファイルが無い、またはキーが無い場合は空文字（＝既定値扱い）を返す。
+# 値の前後の空白・行末コメント・両端の引用符を取り除く。
+# 対象は単一行のスカラー値のみである（配列やネストは扱わない。配列を読む
+# 必要がある check-forbidden-allowed-paths は独自の parse_path_list を持つ）。
 CONFIG_FILE="$REPO_ROOT/.backlog/config.my.yml"
-WORKTREE_BASE_DIR_CONFIG=""
-if [ -f "$CONFIG_FILE" ]; then
-  config_line="$(grep -m1 -E '^[[:space:]]*worktree_base_dir:' "$CONFIG_FILE" || true)"
-  if [ -n "$config_line" ]; then
-    WORKTREE_BASE_DIR_CONFIG="$(printf '%s\n' "$config_line" | sed -E \
-      -e 's/^[[:space:]]*worktree_base_dir:[[:space:]]*//' \
-      -e 's/[[:space:]]+#.*$//' \
-      -e 's/[[:space:]]+$//' \
-      -e 's/^"(.*)"$/\1/' \
-      -e "s/^'(.*)'\$/\\1/")"
+read_config_scalar() {
+  local key="$1"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 0
   fi
-fi
+  local config_line
+  config_line="$(grep -m1 -E "^[[:space:]]*${key}:" "$CONFIG_FILE" || true)"
+  if [ -z "$config_line" ]; then
+    return 0
+  fi
+  printf '%s\n' "$config_line" | sed -E \
+    -e "s/^[[:space:]]*${key}:[[:space:]]*//" \
+    -e 's/[[:space:]]+#.*$//' \
+    -e 's/[[:space:]]+$//' \
+    -e 's/^"(.*)"$/\1/' \
+    -e "s/^'(.*)'\$/\\1/"
+}
+
+WORKTREE_BASE_DIR_CONFIG="$(read_config_scalar worktree_base_dir)"
+
+# improvement_loop.auto_merge_reviewed（既定 false）。true のときこのリポジトリは
+# push を行わない完全ローカル運用であり、起点の決め方が変わる（下の
+# 「起点（BASE_REF）の決定」を参照。TASK-75）。値の解釈だけをここで行い、
+# 設定値そのものの意味は SKILL.md 手順3の記述から動かさない。
+case "$(read_config_scalar auto_merge_reviewed)" in
+  true|True|TRUE) AUTO_MERGE_REVIEWED=1 ;;
+  *) AUTO_MERGE_REVIEWED=0 ;;
+esac
 
 # 絶対パス、またはリポジトリルート起点の相対パスを指定できる。実際の作成先は
 # この配下にさらにリポジトリ名で名前空間分けされる（BASE_DIR/$REPO_NAME/<task-id>）。
@@ -202,11 +268,56 @@ fi
 
 git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
 
+# ---- 起点（BASE_REF）の決定（TASK-75） ----
+# 既定（auto_merge_reviewed が true 以外）では従来どおり、フェッチできれば
+# origin/<デフォルトブランチ>、できなければ main を起点にする。ローカルの
+# デフォルトブランチが古くても最新の内容から分岐できるようにするためであり、
+# PR 運用ではレビューを通っていない未 push のローカルコミットを作業ブランチの
+# 起点に混ぜないという意味も持つ。
+#
+# auto_merge_reviewed: true は push を行わない完全ローカル運用であり
+# （SKILL.md 手順3・禁止事項）、origin は原理的に進まない。この設定では
+# ローカルのデフォルトブランチだけが先行タスクの成果の正本になるため、
+# ローカルとリモートの包含関係を見て起点を選び直す。
+DEFAULT_BRANCH=""
+FETCH_OK=0
 if git fetch origin 2>/dev/null; then
+  FETCH_OK=1
   DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
-  BASE_REF="origin/${DEFAULT_BRANCH:-main}"
+fi
+# デフォルトブランチ名の判定は origin/HEAD からのみ行い、判定できない場合は
+# main にフォールバックする（この挙動は TASK-38 の経路が依存しているため
+# 変えない。ローカルの HEAD からは求めない）。
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+
+ORIGIN_REF=""
+LOCAL_REF=""
+DIVERGED_DEFAULT_BRANCH=0
+if [ "$FETCH_OK" -eq 1 ]; then
+  ORIGIN_REF="origin/$DEFAULT_BRANCH"
+  BASE_REF="$ORIGIN_REF"
 else
   BASE_REF="main"   # デフォルトブランチが判定できない/リモートが無い場合は main を使う
+fi
+
+if [ "$AUTO_MERGE_REVIEWED" -eq 1 ] && [ "$FETCH_OK" -eq 1 ] &&
+   git rev-parse --verify --quiet "refs/heads/$DEFAULT_BRANCH" >/dev/null &&
+   git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null; then
+  LOCAL_REF="$DEFAULT_BRANCH"
+  if git merge-base --is-ancestor "$ORIGIN_REF" "$LOCAL_REF"; then
+    # ローカルが origin を含む（先行、または同一コミット）。push しない運用では
+    # 先行タスクの成果はここにしか無いので、ローカル側を起点にする。
+    BASE_REF="$LOCAL_REF"
+  elif git merge-base --is-ancestor "$LOCAL_REF" "$ORIGIN_REF"; then
+    # ローカルが遅れている。従来どおり origin から分岐する。
+    BASE_REF="$ORIGIN_REF"
+  else
+    # 分岐しており、どちらを起点にしても片方のコミットが欠ける。ここで
+    # マージ・rebase はしない（SKILL.md 禁止事項）。ローカル側を起点にした
+    # うえで、下の鮮度検査で欠落として報告する。
+    BASE_REF="$LOCAL_REF"
+    DIVERGED_DEFAULT_BRANCH=1
+  fi
 fi
 
 # $WORKTREE_DIR が既に登録済みの git ワークツリーであり、割り当てブランチが
@@ -231,14 +342,17 @@ elif [ -d "$WORKTREE_DIR" ]; then
   err "内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねること。"
   exit 1
 elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  # 再引き渡し等で既にブランチが存在する場合は、新規作成せずそのブランチを割り当てる
-  git worktree add "$WORKTREE_DIR" "$BRANCH"
+  # 再引き渡し等で既にブランチが存在する場合は、新規作成せずそのブランチを割り当てる。
+  # git worktree add 自身の進捗出力（"HEAD is now at ..." 等）は標準出力に出るため、
+  # 標準エラーへ回して標準出力を下の出力契約（RESULT: 行以降）だけに保つ。
+  git worktree add "$WORKTREE_DIR" "$BRANCH" >&2
 else
-  # BASE_REF はフェッチ失敗時に "main" へフォールバックした値（140-145行目）であり、
+  # BASE_REF はフェッチ失敗時に "main" へフォールバックした値（上の
+  # 「起点（BASE_REF）の決定」を参照）であり、
   # ローカルのデフォルトブランチが "main" 以外の場合は実在しない参照になりうる。
   # その場合に git worktree add の生のエラーでスクリプトが異常終了しないよう、
   # 他の失敗経路と同様に err() で診断してから明示的な exit code で終了する（TASK-38）。
-  if ! git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF" 2>/dev/null; then
+  if ! git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF" >&2 2>/dev/null; then
     err "BASE_REF ($BASE_REF) の解決に失敗し、ワークツリーを作成できなかった"
     err "リモート 'origin' が設定されているか、ローカルのデフォルトブランチ名が \"main\" と一致するか確認すること。一致しない場合は create-worktree 内の main フォールバック値を実際のデフォルトブランチ名に書き換える必要がある。"
     exit 1
@@ -274,6 +388,71 @@ ASSIGNED_AT_EPOCH="$(date -u +%s)"
 
 # .worktree-occupancy も .backlog と同様に git 管理外にする。
 grep -Fxq ".worktree-occupancy" "$EXCLUDE_FILE" 2>/dev/null || echo ".worktree-occupancy" >> "$EXCLUDE_FILE"
+
+# ---- 起点の鮮度検査（TASK-75） ----
+# 割り当てたブランチが、含んでいるべき参照を実際に含んでいるかを検査する。
+# 新規作成の経路では起点から作った直後なので通常は満たされるが、既存の
+# ワークツリー/ブランチを再利用した経路（再引き渡し等）では BASE_REF が
+# そもそも使われないため、その後に進んだデフォルトブランチのコミットを
+# 含まないまま引き渡されうる。ここはその見落としを機械的に検知する。
+#
+# 含んでいるべき参照:
+#   - 採用した起点（BASE_REF）。
+#   - auto_merge_reviewed: true のときは、採用しなかった側の候補も含める。
+#     この運用ではローカルとリモートのどちらのコミットも失いたくないため、
+#     分岐している場合はここで欠落として現れる。
+STALE_REASONS=()
+MISSING_LINES=()
+
+BASE_COMMIT="$(git rev-parse --short "$BASE_REF" 2>/dev/null || true)"
+if [ -z "$BASE_COMMIT" ]; then
+  # 既存のワークツリー/ブランチを再利用したため BASE_REF を解決できないまま
+  # ここまで来た経路（リモートが消えた等）。起点との比較自体ができない。
+  BASE_COMMIT="N/A"
+  STALE_REASONS+=("base_ref_unresolved")
+  MISSING_LINES+=("MISSING_COMMITS=$BASE_REF:unknown")
+fi
+
+REQUIRED_REFS=("$BASE_REF")
+if [ "$AUTO_MERGE_REVIEWED" -eq 1 ] && [ -n "$LOCAL_REF" ] && [ -n "$ORIGIN_REF" ]; then
+  for candidate_ref in "$LOCAL_REF" "$ORIGIN_REF"; do
+    if [ "$candidate_ref" != "$BASE_REF" ]; then
+      REQUIRED_REFS+=("$candidate_ref")
+    fi
+  done
+fi
+
+for required_ref in "${REQUIRED_REFS[@]}"; do
+  if ! git rev-parse --verify --quiet "$required_ref^{commit}" >/dev/null; then
+    continue   # 解決できない参照は上の BASE_COMMIT 判定で扱い済み
+  fi
+  if git merge-base --is-ancestor "$required_ref" "refs/heads/$BRANCH"; then
+    continue
+  fi
+  missing_count="$(git rev-list --count "refs/heads/$BRANCH..$required_ref" 2>/dev/null || echo "unknown")"
+  MISSING_LINES+=("MISSING_COMMITS=$required_ref:$missing_count")
+  if [ "$required_ref" = "$BASE_REF" ]; then
+    STALE_REASONS+=("reused_branch_behind_base")
+  elif [ "$DIVERGED_DEFAULT_BRANCH" -eq 1 ]; then
+    STALE_REASONS+=("diverged_default_branch")
+  else
+    STALE_REASONS+=("branch_behind_default_branch")
+  fi
+done
+
+if [ "${#MISSING_LINES[@]}" -eq 0 ]; then
+  printf 'RESULT: OK\n'
+else
+  printf 'RESULT: STALE_BASE\n'
+fi
+printf 'BASE_REF=%s\n' "$BASE_REF"
+printf 'BASE_COMMIT=%s\n' "$BASE_COMMIT"
+if [ "${#STALE_REASONS[@]}" -gt 0 ]; then
+  printf 'STALE_REASON=%s\n' "${STALE_REASONS[@]}"
+fi
+if [ "${#MISSING_LINES[@]}" -gt 0 ]; then
+  printf '%s\n' "${MISSING_LINES[@]}"
+fi
 
 echo "WORKTREE_DIR=$WORKTREE_DIR"
 echo "BRANCH=$BRANCH"

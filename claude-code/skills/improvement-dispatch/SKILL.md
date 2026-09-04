@@ -31,7 +31,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 | `max_in_review`        | この件数以上 `In Review` が溜まっていたら新規の引き渡しを止める   | 3       |
 | `max_in_progress`      | 同時に `In Progress` にできる件数                                 | 1       |
 | `max_redispatch`       | 同じタスクを再引き渡しできる回数                                  | 2       |
-| `auto_merge_reviewed`  | `Approved` を検知したとき main に自動マージするかどうか（手順 3） | `false` |
+| `auto_merge_reviewed`  | `Approved` を検知したとき main に自動マージするかどうか（手順 3）。あわせて手順 5 のワークツリーの起点の決め方も変える（`true` は push しない前提なのでローカルのデフォルトブランチを見る） | `false` |
 | `worktree_base_dir`    | ワークツリーの作成先ベースディレクトリ（手順 5）。配下にさらにリポジトリ名で名前空間分けされる | `""`（= リポジトリルート/`.worktree`） |
 | `forbidden_paths`      | AIエージェントが変更してはいけないパスのリスト（前方一致）。手順 5 の引き渡しプロンプトに反映される | `[]`（制限なし） |
 | `allowed_paths`        | AIエージェントが変更してよいパスのリスト（前方一致）。手順 5 の引き渡しプロンプトに反映される | `[]`（制限なし） |
@@ -224,12 +224,24 @@ REPO_ROOT="$(git rev-parse --show-toplevel)" && \
 backlog task edit TASK-<n> -s "In Progress" -a @improvement-work --plain
 ```
 
-`.claude/skills/improvement-dispatch/scripts/create-worktree` は `.backlog/config.my.yml` の `improvement_loop.worktree_base_dir` を自分で読み、標準出力の末尾に次の2行を出力する。
+`.claude/skills/improvement-dispatch/scripts/create-worktree` は `.backlog/config.my.yml` の `improvement_loop.worktree_base_dir` と `improvement_loop.auto_merge_reviewed` を自分で読み、標準出力に次を出力する。
 
 ```
+RESULT: <OK | STALE_BASE>
+BASE_REF=<採用した起点の参照名>
+BASE_COMMIT=<その短縮ハッシュ。解決できない場合は N/A>
 WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
 BRANCH=<割り当てた作業ブランチ名>
 ```
+
+`RESULT: STALE_BASE` のときは、`BASE_COMMIT` と `WORKTREE_DIR` の間に理由と欠けているコミット数が1件1行で入る（複数該当する場合は複数行になる）。
+
+```
+STALE_REASON=<reused_branch_behind_base | diverged_default_branch | branch_behind_default_branch | base_ref_unresolved>
+MISSING_COMMITS=<参照名>:<含まれていないコミット数>
+```
+
+`WORKTREE_DIR` と `BRANCH` が標準出力の最後の2行であることは変わらない。
 
 `&&` でつないでいるため、`create-worktree` が失敗（非ゼロ終了）した場合は後続の `backlog task edit` は実行されない。同じタスク番号・スラッグで再実行しても、既存のワークツリー・ブランチ・exclude の記述を再利用し、エラーにならない（冪等性は `.claude/skills/improvement-dispatch/scripts/create-worktree` 内で保証されている）。
 
@@ -237,7 +249,24 @@ BRANCH=<割り当てた作業ブランチ名>
 
 出力された `WORKTREE_DIR` と `BRANCH` の値は、以降の手順（サブエージェントへの引き渡しプロンプト、`--append-notes` への記録）でリテラルな文字列として使う。シェル変数として次の呼び出しに持ち越そうとしない。
 
-新しいワークツリーはフェッチできれば `origin/<デフォルトブランチ>` を起点にするため、ローカルの `main` 自体が古くても最新の内容から分岐する。一方でローカルの `main` は、以前のように毎回 `pull` されるわけではなく、手順 3 の ff-only マージで進む分だけ更新される。ローカル `main` と `origin/main` がしばらく乖離しても、次の分岐や手順 3 のマージには支障が無い。
+新しいワークツリーの起点は `auto_merge_reviewed` の値で決まる（TASK-75）。
+
+- `auto_merge_reviewed: false`（既定・PR 運用）。フェッチできれば `origin/<デフォルトブランチ>` を起点にするため、ローカルの `main` 自体が古くても最新の内容から分岐する。未 push のローカルコミットはレビューを通っていない変更なので、作業ブランチの起点に混ぜない。
+- `auto_merge_reviewed: true`（push しない完全ローカル運用）。この設定では手順 3 のマージ結果が push されないので `origin/<デフォルトブランチ>` は進まない。先行タスクの成果はローカルのデフォルトブランチにしか無いため、ローカルとリモートの包含関係を見て起点を選ぶ。ローカルが `origin` を含む（先行・同一）ならローカル、ローカルが遅れているなら `origin` を起点にする。これにより、`--dep` で順序付けたタスクの先行分がワークツリーに入る。
+
+ローカルの `main` は、以前のように毎回 `pull` されるわけではなく、手順 3 の ff-only マージで進む分だけ更新される。
+
+`create-worktree` は起点を決めた後、割り当てたブランチが実際にその起点の先端を含んでいるかを検査し、結果を `RESULT:` 行として出す。**この行を読まずに引き渡さない。** 既存のワークツリー・ブランチを再利用する経路（再引き渡し）では起点が使われないため、この検査を見ないと古い起点のまま気づかずに引き渡すことになる。
+
+| `RESULT` | 意味 | dispatch が行うこと |
+| --- | --- | --- |
+| `OK` | 割り当てブランチが起点（および `auto_merge_reviewed: true` のときは採用しなかった側の候補）を含んでいる | そのまま引き渡す。 |
+| `STALE_BASE` / `STALE_REASON=reused_branch_behind_base` | 既存ブランチを再利用したが、そのブランチが起点の先端を含まない（再引き渡しの間にデフォルトブランチが進んだ場合など） | 欠けているコミット（`MISSING_COMMITS`）が引き渡すタスクの前提になっていないか確認する。前提になっている（`--dep` の先行タスクの成果を含む等）場合は引き渡さず、そのブランチをどう扱うか（作業ブランチを畳んで作り直すか、人間がマージするか）を報告に挙げて人間の判断に回す。前提でないなら、その事実を引き渡しプロンプトに明記したうえで引き渡してよい。 |
+| `STALE_BASE` / `STALE_REASON=diverged_default_branch` | ローカルとリモートのデフォルトブランチが分岐しており、どちらを起点にしても片方のコミットが欠ける | 引き渡さない。dispatch は `merge`・`rebase`・`push` でこれを解消しない（禁止事項）。分岐している事実と `MISSING_COMMITS` を報告し、人間の判断に回す。 |
+| `STALE_BASE` / `STALE_REASON=branch_behind_default_branch` | 起点以外の候補（`auto_merge_reviewed: true` のときのもう一方のデフォルトブランチ）を含まない | `reused_branch_behind_base` と同じ扱いにする。欠けているコミットがタスクの前提かどうかで判断する。 |
+| `STALE_BASE` / `STALE_REASON=base_ref_unresolved` | 起点そのものを解決できない（リモートが消えた等） | 引き渡さない。環境の不備として報告する。 |
+
+`RESULT: STALE_BASE` でも `create-worktree` 自体は 0 で終了する（`&&` は切れず、後続の `backlog task edit` は実行される）。引き渡すかどうかの判断は上の表のとおり dispatch の責務であり、引き渡さないと判断した場合は `backlog task edit TASK-<n> -s "To Do" --comment '<STALE_BASE の内容>' --comment-author @dispatch --plain` で `To Do` に戻す。
 
 `$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`create-worktree` はエラーを報告して非ゼロで終了する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
 
