@@ -1,19 +1,10 @@
 #!/usr/bin/env bash
-# tests/test_backlog_plain_single_source.sh
-#
 # backlog CLI の `--plain` の適用範囲の正本（claude-code/skills/backlog-plain.md）と、
-# それを参照する4つの SKILL.md に対するテスト。単体で実行すると、このファイルの
-# 検証だけが走る。tests/run.sh から全体実行の一部としても呼ばれる。
+# それを参照する SKILL.md 群に対するテスト。
 #
-# 目的（TASK-72）: この知識は以前 improvement-scout / improvement-add /
-# improvement-scout-major / workspace-scout-major の4ファイルに独立して複製されており、
-# 実際に4箇所が同じ誤りを抱えたまま片方だけ直る事故が起きていた（TASK-67）。
-# 正本を1つにした後も、複製が「説明を親切に書き足す」形で再発しうるため、
-# 再発を機械的に検知する回帰テストとして置く（正本と実装の食い違いを検知する
-# tests/test_setup_improvement_loop.sh の「1d」と同じ位置づけ）。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# この知識は以前4つの SKILL.md に独立して複製されており、4箇所が同じ誤りを抱えたまま
+# 片方だけ直る事故が起きていた。正本を1つにした後も「説明を親切に書き足す」形で複製が
+# 再発しうるため、それを機械的に検知する回帰テストとして置く。
 
 set -uo pipefail
 
@@ -42,7 +33,7 @@ else
   pass "$CANONICAL_REL が存在する"
 
   # 正本が「付けるコマンド」「付けないコマンド」の両方を列挙していることを確認する。
-  # 片方だけになると、参照側は正本を読んでも判断できない（TASK-67 が確定させた内容）。
+  # 片方だけになると、参照側は正本を読んでも判断できない。
   PLAIN_REQUIRED_COMMANDS=(
     "backlog task list"
     "backlog task view"
@@ -78,8 +69,8 @@ echo "=== 2. 正本以外に独立した説明が無いこと ==="
 
 # 独立した説明の再発を検知するマーカー。--plain の適用範囲を自前で説明しようとすると、
 # 「付けると失敗する側の根拠（エラーメッセージ）」か「表に無いコマンドの判断方法」の
-# どちらかをほぼ必ず書くことになるため、この2つを複製の目印として使う。
-# `--plain` そのものはコマンド例として各所に正しく現れるので、目印には使わない。
+# どちらかをほぼ必ず書くことになるので、この2つを目印に使う。`--plain` 自体は
+# コマンド例として各所に正しく現れるため目印にならない。
 DUPLICATION_MARKERS=(
   "unknown option '--plain'"
   "Input schema"
@@ -108,9 +99,8 @@ for rel in "${REFERRING_FILES[@]}"; do
     continue
   fi
 
-  # リポジトリ相対パス表記（status-table.md の参照形式に合わせたリンクテキスト）と、
-  # 配布先の .claude/skills/<スキル名> シンボリックリンクから実体を解決したときに
-  # 通る相対リンクの両方があることを確認する。導入先リポジトリ・ワークスペースには
+  # リポジトリ相対パス表記と、配布先の .claude/skills/<スキル名> シンボリックリンクから
+  # 実体を解決したときに通る相対リンクの両方があることを確認する。導入先には
   # claude-code/skills/ が存在しないため、相対リンクが無いと正本に到達できない。
   case "$rel" in
     claude-code/workspace-skills/*) expected_link="(../../skills/backlog-plain.md)" ;;

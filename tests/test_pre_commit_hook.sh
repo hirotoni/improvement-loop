@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# tests/test_pre_commit_hook.sh
+# githooks/pre-commit に対するテスト。
 #
-# githooks/pre-commit に対するテスト。単体で実行すると、このファイルの
-# 検証だけが走る。tests/run.sh から全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# フック自体は `git rev-parse --show-toplevel` で解決したリポジトリルート直下の
+# tests/run.sh を実行するだけの薄いラッパーなので、一時リポジトリの直下に
+# tests/run.sh という名前でスタブを置けば、実運用と同じ経路（core.hooksPath 経由の
+# 起動 → ルートの tests/run.sh 実行）を保ったまま外部依存無しに検証できる。
 
 set -uo pipefail
 
@@ -16,13 +15,6 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 11. githooks/pre-commit の動作確認 ==="
-# TASK-17: tests/run.sh を pre-commit フックから自動実行し、FAIL 時はコミットを
-# ブロックする（受入基準 #1・#3）。githooks/pre-commit 自体は
-# `git rev-parse --show-toplevel` で解決したリポジトリルート直下の
-# tests/run.sh を実行するだけの薄いラッパーなので、一時リポジトリの直下に
-# tests/run.sh という名前でスタブを置けば、実運用と同じ経路
-# （core.hooksPath 経由のフック起動 → リポジトリルートの tests/run.sh 実行）
-# を保ったまま、外部依存無しに高速に動作確認できる。
 
 if [ ! -f "$PRECOMMIT_HOOK" ]; then
   fail "githooks/pre-commit が存在しない: $PRECOMMIT_HOOK"

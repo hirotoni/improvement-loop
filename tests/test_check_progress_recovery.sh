@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-# tests/test_check_progress_recovery.sh
-#
-# claude-code/skills/improvement-dispatch/scripts/check-progress-recovery に対する
-# テスト。単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
-# 全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# claude-code/skills/improvement-dispatch/scripts/check-progress-recovery に対するテスト。
 
 set -uo pipefail
 
@@ -17,28 +10,13 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 13. claude-code/skills/improvement-dispatch/scripts/check-progress-recovery の動作確認 ==="
-# improvement-dispatch 手順2-3（In Progress タスクの引き渡し先が失われたと
-# 確定した後の復旧診断）を切り出した claude-code/skills/improvement-dispatch/scripts/check-progress-recovery を、
-# 一時 git リポジトリに対して実際に実行して検証する（TASK-21 受入基準 #1-#3 に対応）。
-#   13a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH（AC#1）
-#   13b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH（AC#2）
-#   13c. ブランチが存在しない -> REVERT_TO_TODO（AC#3）
-#   13d. ブランチは存在するが新しいコミットが無い -> REVERT_TO_TODO（AC#3）
-#   13e. 引数の妥当性検証（引数不足・base_branch が解決できない）
-#
-# 占有記録（.worktree-occupancy、TASK-40）の鮮度を追加の判定材料にする
-# TASK-41 の回帰テスト:
-#   13f. ブランチ有り・新しいコミット無し・占有記録が新しい
-#        -> REUSE_WORKTREE_REDISPATCH に上書きされる（AC#1）
-#   13g. ブランチ有り・新しいコミット無し・占有記録が古い
-#        -> 既存通り REVERT_TO_TODO のまま変わらない（AC#2）
-#   13h. ブランチ有り・新しいコミット無し・占有記録が存在しない
-#        -> 既存通り REVERT_TO_TODO のまま変わらない（AC#2・AC#3）
+# 一時 git リポジトリに対して実際に実行し、ワークツリー・ブランチ・新しいコミットの
+# 有無の組み合わせ（13a-13e）と、占有記録 .worktree-occupancy の有無・鮮度による
+# 上書き（13f-13h）を検証する。
 
 TMP_CR_REPO="$(mktemp -d)"
-# macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
-# claude-code/skills/improvement-dispatch/scripts/check-progress-recovery 内部の pwd -P による正規化後
-# （/private/var/...）と文字列比較が一致しない。ここでも同じ正規化をしておく。
+# macOS の mktemp -d はシンボリックリンク経由のパスを返し、check-progress-recovery 内部の
+# pwd -P による正規化後と一致しない。ここでも同じ正規化をしておく。
 TMP_CR_REPO="$(cd "$TMP_CR_REPO" && pwd -P)"
 CR_WORKTREE_DIR="${TMP_CR_REPO}-wt"
 register_tmp_cleanup "$TMP_CR_REPO" "$CR_WORKTREE_DIR"
@@ -139,10 +117,9 @@ else
 $cr_out_badbase"
 fi
 
-# ---- TASK-41: 占有記録（.worktree-occupancy）の鮮度を判定材料にする回帰テスト ----
-# 13a-13e とは別に、ワークツリー有り・ブランチ有り・新しいコミット無し
-# （＝コミット履歴だけでは REVERT_TO_TODO になるケース）を作り、その中で
-# .worktree-occupancy の有無・鮮度を切り替えて検証する。
+# ---- 占有記録（.worktree-occupancy）の鮮度を判定材料にする回帰テスト ----
+# コミット履歴だけでは REVERT_TO_TODO になるケースを作り、その中で占有記録の
+# 有無・鮮度を切り替えて検証する。
 CR_WORKTREE_DIR2="${TMP_CR_REPO}-wt2"
 register_tmp_cleanup "$CR_WORKTREE_DIR2"
 (cd "$TMP_CR_REPO" && git worktree add -q -b feature-recovery-occupancy "$CR_WORKTREE_DIR2" main)

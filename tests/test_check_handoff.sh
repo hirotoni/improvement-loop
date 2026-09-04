@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# tests/test_check_handoff.sh
-#
 # claude-code/skills/improvement-work/scripts/check-handoff に対するテスト。
-# 単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
-# 全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# 一時 git リポジトリを作り、3条件（作業ディレクトリ一致・ブランチ一致・
+# .backlog シンボリックリンクの健全性）の判定を実際に実行して検証する。
 
 set -uo pipefail
 
@@ -17,15 +12,10 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 12. claude-code/skills/improvement-work/scripts/check-handoff の動作確認 ==="
-# improvement-work 手順1（引き渡し内容の確認）の3条件（作業ディレクトリ一致・
-# ブランチ一致・.backlog シンボリックリンクの健全性）を切り出した
-# claude-code/skills/improvement-work/scripts/check-handoff を、一時 git リポジトリに対して
-# 実際に実行して検証する（TASK-24 受入基準 #1-#4 に対応）。
 
 TMP_HANDOFF_REPO="$(mktemp -d)"
-# macOS では mktemp -d が返すパスがシンボリックリンク経由（/var/... -> /private/var/...）
-# であり、check-handoff 内部の pwd -P による正規化後のパスと文字列比較するため、
-# ここでも同じ正規化をしておく。
+# macOS の mktemp -d はシンボリックリンク経由のパスを返す。check-handoff 内部の
+# pwd -P による正規化後のパスと比較するため、ここでも同じ正規化をしておく。
 TMP_HANDOFF_REPO="$(cd "$TMP_HANDOFF_REPO" && pwd -P)"
 register_tmp_cleanup "$TMP_HANDOFF_REPO"
 

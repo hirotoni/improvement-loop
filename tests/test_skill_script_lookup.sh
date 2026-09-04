@@ -1,25 +1,11 @@
 #!/usr/bin/env bash
-# tests/test_skill_script_lookup.sh
-#
 # claude-code/skills/improvement-work/SKILL.md の手順1（check-handoff の解決）と
-# 手順8（check-forbidden-allowed-paths の解決）に埋め込まれた「スクリプト実体
-# パスの2候補探索」ブロックが、対象スクリプト名を除いて同一であることを検証する。
-# 単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
-# 全体実行の一部としても呼ばれる。
+# 手順8（check-forbidden-allowed-paths の解決）に埋め込まれた「スクリプト実体パスの
+# 2候補探索」ブロックが、対象スクリプト名を除いて同一であることを検証する。
 #
-# なぜこのテストがあるか（TASK-76）:
-# この探索処理は手順1と手順8に意図的に重複して書かれている。共通化しない判断
-# とその理由は improvement-work/SKILL.md 手順8の該当箇条書きに記録してある
-# （要約すると、共通化先を SKILL.md から呼ぶには共通化先自身の実パスを同じ
-# 2候補探索で解決する必要があり、問題が再帰するため）。重複を残す以上、
-# 片方だけが変更されて手順1と手順8で挙動が食い違う事故が起こりうる。
-# このテストはその食い違いを機械的に検出する。
-# 「1つの情報が2箇所にある以上、食い違いを回帰テストで押さえる」という形は
-# tests/test_setup_improvement_loop.sh の 1d（REQUIRED_STATUSES と
-# status-table.md の一致検査、TASK-32）と同じである。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# この探索処理は意図的に重複して書かれている（共通化しない判断とその理由は
+# improvement-work/SKILL.md 手順8の該当箇条書きにある）。重複を残す以上、片方だけが
+# 変更されて手順1と手順8で挙動が食い違う事故が起こりうる。これはその検出である。
 
 set -uo pipefail
 
@@ -34,12 +20,10 @@ echo "=== 15. improvement-work/SKILL.md のスクリプト2候補探索ブロッ
 WORK_SKILL_FILE="$SOURCE_SKILLS_DIR/improvement-work/SKILL.md"
 
 # 探索ブロックの範囲の決め方:
-#   開始 = `<変数名>=""` だけの行で、その次の行が `MAIN_WORKTREE_ROOT=` で
-#          始まるもの（探索結果を入れる変数の初期化）
+#   開始 = `<変数名>=""` だけの行で、次の行が `MAIN_WORKTREE_ROOT=` で始まるもの
 #   終了 = 開始以降で最初に現れる行頭 `done`（候補ループの閉じ）
-# ブロックの目印を「MAIN_WORKTREE_ROOT の代入」に置いたのは、これがメインの
-# 作業木のパス取得＝2候補探索に固有の処理であり、SKILL.md 内の他の bash
-# ブロックには現れないためである。
+# 目印を MAIN_WORKTREE_ROOT の代入に置いたのは、これが2候補探索に固有の処理であり、
+# SKILL.md 内の他の bash ブロックには現れないためである。
 extract_lookup_blocks() {
   awk '
     { line[NR] = $0 }
@@ -59,9 +43,8 @@ extract_lookup_blocks() {
   ' "$1"
 }
 
-# ブロックから対象スクリプト固有の要素（探索結果を入れる変数名・スキル名・
-# スクリプト名）を機械的に消し、構造だけを残す。変数名は「消す対象を
-# ハードコードする」のではなく、ブロック先頭の初期化行から読み取る。
+# ブロックから対象スクリプト固有の要素（変数名・スキル名・スクリプト名）を機械的に
+# 消し、構造だけを残す。変数名はハードコードせずブロック先頭の初期化行から読み取る。
 normalize_lookup_block() {
   local block="$1"
   local var_name
@@ -70,9 +53,8 @@ normalize_lookup_block() {
     printf '%s\n' "$block"
     return
   fi
-  # 変数名は英数字と _ だけなので、そのまま正規表現として使ってよい。
-  # `claude-code/skills/...` と `.claude/skills/...` は別の文字列であり、
-  # 2つの置換が互いに食い合うことはない。
+  # 変数名は英数字と _ だけなのでそのまま正規表現として使ってよい。
+  # `claude-code/skills/...` と `.claude/skills/...` は別の文字列なので置換が食い合わない。
   printf '%s\n' "$block" \
     | sed -E "s#${var_name}#SCRIPT_VAR#g" \
     | sed -E 's#claude-code/skills/[^/"]+/scripts/[^/"]+#claude-code/skills/SKILL_NAME/scripts/SCRIPT_NAME#g' \
@@ -115,7 +97,7 @@ fi
 
 echo ""
 echo "--- 15b. 2つのブロックが手順1・手順8のものである ---"
-# 抽出対象を取り違えていないことの確認。手順1は check-handoff を、手順8は
+# 抽出対象を取り違えていないことの確認。手順1は check-handoff、手順8は
 # check-forbidden-allowed-paths を探すブロックであり、この2つ以外は無い。
 found_scripts="$(printf '%s\n' "${BLOCKS[@]}" \
   | sed -n -E 's#.*claude-code/skills/[^/"]+/scripts/([^/"]+).*#\1#p' | sort -u)"

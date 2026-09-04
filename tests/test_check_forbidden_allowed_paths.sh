@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# tests/test_check_forbidden_allowed_paths.sh
-#
-# claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths に
-# 対するテスト。単体で実行すると、このファイルの検証だけが走る。
-# tests/run.sh から全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths
+# に対するテスト。
 
 set -uo pipefail
 
@@ -17,48 +11,13 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 14. claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の動作確認 ==="
-# TASK-44: forbidden_paths/allowed_pathsと変更ファイル一覧を突き合わせる判定
-# ロジックを、一時 git リポジトリに対して実際に実行して検証する。
-#   14a. forbidden_paths に前方一致する変更ファイルがある -> VIOLATION（AC#1）
-#   14b. forbidden_paths が設定されているが該当ファイルが無い -> OK
-#   14c. allowed_paths の範囲外の変更ファイルがある -> VIOLATION（AC#2）
-#   14d. allowed_paths の範囲内のみ -> OK
-#   14e. forbidden_paths/allowed_paths が両方とも空配列 -> OK（AC#3）
-#   14f. .backlog/config.my.yml 自体が無い -> OK（AC#3）
-#   14g. 両方設定されている場合、allowed範囲内でもforbidden一致なら違反
-#   14h. 変更ファイルを1件も渡さない場合 -> OK
-#   14i. 対象リポジトリの外（gitリポジトリでない場所）で実行すると ERROR
-#   14j. forbidden_paths を複数行YAMLリスト形式で書いた場合、インライン配列
-#        形式と同じ判定結果（VIOLATION）になる（TASK-56 AC#1）
-#   14k. allowed_paths を複数行YAMLリスト形式で書いた場合、インライン配列
-#        形式と同じ判定結果（範囲外はVIOLATION、範囲内はOK）になる（TASK-56 AC#1）
-#   14l. forbidden_paths を複数行YAMLリスト形式かつ空（次行に "-" 項目が
-#        続かない）で書いた場合、キー自体が無い場合と同じく制限なし（OK）に
-#        なる（既存の空配列＝無制限という意味論を壊さない）
-#   14m. forbidden_paths の値が配列でもスカラーでもない壊れたYAML/サポート
-#        対象外の記法（例: クォートされていない単一のパス文字列）のとき、
-#        RESULT: ERROR（exit 2）になる（TASK-56 AC#3）
-#   14n. forbidden_paths をシングルクォートのインライン配列で書いた場合、
-#        ダブルクォート版と同じ判定結果になる（TASK-62 AC#2: 引用符除去は
-#        bin/lib/yaml_unquote.sh の trim_and_unquote に集約されており、
-#        bin/setup-improvement-loop の parse_statuses_block と挙動が
-#        一致することをここでも確認する）
-#   14o. forbidden_paths をシングルクォートの複数行YAMLリストで書いた場合、
-#        ダブルクォート版と同じ判定結果になる（TASK-62 AC#2）
-#   14p. .git/info/exclude で除外された .backlog/ 配下の変更は git diff 由来の
-#        変更ファイル一覧に載らないため、forbidden_paths に ".backlog/" を
-#        書いても RESULT: OK のまま止まらない。一方、同じパスを引数で明示的に
-#        渡せば VIOLATION になる（TASK-69 AC#1。死角は判定側ではなく一覧の
-#        作り方の側にあることを固定する）
-#   14q. .claude/skills/<スキル名> 配下についても同じ（TASK-69 AC#2）
-#   14r. その限界が、設定箇所（backlog-md/config.my.yml）と
-#        スクリプトの契約コメントの両方に明記されている（TASK-69 AC#1/AC#2。
-#        記述が黙って消えるのを防ぐ）
+# forbidden_paths / allowed_paths と変更ファイル一覧を突き合わせる判定ロジックを、
+# 一時 git リポジトリに対して実際に実行して検証する。各ケースの内容は本文中の
+# セクション見出し（14a 以降）を参照。
 
 TMP_CFA_REPO="$(mktemp -d)"
-# macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
-# check-forbidden-allowed-paths 内部の git rev-parse --show-toplevel が返す
-# 正規化後のパス（/private/var/...）と文字列比較が一致しないことがあるため、
+# macOS の mktemp -d はシンボリックリンク経由のパスを返し、スクリプト内部の
+# git rev-parse --show-toplevel が返す正規化後のパスと一致しないことがある。
 # ここでも同じ正規化をしておく。
 TMP_CFA_REPO="$(cd "$TMP_CFA_REPO" && pwd -P)"
 register_tmp_cleanup "$TMP_CFA_REPO"
@@ -336,13 +295,11 @@ fi
 
 echo ""
 echo "--- 14p. git 管理外（.git/info/exclude で除外）の .backlog/ 配下は git diff 由来の一覧に載らず機械的に止まらないが、引数で明示すれば判定される（TASK-69 AC#1） ---"
-# bin/setup-improvement-loop 手順6が導入先の .git/info/exclude に .backlog と
-# .claude/skills/<スキル名> を登録するため、この2つは git 管理外になる。
-# 呼び出し側2箇所は変更ファイル一覧を git diff から作るので、これらのパスは
-# 一覧に載らず、forbidden_paths に書いても機械的には止まらない。
-# 一方でスクリプト自身はパスの追跡状態を見ないため、引数として渡されさえすれば
-# 判定する。この「死角は判定側ではなく一覧の作り方の側にある」という切り分けを
-# 固定するのがこの2ケースである（限界の記述そのものは 14r で確認する）。
+# bin/setup-improvement-loop が .backlog と .claude/skills/<スキル名> を
+# .git/info/exclude に登録するので、この2つは git 管理外になる。呼び出し側は変更ファイル
+# 一覧を git diff から作るため、これらは一覧に載らず機械的には止まらない。一方スクリプト
+# 自身はパスの追跡状態を見ないので、引数で渡されさえすれば判定する。この「死角は判定側
+# ではなく一覧の作り方の側にある」という切り分けを固定するのがこの2ケースである。
 TMP_CFA_IGNORED="$(mktemp -d)"
 TMP_CFA_IGNORED="$(cd "$TMP_CFA_IGNORED" && pwd -P)"
 register_tmp_cleanup "$TMP_CFA_IGNORED"
@@ -415,9 +372,8 @@ fi
 
 echo ""
 echo "--- 14r. 機械的に止まらない範囲が、設定箇所（config.my.yml テンプレート）とスクリプトの契約コメントの両方に明記されている（TASK-69 AC#1/AC#2） ---"
-# 14p/14q が固定しているのは「止まらない」という事実だけである。受入基準が
-# 求めているのは、その事実が設定する人の読む場所に書かれていることなので、
-# 記述が黙って消えないようここで確認する。
+# 14p/14q が固定しているのは「止まらない」という事実だけである。その事実が設定する人の
+# 読む場所に書かれていることを、記述が黙って消えないようここで確認する。
 if grep -Fq 'git 管理外' "$SOURCE_CONFIG" \
     && grep -Fq '.git/info/exclude' "$SOURCE_CONFIG" \
     && grep -Fq '.backlog/' "$SOURCE_CONFIG" \
@@ -435,8 +391,7 @@ else
   fail "14r: check-forbidden-allowed-paths のヘッダーに限界の記述が無い: $CHECK_FORBIDDEN_ALLOWED_SCRIPT"
 fi
 
-# 後片付け: write_cfa_config で使う想定のインライン配列形式に戻しておく
-# （このファイル内で以降のテストが追加された場合の事故を防ぐ）。
+# 後片付け: 以降にテストが追加された場合の事故を防ぐため、インライン配列形式に戻す。
 write_cfa_config '[]' '[]'
 
 finish_tests

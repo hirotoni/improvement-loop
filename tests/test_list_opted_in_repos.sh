@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-# tests/test_list_opted_in_repos.sh
-#
 # bin/lib/list_opted_in_repos.sh の list_opted_in_repos() に対する単体テスト。
-# 単体で実行すると、このファイルの検証だけが走る。tests/run.sh から全体実行の
-# 一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
 
 set -uo pipefail
 

@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# tests/test_setup_improvement_loop.sh
-#
-# bin/setup-improvement-loop（および install.zsh 経由でのシンボリックリンク
-# 起動）に対するテスト。単体で実行すると、このファイルの検証だけが走る。
-# tests/run.sh から全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# bin/setup-improvement-loop（および install.zsh 経由でのシンボリックリンク起動）
+# に対するテスト。
 
 set -uo pipefail
 
@@ -16,9 +10,8 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-# SKILL_NAMES は claude-code/skills/ ディレクトリの実体を単一の情報源として動的に
-# 列挙する。bin/setup-improvement-loop 側と同じ方式で導出することで、片方だけ
-# 更新して他方が追随しないという実装依存の同期漏れを構造的に無くす。
+# claude-code/skills/ の実体を単一の情報源として動的に列挙する。setup 側と同じ方式で
+# 導出することで、片方だけ更新して他方が追随しない同期漏れを構造的に無くす。
 shopt -s nullglob
 SKILL_NAMES=()
 for skill_dir in "$SOURCE_SKILLS_DIR"/*/; do
@@ -30,9 +23,8 @@ if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# REQUIRED_STATUSES は bin/setup-improvement-loop 側の定義を単一の情報源として
-# 使う。ここに配列リテラルを複製すると、片方だけ更新されてテストが実体と
-# ズレたまま緑になる恐れがあるため、対象スクリプトからその1行を抽出して評価する。
+# bin/setup-improvement-loop 側の定義を単一の情報源として使う。配列リテラルを複製すると、
+# 片方だけ更新されてテストが実体とズレたまま緑になるため、その1行を抽出して評価する。
 REQUIRED_STATUSES_DEF="$(grep -m1 '^REQUIRED_STATUSES=' "$SETUP_SCRIPT" || true)"
 if [ -z "$REQUIRED_STATUSES_DEF" ]; then
   printf 'FAIL: bin/setup-improvement-loop に REQUIRED_STATUSES の定義が見つからない\n'
@@ -69,34 +61,27 @@ assert_statuses_present() {
   fi
 }
 
-# .git/info/exclude に期待する行と見出しコメントは、セクション2（新規導入）と
-# セクション3（再実行）の両方が参照する定数である。どちらかのセクションの中で
-# 組み立てると、そのセクションを実行しないと他方が壊れる（＝実行順序に依存する）
-# ため、セクションの外で一度だけ導出する。
+# セクション2（新規導入）とセクション3（再実行）の両方が参照する定数。どちらかの
+# セクション内で組み立てると実行順序に依存するので、セクションの外で一度だけ導出する。
 EXCLUDE_HEADER="# improvement-loop"
 EXPECTED_EXCLUDE_LINES=(".backlog")
 for name in "${SKILL_NAMES[@]}"; do
   EXPECTED_EXCLUDE_LINES+=(".claude/skills/$name")
 done
 
-# write_settled_backlog_config: 「improvement-loop の導入が既に済んでいる
-# リポジトリ」の .backlog/config.yml を書き出す。statuses に6ステータスが揃い、
-# remote_operations が false、default_assignee も設定済みという、
+# 「improvement-loop の導入が既に済んでいるリポジトリ」の .backlog/config.yml を書き出す。
+# statuses に6ステータスが揃い、remote_operations が false、default_assignee も設定済みという、
 # setup-improvement-loop が既に一度収束させた後の状態である。
 #
-# .backlog/config.yml そのものを検証対象にしていないセクション（config.my.yml の
-# マイグレーションを見る 6・6b・6c 系）がこれを使う。前状態を「git init しただけの
-# 空リポジトリ」にすると、setup-improvement-loop が backlog init と
-# backlog config set を追加で起動する。backlog CLI は1回の起動だけで平均 170ms
-# かかり、それがセクションの所要時間の大半を占めていた（TASK-82 で計測）。
-# 検証対象でない収束処理を毎セクション走らせる必要はないので、収束済みの状態から
-# 始める。アサーションは一切変えていない。
+# config.yml 自体を検証対象にしていないセクション（config.my.yml のマイグレーションを見る
+# 6・6b・6c 系）がこれを使う。前状態を空リポジトリにすると setup が backlog init と
+# backlog config set を追加で起動し、backlog CLI は1回の起動で平均 170ms かかるためである。
+# 検証対象でない収束処理を毎セクション走らせる必要はない。
 #
-# .backlog/config.yml を自前の heredoc で書き出しているセクション（4・5・5b・7・7d）も
-# 同じ理由で default_assignee と remote_operations: false を与えてある。statuses の
-# 書式や旧ステータス名の残存はそれぞれの検証対象なので heredoc のまま残し、検証対象で
-# ないこの2キーだけを収束済みにしている。8c だけは remote_operations: true から false へ
-# 収束することそのものが検証対象なので、収束前の値を保っている。
+# config.yml を自前の heredoc で書くセクション（4・5・5b・7・7d）も同じ理由で
+# default_assignee と remote_operations: false を与えてある。statuses の書式や旧ステータス名の
+# 残存はそれぞれの検証対象なので heredoc のまま残す。8c だけは remote_operations の収束
+# そのものが検証対象なので収束前の値を保っている。
 # 引数: 書き出す config.yml のパス, project_name
 write_settled_backlog_config() {
   local config_file="$1"
@@ -123,17 +108,13 @@ YAML
 }
 
 echo "=== 共有フィクスチャの構築 ==="
-# 一時リポジトリを作って $SETUP_SCRIPT を流し直す処理が、このファイルの所要時間の
-# ほぼ全部を占める。同じ前状態に対して同じ実行をしているセクションが複数あるため、
-# その分をここで1回だけ作り、各セクションは「読む」か「cp -a で複製する」かの
-# どちらかだけを行う。
+# 一時リポジトリを作って $SETUP_SCRIPT を流し直す処理が、このファイルの所要時間のほぼ
+# 全部を占める。同じ前状態に対して同じ実行をするセクションが複数あるので、ここで1回だけ
+# 作り、各セクションは「読む」か「cp -a で複製する」かのどちらかだけを行う。
 #
-# ここで作るフィクスチャは、構築が終わったあと誰も書き換えない。書き換えが要る
-# セクションは必ず自分用の複製を作る。フィクスチャの構築をこの1ブロックに集約し、
-# 各セクションが他のセクションの副作用に依存しないようにすることで、セクションの
-# 実行順序を入れ替えても、あるセクションだけを抜き出して実行しても結果が変わらない
-# 状態を保つ（TASK-82 受入基準#3）。フィクスチャの実行結果（終了コード・出力）に
-# 対するアサーションは、従来どおり各セクションの側に置いてある。
+# ここで作るフィクスチャは構築後に誰も書き換えない。書き換えが要るセクションは必ず自分用の
+# 複製を作る。これにより、セクションの実行順序を入れ替えても、あるセクションだけを抜き出して
+# 実行しても結果が変わらない。実行結果に対するアサーションは各セクションの側に置いてある。
 
 # FIXTURE_FRESH: git リポジトリに setup-improvement-loop を初めて実行した直後の状態。
 # 「新規導入」を前提に検証するセクション 2・6c-4・8a が読み取り専用で共有する。
@@ -167,11 +148,9 @@ echo "FIXTURE_FRESH / FIXTURE_RERUN を構築した（それぞれ setup-improve
 
 echo ""
 echo "=== 1d. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
-# REQUIRED_STATUSES（上で導出済み）と、TASK-30 で新設された状態遷移表の正本
-# （claude-code/skills/status-table.md）の「## 状態遷移表」節に列挙されたステータス名の
-# 集合が一致することを検証する。ステータス名の情報源が2箇所に分かれている以上、
-# 将来どちらか一方だけが更新されて食い違う可能性が残るため、その食い違いを
-# 検知する回帰テスト（TASK-32）。
+# REQUIRED_STATUSES と、状態遷移表の正本（claude-code/skills/status-table.md）の
+# 「## 状態遷移表」節に列挙されたステータス名の集合が一致することを検証する。
+# 情報源が2箇所に分かれている以上、片方だけが更新されて食い違いうるためである。
 STATUS_TABLE_FILE="$REPO_ROOT/claude-code/skills/status-table.md"
 if [ ! -f "$STATUS_TABLE_FILE" ]; then
   fail "claude-code/skills/status-table.md が存在しない"
@@ -234,9 +213,8 @@ for name in "${SKILL_NAMES[@]}"; do
 done
 
 # ---- .backlog/config.yml の statuses の検証 ----
-# backlog init --defaults の既定 statuses は To Do / In Progress / Done の3種のみで、
-# improvement ループの4スキルが前提とする Proposed / In Review / Approved が無いと
-# improvement-work が最初に In Review へ上げようとした時点で Invalid status で失敗する。
+# backlog init --defaults の既定 statuses は3種のみで、Proposed / In Review / Approved が
+# 無いと improvement-work が In Review へ上げた時点で Invalid status で失敗する。
 assert_statuses_present "$FIXTURE_FRESH_REPO/.backlog/config.yml" "1回目実行後"
 
 # ---- config.my.yml の検証 ----
@@ -278,15 +256,10 @@ fi
 
 echo ""
 echo "=== 2b. install.zsh 経由でシンボリックリンクされた状態での実行 ==="
-# install.zsh は bin/setup-improvement-loop を $HOME/.local/bin にシンボリック
-# リンクする。実際にインストールされた環境では、このスクリプトは常にリンク
-# 経由で起動される。BASH_SOURCE をシンボリックリンク解決せずに使うと、配布元
-# ルートの算出を誤り「配布元の claude-code/skills ディレクトリが見つからない」で
-# 落ちる（過去の不具合）。一時 $HOME に対して install.zsh を実行し、出来た
-# シンボリックリンク経由で setup-improvement-loop を起動して検証する。
-#
-# 一時パスはこのセクションだけが使う（他のセクションと共有しない）ので、
-# ここで作る。
+# 実際にインストールされた環境では setup-improvement-loop は常にシンボリックリンク経由で
+# 起動される。BASH_SOURCE をリンク解決せずに使うと配布元ルートの算出を誤り、
+# 「配布元の claude-code/skills ディレクトリが見つからない」で落ちる。一時 $HOME に対して
+# install.zsh を実行し、出来たリンク経由で起動して検証する。
 TMP_HOME="$(mktemp -d)"
 TMP_REPO_SYMLINK="$(mktemp -d)"
 register_tmp_cleanup "$TMP_HOME" "$TMP_REPO_SYMLINK"
@@ -344,12 +317,9 @@ fi
 
 echo ""
 echo "=== 3. 冪等性・ユーザー所有ファイル保護の検証 ==="
-# 検証対象は共有フィクスチャ FIXTURE_RERUN である。導入済みリポジトリに
-# .backlog/config.my.yml へのユーザー追記と .backlog/config.yml の statuses への
-# ユーザー独自ステータス追加を加えたうえで2回目を実行した状態なので、変更が
-# 再実行で消えないこと（既存設定の保持）と、6ステータスが揃った状態が維持される
-# こと（欠けている分だけ補う冪等性）を同時に検証できる。
-# このセクションはフィクスチャを読むだけで、書き換えない。
+# 検証対象は共有フィクスチャ FIXTURE_RERUN（ユーザー変更を加えたうえで2回目を実行した
+# 状態）。変更が再実行で消えないこと（既存設定の保持）と、6ステータスが揃った状態が
+# 維持されること（欠けている分だけ補う冪等性）を同時に検証できる。読むだけで書き換えない。
 rerun_config="$FIXTURE_RERUN_REPO/.backlog/config.my.yml"
 rerun_backlog_config="$FIXTURE_RERUN_REPO/.backlog/config.yml"
 rerun_exclude_file="$FIXTURE_RERUN_REPO/.git/info/exclude"
@@ -413,10 +383,8 @@ fi
 
 echo ""
 echo "=== 4. statuses: [] (空配列) に対する回帰テスト ==="
-# macOS の既定 /bin/bash は 3.2 系であり、set -u 下で空配列を
-# "${arr[@]}" のように無条件展開すると unbound variable で落ちる
-# （bash 4.4 で修正されたバグ）。.backlog/config.yml の statuses が
-# 空配列（例: ユーザーが手動で `statuses: []` にした場合）でも
+# macOS 既定の bash 3.2 は set -u 下で空配列を "${arr[@]}" と展開すると unbound variable で
+# 落ちる。statuses が空配列（ユーザーが手動で `statuses: []` にした場合）でも
 # setup-improvement-loop がクラッシュしないことを確認する。
 
 TMP_REPO_EMPTY_STATUSES="$(mktemp -d)"
@@ -455,12 +423,10 @@ assert_statuses_present "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" "statuses
 
 echo ""
 echo "=== 5. statuses の複数行YAMLリスト形式に対する回帰テスト ==="
-# .backlog/config.yml の statuses を複数行YAMLリスト形式
-# （statuses: の次行以降に "  - \"To Do\"" のように列挙する形式）で手動編集する
-# ケースは想定されている（bin/setup-improvement-loop:15-19 の冪等性方針コメント、
-# 各SKILL.mdの手順が config.yml の statuses への直接編集を案内している）。
-# この形式で setup-improvement-loop を（再）実行しても、壊れたYAML
-# （置換し損ねた元の "  - ..." 行が残る等）を生成しないことを確認する。
+# statuses を複数行YAMLリスト形式で手動編集するケースは想定されている（各 SKILL.md の
+# 手順が config.yml の statuses への直接編集を案内している）。この形式で
+# setup-improvement-loop を（再）実行しても、置換し損ねた "  - ..." 行が残るような
+# 壊れた YAML を生成しないことを確認する。
 
 TMP_REPO_MULTILINE_STATUSES="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_MULTILINE_STATUSES"
@@ -536,12 +502,9 @@ assert_statuses_present "$multiline_result_config" "複数行リスト形式か�
 
 echo ""
 echo "=== 5b. statuses のシングルクォート形式に対する回帰テスト（TASK-62） ==="
-# parse_statuses_block はダブルクォートしか剥がさない不具合があった
-# （claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
-# trim_and_unquote はシングル/ダブル両方を対称に剥がすのに、
-# parse_statuses_block 側は非対称だった）。有効な YAML であるシングルクォートで
-# statuses を書いた場合に、既存要素が空扱いになったり、引用符付きのまま
-# 残って REQUIRED_STATUSES と文字列一致せず重複挿入されたりしないことを確認する。
+# 引用符除去がダブルクォートしか剥がさないと、有効な YAML であるシングルクォートで
+# statuses を書いた場合に既存要素が空扱いになったり、引用符付きのまま残って
+# REQUIRED_STATUSES と文字列一致せず重複挿入されたりする。その回帰テストである。
 
 # 与えた config.yml の statuses に、REQUIRED_STATUSES の各要素が「ちょうど1回」
 # ダブルクォート付きで含まれること（重複挿入されていないこと）を検証する。
@@ -652,20 +615,17 @@ fi
 
 echo ""
 echo "=== 6. config.my.yml の不足キー補完（マイグレーション）の回帰テスト ==="
-# 配布元テンプレート（backlog-md/config.my.yml）に新しいキーが
-# 追加された状況を、「導入先の config.my.yml に一部キーが欠けている」状態として
-# 再現する。setup-improvement-loop を実行すると、欠けているキーだけがテンプレート
-# 側のコメント・既定値付きで補われ、既存のキーの値・コメント、テンプレートに
-# 無いユーザー独自のキーはそのまま残ることを確認する（TASK-19）。
+# テンプレートに新しいキーが追加された状況を「導入先の config.my.yml に一部キーが
+# 欠けている」状態として再現する。欠けているキーだけがテンプレート側のコメント・既定値
+# 付きで補われ、既存のキーの値・コメントとユーザー独自のキーは残ることを確認する。
 
 TMP_REPO_MIGRATION="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_MIGRATION"
 
 (cd "$TMP_REPO_MIGRATION" && git init -q)
 mkdir -p "$TMP_REPO_MIGRATION/.backlog"
-# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
-# だけである）。収束済みの config.yml を先に置き、backlog init と
-# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
+# （このセクションが見るのは config.my.yml だけである）。
 write_settled_backlog_config "$TMP_REPO_MIGRATION/.backlog/config.yml" "migration-test"
 
 # テンプレートの最後のキー（auto_merge_reviewed、コメント込み）が丸ごと欠けた
@@ -743,22 +703,18 @@ fi
 
 echo ""
 echo "=== 6b. コメントアウトされたキーの誤認・重複追記の回帰テスト（TASK-37） ==="
-# ensure_config_my_yml_keys は、既存キーの検出に "^  key:" という正規表現しか
-# 使っていなかったため、ユーザーが値を一時的に無効化する目的で行頭に "#" を
-# 付けてコメントアウトしたキー（例: "  # max_in_review: 3"）を「未設定」と
-# 誤認し、次回実行時にテンプレート側の既定値付きで有効な形で再追記していた
-# （同名キーがコメント化された行と有効な行の2箇所に重複する）。
-# コメントアウトされたキーはユーザーが意図的に無効化した状態として扱い、
-# 有効な重複キーとして再追記されないことを検証する。
+# 既存キーの検出が "^  key:" だけだと、ユーザーが一時的に無効化する目的で行頭に "#" を
+# 付けたキー（例: "  # max_in_review: 3"）を「未設定」と誤認し、有効な形で再追記して
+# しまう（同名キーが2箇所に重複する）。コメントアウトされたキーは意図的な無効化として
+# 扱い、重複追記されないことを検証する。
 
 TMP_REPO_COMMENTED="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_COMMENTED"
 
 (cd "$TMP_REPO_COMMENTED" && git init -q)
 mkdir -p "$TMP_REPO_COMMENTED/.backlog"
-# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
-# だけである）。収束済みの config.yml を先に置き、backlog init と
-# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
+# （このセクションが見るのは config.my.yml だけである）。
 write_settled_backlog_config "$TMP_REPO_COMMENTED/.backlog/config.yml" "commented-key-test"
 
 commented_config="$TMP_REPO_COMMENTED/.backlog/config.my.yml"
@@ -816,36 +772,27 @@ fi
 
 echo ""
 echo "=== 6c. 既存キーの説明コメントがテンプレートから取り残された場合の検出（TASK-74） ==="
-# ensure_config_my_yml_keys が補うのは「導入先に無いキー」だけなので、既にある
-# キーの説明コメントは setup-improvement-loop を何度再実行しても更新されない。
-# その結果、テンプレート側のコメントに入った重要な訂正が既存の導入先に永久に
-# 届かなかった。実例は TASK-69 で、forbidden_paths/allowed_paths の説明に
-# 「git 管理外のパスは機械的には止まらない」という限界を書き足したが、既存の
-# 導入先には旧説明（「機械的に拒否・検知する仕組みではない」）が残り続けた。
-#
-# ユーザー所有ファイルを壊さないことを優先し、機械的な差し替えはしない
-# （どちらが新しいかをスクリプトから区別できないため）。代わりに、差異がある
-# ことと、テンプレート側の最新の説明そのものを利用者に示す。
-# ここではその報告が出ること、および報告のためにファイルを一切書き換えない
-# ことを検証する。
+# ensure_config_my_yml_keys が補うのは「導入先に無いキー」だけなので、既にあるキーの
+# 説明コメントは再実行しても更新されず、テンプレート側の重要な訂正が既存の導入先に届かない。
+# ユーザー所有ファイルを壊さないことを優先して機械的な差し替えはせず、差異があることと
+# テンプレート側の最新の説明を利用者に示すにとどめる。ここではその報告が出ること、および
+# 報告のためにファイルを一切書き換えないことを検証する。
 
 TMP_REPO_COMMENT_DRIFT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_COMMENT_DRIFT"
 
 (cd "$TMP_REPO_COMMENT_DRIFT" && git init -q)
 mkdir -p "$TMP_REPO_COMMENT_DRIFT/.backlog"
-# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
-# だけである）。収束済みの config.yml を先に置き、backlog init と
-# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
+# （このセクションが見るのは config.my.yml だけである）。
 write_settled_backlog_config "$TMP_REPO_COMMENT_DRIFT/.backlog/config.yml" "comment-drift-test"
 
 drift_config="$TMP_REPO_COMMENT_DRIFT/.backlog/config.my.yml"
 cp "$SOURCE_CONFIG" "$drift_config"
 
-# 「TASK-69 より前のテンプレートで導入されたリポジトリ」を再現する。
-# テンプレートの文面に依存しないよう、forbidden_paths のキー行の直前にある
-# 連続コメント行（＝そのキーの説明ブロック）の先頭行だけを、旧テンプレートの
-# 文言に差し替える。他のキー・値・ユーザー独自の記述には触れない。
+# 「古いテンプレートで導入されたリポジトリ」を再現する。テンプレートの文面に依存しないよう、
+# forbidden_paths のキー行の直前にある連続コメント行（＝そのキーの説明ブロック）の
+# 先頭行だけを旧文言に差し替える。他のキー・値・ユーザー独自の記述には触れない。
 drift_config_tmp="$(mktemp)"
 register_tmp_cleanup "$drift_config_tmp"
 awk '
@@ -942,18 +889,16 @@ rm -f "$drift_config_before"
 
 echo ""
 echo "--- 6c-2. ユーザーが変更した値・独自キー・コメントアウトしたキーは壊れない（TASK-74 AC#2） ---"
-# 説明コメントの差異検出を追加しても、既存の3つの保護（値の保持・独自キーの保持・
-# コメントアウトされたキーを有効化しない）が崩れないことを、1つのファイルに
-# 全部を同居させた状態で確認する。
+# 説明コメントの差異検出があっても、既存の3つの保護（値の保持・独自キーの保持・
+# コメントアウトされたキーを有効化しない）が崩れないことを、全部を同居させて確認する。
 
 TMP_REPO_DRIFT_USEREDIT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_DRIFT_USEREDIT"
 
 (cd "$TMP_REPO_DRIFT_USEREDIT" && git init -q)
 mkdir -p "$TMP_REPO_DRIFT_USEREDIT/.backlog"
-# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
-# だけである）。収束済みの config.yml を先に置き、backlog init と
-# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
+# （このセクションが見るのは config.my.yml だけである）。
 write_settled_backlog_config "$TMP_REPO_DRIFT_USEREDIT/.backlog/config.yml" "drift-useredit-test"
 
 useredit_config="$TMP_REPO_DRIFT_USEREDIT/.backlog/config.my.yml"
@@ -998,7 +943,7 @@ else
   fail "説明コメントの差異検出でコメントアウトされたキー max_in_progress が有効化された（${useredit_active_count} 件）"
 fi
 # コメントアウトされたキーは有効なキー行として存在しないため、差異検出の対象外である
-# （この限界は warn_config_my_yml_comment_drift の契約コメントに明記されている）。
+# （この限界は warn_config_my_yml_comment_drift のコメントに明記されている）。
 if printf '%s\n' "$useredit_output" | grep -Fq "キー 'max_in_progress' の説明コメントが"; then
   fail "コメントアウトされたキー max_in_progress が差異検出の対象になった:
 $useredit_output"
@@ -1013,9 +958,8 @@ register_tmp_cleanup "$TMP_REPO_NO_DRIFT"
 
 (cd "$TMP_REPO_NO_DRIFT" && git init -q)
 mkdir -p "$TMP_REPO_NO_DRIFT/.backlog"
-# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
-# だけである）。収束済みの config.yml を先に置き、backlog init と
-# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
+# （このセクションが見るのは config.my.yml だけである）。
 write_settled_backlog_config "$TMP_REPO_NO_DRIFT/.backlog/config.yml" "no-drift-test"
 cp "$SOURCE_CONFIG" "$TMP_REPO_NO_DRIFT/.backlog/config.my.yml"
 
@@ -1042,9 +986,8 @@ fi
 
 echo ""
 echo "--- 6c-4. 新規導入（config.my.yml が無い状態）は従来どおりテンプレートのコピー（TASK-74 AC#3） ---"
-# 「config.my.yml が無い git リポジトリへの1回目の実行」は共有フィクスチャ
-# FIXTURE_FRESH がまさにその状態なので、専用の一時リポジトリを作らず読み取りで
-# 共有する。このセクションはフィクスチャを書き換えない。
+# 「config.my.yml が無い git リポジトリへの1回目の実行」は FIXTURE_FRESH がまさに
+# その状態なので、専用の一時リポジトリを作らず読み取りで共有する。
 if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
   pass "config.my.yml が無い新規導入の実行が成功する（exit 0）"
 else
@@ -1065,14 +1008,10 @@ fi
 
 echo ""
 echo "=== 7. 旧ステータス名 Reviewed が残る既存 consumer リポジトリの移行（TASK-48） ==="
-# TASK-8 で Reviewed は Approved にリネームされたが、この移行は本リポジトリ自身の
-# .backlog/config.yml のみを対象に行われ、setup-improvement-loop（配布ロジック）
-# には反映されていなかった。TASK-8 以前にセットアップされた既存 consumer
-# リポジトリを模擬した一時ディレクトリ環境（statuses に Reviewed と Approved が
-# 両方残り、status: Reviewed の既存タスクがある状態）に対して setup-improvement-loop
-# を実行し、(a) statuses の重複が解消され Reviewed が消えること（AC#1）、
-# (b) 既存タスクが Approved へ移行されること（AC#2）を検証する。
-# 実際の consumer リポジトリ（~/dotfiles 等）へは書き込まない。
+# 旧ステータス名 Reviewed が残ったままの既存 consumer リポジトリ（statuses に Reviewed と
+# Approved が両方あり、status: Reviewed の既存タスクもある状態）を一時ディレクトリで模擬し、
+# (a) statuses の重複が解消され Reviewed が消えること、(b) 既存タスクが Approved へ
+# 移行されることを検証する。実際の consumer リポジトリへは書き込まない。
 
 TMP_REPO_REVIEWED_MIGRATION="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_REVIEWED_MIGRATION"
@@ -1080,7 +1019,7 @@ register_tmp_cleanup "$TMP_REPO_REVIEWED_MIGRATION"
 (cd "$TMP_REPO_REVIEWED_MIGRATION" && git init -q)
 mkdir -p "$TMP_REPO_REVIEWED_MIGRATION/.backlog"
 
-# TASK-48 の起票時に実機（~/dotfiles）で確認された statuses の並びをそのまま模擬する。
+# 実機で確認された statuses の並びをそのまま模擬する。
 cat > "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml" <<'YAML'
 project_name: "reviewed-migration-test"
 default_assignee: ["@improvement-loop-bot"]
@@ -1100,13 +1039,10 @@ active_branch_days: 30
 task_prefix: "task"
 YAML
 
-# status: Reviewed の既存タスク（TASK-1）と、影響を受けてはいけない別ステータスの
-# タスク（TASK-2、To Do のまま）を backlog CLI 経由で用意する。
-# TASK-1 のタイトルにわざと "TASK-999"（存在しないタスクID）という文字列を
-# 含めておく。`backlog task list --status "Reviewed" --plain` の出力行から
-# タスクIDを抽出する実装が、行のどこにでも現れる "TASK-[0-9]+" を素朴に拾うと、
-# タイトル中のこの文字列を別タスクのIDと誤検出し、存在しない TASK-999 を
-# 移行しようとして失敗する（回帰テスト）。
+# status: Reviewed の既存タスク（TASK-1）と、影響を受けてはいけない別ステータスのタスク
+# （TASK-2、To Do のまま）を backlog CLI 経由で用意する。TASK-1 のタイトルにわざと
+# "TASK-999"（存在しないタスクID）を含める。ID 抽出が行のどこにでも現れる
+# "TASK-[0-9]+" を素朴に拾うと、これを別タスクの ID と誤検出して失敗する。
 (cd "$TMP_REPO_REVIEWED_MIGRATION" && backlog task create "reviewed task fix TASK-999 regression" --plain >/dev/null)
 (cd "$TMP_REPO_REVIEWED_MIGRATION" && backlog task edit TASK-1 -s "Reviewed" --plain >/dev/null)
 (cd "$TMP_REPO_REVIEWED_MIGRATION" && backlog task create "still todo task" --plain >/dev/null)
@@ -1118,7 +1054,7 @@ if [ -z "$reviewed_task_file" ] || ! grep -Fxq 'status: Reviewed' "$reviewed_tas
   fail "テスト前提が壊れている: TASK-1 を status: Reviewed にできなかった"
 fi
 
-# AC#4 の証跡: 移行前の状態をログに残す（模擬環境での before）。
+# 移行前の状態をログに残す（模擬環境での before）。
 echo "--- 移行前（before） ---"
 echo "config.yml statuses: $(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
 echo "TASK-1 status: $(grep -m1 '^status:' "$reviewed_task_file")"
@@ -1133,13 +1069,13 @@ else
 $reviewed_migration_output"
 fi
 
-# AC#4 の証跡: 移行後の状態をログに残す（模擬環境での after）。
+# 移行後の状態をログに残す（模擬環境での after）。
 echo "--- 移行後（after） ---"
 echo "config.yml statuses: $(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
 echo "TASK-1 status: $(grep -m1 '^status:' "$reviewed_task_file")"
 echo "TASK-2 status: $(grep -m1 '^status:' "$todo_task_file")"
 
-# ---- AC#1: statuses から旧名 Reviewed が消え、Approved の重複が解消される ----
+# ---- statuses から旧名 Reviewed が消え、Approved の重複が解消される ----
 result_status_line="$(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
 if ! grep -Fq '"Reviewed"' <<<"$result_status_line"; then
   pass "AC#1: statuses から旧名 'Reviewed' が除去された"
@@ -1153,7 +1089,7 @@ else
   fail "AC#1: statuses の 'Approved' の件数が想定と異なる（${approved_count} 件）: $result_status_line"
 fi
 
-# ---- AC#2: status: Reviewed だった既存タスクが Approved へ移行される ----
+# ---- status: Reviewed だった既存タスクが Approved へ移行される ----
 if grep -Fxq 'status: Approved' "$reviewed_task_file"; then
   pass "AC#2: status: Reviewed だった TASK-1 が Approved へ移行された"
 else
@@ -1167,11 +1103,9 @@ else
   fail "移行対象外のタスク（To Do）の status が意図せず変更された: $(grep -m1 '^status:' "$todo_task_file")"
 fi
 
-# タイトルに含まれる "TASK-999" という文字列が、存在しないタスクIDとして
-# 誤検出・誤操作されていないことを確認する（回帰テスト）。誤検出されていれば
-# 上の「setup-improvement-loop 実行が成功する」の時点で TASK-999 が存在しない
-# ため既に失敗しているはずだが、念のためタスクファイルが作られていないことも
-# 直接確認する。
+# タイトル中の "TASK-999" が存在しないタスクIDとして誤検出・誤操作されていないことを
+# 確認する。誤検出されていれば上の実行の時点で既に失敗しているはずだが、念のため
+# タスクファイルが作られていないことも直接確認する。
 fake_task_999_file="$(find "$TMP_REPO_REVIEWED_MIGRATION/.backlog/tasks" -name 'task-999*' 2>/dev/null)"
 if [ -z "$fake_task_999_file" ]; then
   pass "タイトル中の 'TASK-999' という文字列が存在しないタスクIDとして誤検出されなかった"
@@ -1181,8 +1115,7 @@ fi
 
 echo ""
 echo "=== 7b. 移行済みリポジトリへの再実行は何も変化させない（AC#3・冪等性） ==="
-# 7. で Reviewed が完全に移行済みになった同じリポジトリに再度実行し、
-# 「既に移行済みのリポジトリでは何も変化しない」（AC#3 の後半）ことを確認する。
+# 7. で移行済みになった同じリポジトリに再度実行し、何も変化しないことを確認する。
 
 reviewed_task_status_before_rerun="$(cat "$reviewed_task_file")"
 config_before_rerun="$(cat "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
@@ -1217,10 +1150,8 @@ fi
 
 echo ""
 echo "=== 7c. Reviewed が元から存在しないリポジトリでは何も変化しない（AC#3） ==="
-# 共有フィクスチャ FIXTURE_RERUN（通常セットアップ済みで、Reviewed を一度も
-# 含んだことが無いリポジトリへの再実行）の出力を読み、Reviewed 関連の移行処理が
-# 両方ともスキップと報告されることを確認する（AC#3 の前半）。
-# このセクションはフィクスチャを書き換えない。
+# FIXTURE_RERUN（Reviewed を一度も含んだことが無いリポジトリへの再実行）の出力を読み、
+# Reviewed 関連の移行処理が両方ともスキップと報告されることを確認する。
 
 if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
   pass "Reviewed が元から無いリポジトリへの実行が成功する（exit 0）"
@@ -1238,12 +1169,10 @@ fi
 
 echo ""
 echo "=== 7d. task_prefix をカスタマイズしたリポジトリでの Reviewed タスク移行（回帰テスト） ==="
-# backlog task list --plain が出力する ID は config.yml の task_prefix に応じて
-# 変わる（既定は "TASK-<n>" だが、task_prefix: "issue" なら "ISSUE-<n>"）。
-# ID 抽出パターンを "TASK-" 固定にすると、task_prefix をカスタマイズした
-# リポジトリでは対象タスクを一切検出できず、config.yml の statuses からだけ
-# "Reviewed" が消えて既存タスクが status: Reviewed のまま永久に取り残される
-# （後続の再実行でも同じく検出できないため回復しない）。この不具合の回帰テスト。
+# ID は config.yml の task_prefix に応じて変わる（task_prefix: "issue" なら "ISSUE-<n>"）。
+# 抽出パターンを "TASK-" 固定にすると、prefix をカスタマイズしたリポジトリでは対象タスクを
+# 一切検出できず、statuses からだけ "Reviewed" が消えて既存タスクが取り残される
+# （再実行でも検出できないので回復しない）。その回帰テストである。
 
 TMP_REPO_CUSTOM_PREFIX="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX"
@@ -1301,17 +1230,11 @@ fi
 
 echo ""
 echo "=== 8. remoteOperations / defaultAssignee の既定値収束の検証 ==="
-# improvement-loop は push を前提としない完全ローカル運用のため、backlog CLI の
-# remote git 操作に依存させる理由がなく、backlog init --defaults の既定
-# remoteOperations: true を false に収束させる。また、タスクの起票者を
-# improvement-loop-bot に統一するため defaultAssignee も収束させる。どちらも
-# ensure_backlog_statuses と同じ「未設定・既定値のままの箇所だけを安全に補正し、
-# 既にユーザーが設定した値は上書きしない」パターンに従う（TASK番号未採番、
-# ユーザー指示による追加）。
+# remoteOperations と defaultAssignee は「未設定・既定値のままの箇所だけを安全に補正し、
+# 既にユーザーが設定した値は上書きしない」パターンで収束させる。
 
-# 8a の前状態「git init しただけのリポジトリへの新規セットアップ」は共有フィクスチャ
-# FIXTURE_FRESH と同一なので、読み取りで共有する（書き換えない）。
-# backlog config get は読み取り専用のコマンドであり、フィクスチャを変更しない。
+# 8a の前状態は FIXTURE_FRESH と同一なので読み取りで共有する
+# （backlog config get は読み取り専用でフィクスチャを変更しない）。
 if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
   pass "8a: 新規セットアップの実行が成功する（exit 0）"
 else
@@ -1334,8 +1257,7 @@ else
 fi
 
 # ---- 8b. 冪等性: 再実行しても壊れず、両方とも [skip] と報告される ----
-# 8b の前状態「remoteOperations/defaultAssignee が収束済みのリポジトリへの再実行」も
-# 共有フィクスチャ FIXTURE_RERUN と同一なので、読み取りで共有する（書き換えない）。
+# 前状態は FIXTURE_RERUN と同一なので読み取りで共有する。
 rerun_defaults_config="$FIXTURE_RERUN_REPO/.backlog/config.yml"
 if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
   pass "8b: remoteOperations/defaultAssignee が既に収束済みの状態への再実行が成功する（exit 0）"
@@ -1447,14 +1369,11 @@ fi
 
 echo ""
 echo "=== 9. --workspace フラグの検証 ==="
-# --workspace は既定動作（フラグ無し）とは完全に別の経路である。git 判定を
-# スキップし、claude-code/workspace-skills/ 配下のスキルだけを .claude/skills/ に
-# シンボリックリンクとして配置する。backlog init や .backlog/ 配下の配置は
-# 一切行わない（Scope参照）。
+# --workspace はフラグ無しの既定動作とは完全に別の経路で、git 判定をスキップし、
+# claude-code/workspace-skills/ 配下のスキルだけを .claude/skills/ に配置する。
+# backlog init や .backlog/ 配下の配置は一切行わない。
 
-# WORKSPACE_SKILL_NAMES は claude-code/workspace-skills/ ディレクトリの実体を単一の
-# 情報源として動的に列挙する。bin/setup-improvement-loop 側の
-# SOURCE_WORKSPACE_SKILLS_DIR 動的列挙と同じ方式で導出する。
+# WORKSPACE_SKILL_NAMES は setup 側と同じく実体を単一の情報源として動的に列挙する。
 shopt -s nullglob
 WORKSPACE_SKILL_NAMES=()
 for skill_dir in "$SOURCE_WORKSPACE_SKILLS_DIR"/*/; do
@@ -1499,7 +1418,7 @@ if [ "$workspace_plain_links_ok" = true ]; then
   pass "9a: claude-code/workspace-skills/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる"
 fi
 
-# 単一リポジトリ用の5スキルが誤って混入していないことも確認する（Decision 6）。
+# 単一リポジトリ用のスキルが誤って混入していないことも確認する。
 workspace_plain_no_repo_skills=true
 for name in "${SKILL_NAMES[@]}"; do
   if [ -e "$TMP_WORKSPACE_PLAIN/.claude/skills/$name" ]; then
@@ -1511,8 +1430,7 @@ if [ "$workspace_plain_no_repo_skills" = true ]; then
   pass "9a: --workspace 経路では単一リポジトリ用の5スキルが混入しない"
 fi
 
-# 配置される .claude/skills/ の件数が、claude-code/workspace-skills/ の件数と厳密に一致することも確認する
-# （想定外の余分なエントリが無いことの直接検証）。
+# 件数が厳密に一致すること（想定外の余分なエントリが無いこと）も確認する。
 workspace_plain_actual_count="$(find "$TMP_WORKSPACE_PLAIN/.claude/skills" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 if [ "$workspace_plain_actual_count" = "${#WORKSPACE_SKILL_NAMES[@]}" ]; then
   pass "9a: .claude/skills/ 配下のエントリ数が claude-code/workspace-skills/ の件数（${#WORKSPACE_SKILL_NAMES[@]}）と一致する"
@@ -1589,8 +1507,7 @@ if [ -f "$workspace_git_exclude_file" ]; then
   if [ "$workspace_git_exclude_ok" = true ]; then
     pass "9c: 対象が git リポジトリでもある場合、配置したワークスペーススキルが .git/info/exclude に追記される"
   fi
-  # .backlog は --workspace 経路では配置しないため、exclude にも追記されないことを確認する
-  # （既定経路の EXCLUDE_LINES=(".backlog" ...) との違いの直接検証）。
+  # .backlog は --workspace 経路では配置しないので、exclude にも追記されないことを確認する。
   if grep -Fxq ".backlog" "$workspace_git_exclude_file"; then
     fail "9c: --workspace 経路なのに .git/info/exclude に '.backlog' が追記されている"
   else
@@ -1640,9 +1557,8 @@ else
   fail "9e: 位置引数がフラグより前にある場合に、対象ディレクトリへスキルが配置されなかった"
 fi
 
-# ---- 9f. --workspace 無しの既定動作は本セクションの追加後も影響を受けない ----
-# 対象ディレクトリが git リポジトリでなければ、これまで通り --workspace 無しでは
-# エラーで停止することを再確認する（既定動作の回帰防止の直接検証）。
+# ---- 9f. --workspace 無しの既定動作が影響を受けていないこと ----
+# 対象ディレクトリが git リポジトリでなければ --workspace 無しではエラーで停止する。
 TMP_NON_GIT_NO_FLAG="$(mktemp -d)"
 register_tmp_cleanup "$TMP_NON_GIT_NO_FLAG"
 no_flag_output="$("$SETUP_SCRIPT" "$TMP_NON_GIT_NO_FLAG" 2>&1)"
@@ -1654,12 +1570,10 @@ else
 $no_flag_output"
 fi
 
-# ---- 9g/9h. backlog が PATH に無い環境での回帰ガード（P2 fix: backlog は
-# --workspace 経路では不要）----
-# check_test_dependencies() はファイル冒頭で backlog の存在を前提にしている
-# ため、ここでは呼び出しの瞬間だけ PATH から backlog の解決元ディレクトリを
-# 除いた環境を作り、その中で実行することで「backlog が無い」状態を再現する。
-# git は解決できたままにする必要がある（git は --workspace 経路でも常に必須）。
+# ---- 9g/9h. backlog が PATH に無い環境での回帰ガード（--workspace 経路では不要）----
+# 冒頭の check_test_dependencies() は backlog の存在を前提にしているので、ここでは
+# 呼び出しの瞬間だけ PATH から backlog の解決元ディレクトリを除いた環境を作る。
+# git は --workspace 経路でも常に必須なので解決できたままにする。
 BACKLOG_BIN_DIR="$(dirname "$(command -v backlog)")"
 STRIPPED_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fxv "$BACKLOG_BIN_DIR" | tr '\n' ':')"
 STRIPPED_PATH="${STRIPPED_PATH%:}"

@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# tests/test_create_worktree.sh
-#
 # claude-code/skills/improvement-dispatch/scripts/create-worktree に対するテスト
-# （既定の worktree_base_dir・カスタム worktree_base_dir の両方）。単体で
-# 実行すると、このファイルの検証だけが走る。tests/run.sh から全体実行の
-# 一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# （既定の worktree_base_dir・カスタム worktree_base_dir の両方）。
 
 set -uo pipefail
 
@@ -18,16 +11,13 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 9. claude-code/skills/improvement-dispatch/scripts/create-worktree の動作確認 ==="
-# claude-code/skills/improvement-dispatch/SKILL.md 手順5から切り出したワークツリー
-# 作成スクリプトを、実際に一時 git リポジトリに対して実行して検証する。
-# git init の既定ブランチ名は環境（init.defaultBranch）によって異なりうるため、
-# main を明示して作成し、claude-code/skills/improvement-dispatch/scripts/create-worktree 内のデフォルトブランチ判定
-# （フェッチ不可時に main へフォールバック）と整合させる。
+# 一時 git リポジトリに対して実際に実行して検証する。git init の既定ブランチ名は
+# init.defaultBranch によって異なりうるため main を明示して作成し、create-worktree の
+# デフォルトブランチ判定（フェッチ不可時に main へフォールバック）と整合させる。
 
 TMP_CW_REPO="$(mktemp -d)"
-# macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
-# claude-code/skills/improvement-dispatch/scripts/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
-# 文字列比較が一致しない。ここでも同じ正規化をしておく。
+# macOS の mktemp -d はシンボリックリンク経由のパスを返し、create-worktree 内部の
+# pwd -P による正規化後と一致しない。ここでも同じ正規化をしておく。
 TMP_CW_REPO="$(cd "$TMP_CW_REPO" && pwd -P)"
 register_tmp_cleanup "$TMP_CW_REPO"
 
@@ -78,8 +68,8 @@ else
   fail ".git/info/exclude に .backlog が追記されていない"
 fi
 
-# ---- TASK-40 AC#1: 新規ワークツリー作成時に、割り当てタスクIDと実行時刻を
-# 含む占有記録（.worktree-occupancy）が作成される ----
+# ---- 新規ワークツリー作成時に、割り当てタスクIDと実行時刻を含む
+# 占有記録（.worktree-occupancy）が作成される ----
 CW_OCCUPANCY_FILE="$CW_EXPECTED_WORKTREE_DIR/.worktree-occupancy"
 if [ -f "$CW_OCCUPANCY_FILE" ]; then
   pass "占有記録ファイル(.worktree-occupancy)がワークツリー直下に作成される（AC#1）"
@@ -105,16 +95,15 @@ else
   fail "占有記録にASSIGNED_AT(ISO8601)が想定形式で記録されていない: $(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
 fi
 
-# ---- TASK-40 AC#3: 占有記録に対応するパスが .git/info/exclude に登録される ----
+# ---- 占有記録に対応するパスが .git/info/exclude に登録される ----
 if grep -Fxq ".worktree-occupancy" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null; then
   pass ".git/info/exclude に .worktree-occupancy が追記されている（AC#3）"
 else
   fail ".git/info/exclude に .worktree-occupancy が追記されていない（AC#3）"
 fi
 
-# ---- AC#2: 既定の worktree_base_dir（リポジトリルート配下の .worktree/）は
-# リポジトリ内を指すため、.git/info/exclude に .worktree が自動追記され、
-# git status に汚れとして現れないこと ----
+# ---- 既定の worktree_base_dir はリポジトリ内を指すため .git/info/exclude に
+# .worktree が自動追記され、git status に汚れとして現れないこと ----
 if grep -Fxq ".worktree" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null; then
   pass "既定の worktree_base_dir（リポジトリルート配下の .worktree/）が .git/info/exclude に追記されている"
 else
@@ -128,10 +117,10 @@ else
 $(git -C "$TMP_CW_REPO" status --porcelain)"
 fi
 
-# ---- 冪等性（AC#3）: 同じ task-id で2回目を実行しても、エラーにならず
-# 既存のワークツリー/ブランチを再利用する ----
-# TASK-40 AC#2 の検証用に、2回目実行前の占有記録の ASSIGNED_AT_EPOCH を控えておく。
-# epoch秒（1秒単位）の解像度で「更新された」ことを判別できるよう、1秒待つ。
+# ---- 冪等性: 同じ task-id で2回目を実行しても、エラーにならず既存の
+# ワークツリー/ブランチを再利用する ----
+# 占有記録の更新を検証するため、2回目実行前の ASSIGNED_AT_EPOCH を控えておく。
+# epoch秒（1秒単位）の解像度で更新を判別できるよう1秒待つ。
 CW_FIRST_EPOCH="$(grep '^ASSIGNED_AT_EPOCH=' "$CW_OCCUPANCY_FILE" 2>/dev/null | cut -d= -f2)"
 sleep 1
 cw_output2="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
@@ -165,8 +154,8 @@ else
   fail "2回目の実行後、.git/info/exclude の .backlog 行が重複している（${cw_exclude_count} 件）"
 fi
 
-# ---- TASK-40 AC#2: 既存ワークツリーの再利用時（同じ task-id での再実行）に、
-# 占有記録のタイムスタンプが更新され、記録が壊れない ----
+# ---- 既存ワークツリーの再利用時に、占有記録のタイムスタンプが更新され、
+# 記録が壊れない ----
 CW_SECOND_EPOCH="$(grep '^ASSIGNED_AT_EPOCH=' "$CW_OCCUPANCY_FILE" 2>/dev/null | cut -d= -f2)"
 if [ -n "$CW_FIRST_EPOCH" ] && [ -n "$CW_SECOND_EPOCH" ] && [ "$CW_SECOND_EPOCH" -gt "$CW_FIRST_EPOCH" ]; then
   pass "2回目の実行（同じ task-id での再利用）で占有記録のタイムスタンプが更新される（AC#2）"
@@ -183,13 +172,11 @@ else
 $(cat "$CW_OCCUPANCY_FILE" 2>/dev/null)"
 fi
 
-# ---- TASK-55 回帰: リポジトリのパスに半角スペースを含む場合でも、
-# 同一 task-id での2回目の実行が冪等に成功する ----
-# git worktree list --porcelain のパース（既存ワークツリーの割り当てブランチ
-# 検出）が awk のデフォルトフィールド分割（$2）に頼っていると、パスに
-# 半角スペースを含む場合に2語目以降が切り捨てられ、2回目の実行が
-# 「ワークツリーが既に別の内容で存在する」エラー（exit 1）に誤って落ちる
-# （TASK-55）。リポジトリ名自体に半角スペースを含む構成で再現する。
+# ---- リポジトリのパスに半角スペースを含む場合でも、同一 task-id での
+# 2回目の実行が冪等に成功する ----
+# porcelain 出力のパースが awk のデフォルトフィールド分割に頼っていると、パスに
+# 半角スペースを含む場合に2語目以降が切り捨てられ、2回目の実行が「既に別の内容で
+# 存在する」エラーに誤って落ちる。その回帰テストである。
 TMP_CW_SPACE_PARENT="$(mktemp -d)"
 TMP_CW_SPACE_PARENT="$(cd "$TMP_CW_SPACE_PARENT" && pwd -P)"
 TMP_CW_SPACE_REPO="$TMP_CW_SPACE_PARENT/il space repo"
@@ -260,7 +247,7 @@ else
   fail "復旧後、ブランチ $CW_EXPECTED_BRANCH が重複している（${cw_branch_count} 件）"
 fi
 
-# ---- TASK-40: ディレクトリ消失からの復旧経路でも占有記録が作り直される ----
+# ---- ディレクトリ消失からの復旧経路でも占有記録が作り直される ----
 if [ -f "$CW_OCCUPANCY_FILE" ] && grep -Fxq "TASK_ID=$CW_TASK_ID" "$CW_OCCUPANCY_FILE" 2>/dev/null; then
   pass "ディレクトリ消失からの復旧後も占有記録が作り直される"
 else
@@ -282,13 +269,10 @@ fi
 
 echo ""
 echo "=== 9b. BASE_REF 解決失敗時（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
-# リモートが設定されておらず、かつローカルのデフォルトブランチが "main" 以外の
-# リポジトリでは、140-145行目のフォールバックにより BASE_REF="main" になるが、
-# その "main" ブランチは実在しない。この場合に生の git エラー（"fatal:" 等）で
-# 異常終了するのではなく、err() 形式の診断メッセージを出して明示的な exit code
-# （1）で終了することを確認する。main フォールバック自体（リモート未設定/
-# フェッチ失敗時に main を使うこと）は変更しないため、BASE_REF="main" になる
-# こと自体は妨げない。
+# リモート未設定かつローカルのデフォルトブランチが "main" 以外のリポジトリでは、
+# フォールバックにより BASE_REF="main" になるが、その "main" は実在しない。この場合に
+# 生の git エラーで異常終了せず、err() 形式の診断と明示的な exit code（1）で終わることを
+# 確認する。main フォールバック自体は変更しないので BASE_REF="main" になること自体は妨げない。
 
 TMP_CW_NOMAIN_REPO="$(mktemp -d)"
 TMP_CW_NOMAIN_REPO="$(cd "$TMP_CW_NOMAIN_REPO" && pwd -P)"
@@ -330,16 +314,12 @@ fi
 
 echo ""
 echo "=== 9c. git コマンドが PATH に無い環境での動作確認（TASK-58） ==="
-# claude-code/skills/improvement-dispatch/scripts/create-worktree:80 の
-# REPO_ROOT="$(git rev-parse --show-toplevel)" は、git が PATH に無い環境では
-# 保護されていないと生の "command not found" で exit 127 になり、他の兄弟
-# スクリプト（merge-reviewed-branch 等）と異なり err() 経由の診断メッセージも
-# 定義済みの終了コードも出さない。ここでは git を含まない最小 PATH を用意して
-# create-worktree を実行し、err() 形式の診断メッセージと定義済みの終了コード
-# （1）で終了することを確認する。
+# create-worktree の REPO_ROOT="$(git rev-parse --show-toplevel)" が保護されていないと、
+# git が PATH に無い環境で生の "command not found"（exit 127）になり、err() 経由の診断も
+# 定義済みの終了コードも出ない。git を含まない最小 PATH で実行し、err() 形式の診断と
+# 終了コード 1 で終わることを確認する。
 #
-# git rev-parse --show-toplevel の呼び出し（80行目）は、引数検証の直後・
-# mkdir/grep/sed 等の外部コマンドを使う処理より前に実行されるため、
+# この git 呼び出しは引数検証の直後・他の外部コマンドを使う処理より前にあるため、
 # PATH には何も置かない空のディレクトリで十分再現できる。
 
 TMP_CW_NOGIT_REPO="$(mktemp -d)"
@@ -353,9 +333,8 @@ CW_BASH_BIN="$(command -v bash)"
 
 CW_NOGIT_TASK_ID="task-58-no-git-in-path"
 
-# git 呼び出しの手前で必要になるのは bash 組み込み（[[ ]] 等）のみであり、
-# 外部コマンドは git 以外まだ登場しないため、PATH を空ディレクトリのみにして
-# 再現する。bash 自体はフルパスで直接起動するため PATH 解決に依存しない。
+# git 呼び出しの手前で必要なのは bash 組み込みだけなので、PATH を空ディレクトリのみに
+# して再現する。bash 自体はフルパスで直接起動するため PATH 解決に依存しない。
 cw_nogit_output="$(cd "$TMP_CW_NOGIT_REPO" && PATH="$CW_EMPTY_PATH_DIR" "$CW_BASH_BIN" "$CREATE_WORKTREE_SCRIPT" "$CW_NOGIT_TASK_ID" 2>&1)"
 cw_nogit_exit=$?
 
@@ -388,33 +367,21 @@ fi
 
 echo ""
 echo "=== 9d. 起点（BASE_REF）の決定と鮮度検査（TASK-75） ==="
-# 9/9b/9c の一時リポジトリはいずれもリモート未設定であり、create-worktree の
-# `git fetch origin` が必ず失敗するため、origin 起点の経路が一度も実行されて
-# いなかった。ここでは疑似 origin（同じ一時ディレクトリ内の bare リポジトリ）を
-# 持つリポジトリを組み立て、次の4点を守る。
-#   - auto_merge_reviewed: true でローカルのデフォルトブランチが先行している
-#     場合、ワークツリーにその先行コミット（＝先行タスクの成果）が入る（AC#1）。
-#   - 起点が保証できない状況（既存ブランチの再利用で起点の先端を含まない／
-#     ローカルとリモートが分岐）を RESULT: STALE_BASE として出力する（AC#2）。
-#   - ローカルのデフォルトブランチが origin より古い場合は従来どおり
-#     origin/<デフォルトブランチ> から分岐する（AC#3）。
-#   - auto_merge_reviewed が false またはキー自体が無い場合（PR 運用・既定）は、
-#     ローカルが先行していても従来どおり origin/<デフォルトブランチ> 起点の
-#     ままである（AC#4）。
+# 9/9b/9c の一時リポジトリはリモート未設定なので `git fetch origin` が必ず失敗し、
+# origin 起点の経路が一度も実行されない。ここでは疑似 origin（同じ一時ディレクトリ内の
+# bare リポジトリ）を持つリポジトリを組み立て、auto_merge_reviewed の値とローカル/origin の
+# 包含関係の組み合わせごとに、起点の選択と STALE_BASE の検知を確認する。
 #
-# ここでの `git push` はテスト用の疑似 origin（ローカルの bare リポジトリ）に
-# 対するフィクスチャの組み立てであり、create-worktree 自身が push しないという
-# 制約とは別物である。
+# ここでの `git push` は疑似 origin へのフィクスチャの組み立てであり、create-worktree 自身が
+# push しないという制約とは別物である。
 #
-# このセクションの実行結果は 2>&1 ではなく標準出力だけを取る。RESULT が
-# 1行目である・WORKTREE_DIR/BRANCH が最後の2行であるという出力契約を行位置で
-# 検証するため、git worktree add が標準エラーに出す進捗メッセージ
-# （"HEAD is now at ..." 等）が混ざると判定できないためである。
+# このセクションの実行結果は 2>&1 ではなく標準出力だけを取る。RESULT が1行目である・
+# WORKTREE_DIR/BRANCH が最後の2行であるという出力契約を行位置で検証するため、
+# git worktree add が標準エラーに出す進捗メッセージが混ざると判定できないからである。
 
-# cw_make_remote_repo: 疑似 origin を持つ一時リポジトリを作り、そのローカル側の
-# 絶対パスを標準出力に出す。
+# 疑似 origin を持つ一時リポジトリを作り、そのローカル側の絶対パスを標準出力に出す。
 #   $1 = ローカルリポジトリのディレクトリ名
-#   $2 = .backlog/config.my.yml に書く auto_merge_reviewed の値
+#   $2 = config.my.yml に書く auto_merge_reviewed の値
 #        （空文字ならキー自体を書かない＝既定値の経路を通す）
 cw_make_remote_repo() {
   local dir_name="$1"
@@ -443,8 +410,8 @@ cw_make_remote_repo() {
   printf '%s\n' "$parent/$dir_name"
 }
 
-# cw_advance_origin: ローカルのデフォルトブランチを動かさずに origin/main だけを
-# 1コミット進める（別クローン経由で push し、元のリポジトリで fetch する）。
+# ローカルのデフォルトブランチを動かさずに origin/main だけを1コミット進める
+# （別クローン経由で push し、元のリポジトリで fetch する）。
 cw_advance_origin() {
   local repo="$1"
   local clone="${repo}.remote-clone"
@@ -461,7 +428,7 @@ cw_advance_origin() {
   (cd "$repo" && git fetch -q origin) >/dev/null 2>&1
 }
 
-# ---- AC#1: auto_merge_reviewed: true でローカルが先行している場合、
+# ---- auto_merge_reviewed: true でローカルが先行している場合、
 # ローカルのデフォルトブランチを起点にする ----
 CW_AHEAD_REPO="$(cw_make_remote_repo local-ahead true)"
 (
@@ -502,7 +469,7 @@ else
 $cw_ahead_output"
 fi
 
-# ---- AC#2: 既存ブランチを再利用する経路（再引き渡し）で、そのブランチが
+# ---- 既存ブランチを再利用する経路（再引き渡し）で、そのブランチが
 # 起点の先端を含まない場合に STALE_BASE として検知する ----
 (
   cd "$CW_AHEAD_REPO" || exit 1
@@ -534,8 +501,8 @@ else
   fail "STALE_BASE で終了ステータスが 0 以外になった（${cw_stale_exit_check}）"
 fi
 
-# ---- AC#3: auto_merge_reviewed: true でも、ローカルが origin より古い場合は
-# 従来どおり origin/<デフォルトブランチ> から分岐する ----
+# ---- auto_merge_reviewed: true でも、ローカルが origin より古い場合は
+# origin/<デフォルトブランチ> から分岐する ----
 CW_BEHIND_REPO="$(cw_make_remote_repo local-behind true)"
 cw_advance_origin "$CW_BEHIND_REPO"
 CW_BEHIND_TASK_ID="task-75-local-behind"
@@ -555,7 +522,7 @@ else
   fail "origin にしか無い最新コミットがワークツリーに入っていない（AC#3）"
 fi
 
-# ---- AC#2: ローカルと origin が分岐している場合、どちらを起点にしても
+# ---- ローカルと origin が分岐している場合、どちらを起点にしても
 # 片方のコミットが欠けるため STALE_BASE として検知する ----
 CW_DIVERGED_REPO="$(cw_make_remote_repo local-diverged true)"
 cw_advance_origin "$CW_DIVERGED_REPO"
@@ -582,8 +549,8 @@ else
 $cw_diverged_output"
 fi
 
-# ---- AC#4: auto_merge_reviewed: false（PR 運用）では、ローカルが先行していても
-# 従来どおり origin/<デフォルトブランチ> 起点のままである ----
+# ---- auto_merge_reviewed: false（PR 運用）では、ローカルが先行していても
+# origin/<デフォルトブランチ> 起点のままである ----
 CW_PR_REPO="$(cw_make_remote_repo pr-mode false)"
 (
   cd "$CW_PR_REPO" || exit 1
@@ -615,7 +582,7 @@ else
 $cw_pr_output"
 fi
 
-# ---- AC#4: auto_merge_reviewed のキー自体が無い場合（既定値 false）も、
+# ---- auto_merge_reviewed のキー自体が無い場合（既定値 false）も、
 # false を明示した場合と同じ挙動になる ----
 CW_DEFAULT_REPO="$(cw_make_remote_repo default-mode "")"
 (
@@ -650,9 +617,8 @@ fi
 
 echo ""
 echo "=== 10. claude-code/skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
-# TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
-# （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、
-# claude-code/skills/improvement-dispatch/scripts/create-worktree へ切り出した後も維持されていることを確認する。
+# worktree_base_dir の判定ロジック（リポジトリ内相対パスの解決・.git/info/exclude への
+# 追記）を確認する。
 
 TMP_CW_BASEDIR_REPO="$(mktemp -d)"
 register_tmp_cleanup "$TMP_CW_BASEDIR_REPO"
@@ -690,10 +656,9 @@ fi
 
 echo ""
 echo "=== 10b. 失効した worktree_base_dir 除外行の検知（TASK-79） ==="
-# .git/info/exclude への追記は追記専用であり、worktree_base_dir を変更すると
-# 古い値の除外行が残り続ける。create-worktree は管理対象の除外行をマーカー
-# コメント1行として .git/info/exclude 自身に記録し、失効を検知して報告する
-# （削除・書き換えはしない）。ここではその検知と、共有物である
+# .git/info/exclude への追記は追記専用なので、worktree_base_dir を変更すると古い値の
+# 除外行が残り続ける。create-worktree はマーカーコメント1行で管理対象を記録し、失効を
+# 検知して報告する（削除・書き換えはしない）。その検知と、共有物である
 # .git/info/exclude の既存行を一切壊さないことを確認する。
 
 TMP_CW_STALE_REPO="$(mktemp -d)"
@@ -747,8 +712,8 @@ else
   pass "マーカー行は bin/setup-improvement-loop の見出しコメント '# improvement-loop' とは完全一致しない"
 fi
 
-# ---- 冪等性（AC#3）: worktree_base_dir を変えていない再実行では
-#      .git/info/exclude も標準出力も変化しない ----
+# ---- worktree_base_dir を変えていない再実行では .git/info/exclude も
+#      標準出力も変化しない ----
 cp "$CW_STALE_EXCLUDE_FILE" "$TMP_CW_STALE_REPO/exclude.after1"
 cw_stale_out2="$(cd "$TMP_CW_STALE_REPO" && "$CREATE_WORKTREE_SCRIPT" task-79-first 2>/dev/null)"
 
@@ -814,9 +779,8 @@ else
 $cw_stale_out3"
 fi
 
-# ---- AC#2: 既存行が変更・削除されないこと ----
-# 起点（ユーザーが手で書いた行と他ツール由来の行群を入れた状態）との差分が
-# 追加行だけであることを確認する。削除・書き換えがあれば diff に "<" 行が出る。
+# ---- 既存行が変更・削除されないこと ----
+# 起点との差分が追加行だけであることを確認する。削除・書き換えがあれば diff に "<" 行が出る。
 if diff "$TMP_CW_STALE_REPO/exclude.pristine" "$CW_STALE_EXCLUDE_FILE" | grep -q '^< '; then
   fail "既存の .git/info/exclude の行が変更・削除された（AC#2）:
 $(diff "$TMP_CW_STALE_REPO/exclude.pristine" "$CW_STALE_EXCLUDE_FILE")"

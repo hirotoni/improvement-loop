@@ -1,25 +1,12 @@
-# tests/lib/common.sh
-#
-# tests/test_*.sh の各ファイルから source される共通基盤。
-# TASK-36 で tests/run.sh（旧・単一の1600行超モノリシックファイル）を
-# 対象スクリプトごとの独立したテストファイルに分割した際に切り出した。
-# このファイル自体は実行されず、必ず source される前提のためシバンは
-# 付けない（bin/lib/resolve_path.sh と同じ慣例）。
+# tests/test_*.sh の各ファイルから source される共通基盤。実行されず、必ず
+# source される前提のためシバンは付けない。
 #
 # 提供するもの:
 # - REPO_ROOT および各対象スクリプト・設定ファイルへのパス変数
 # - PASS_COUNT/FAIL_COUNT/SKIP_COUNT と pass()/fail()/skip()
-# - check_test_dependencies(): git/backlog/bash が無い環境での
-#   スキップ判定（各テストファイルの冒頭で呼ぶ）
-# - register_tmp_cleanup()/cleanup_registered_tmp_paths(): 一時ディレクトリの
-#   後片付けをレジストリ方式でまとめる。新しい一時ディレクトリを使うテストを
-#   追加する際は、ディレクトリを作った直後に register_tmp_cleanup へパスを
-#   渡して登録するだけでよい。trap はこのファイルが source された時点で
-#   一度だけ設定するため、テストを追加するたびに trap 行（それ以前の
-#   cleanup 呼び出しの列挙）を書き換える必要が無い。
-# - finish_tests(): 各テストファイル末尾で呼ぶ共通のサマリー出力・exit判定。
-#   tests/run.sh はこのサマリー行（"PASS: x, FAIL: y, SKIP: z"）をパースして
-#   全ファイル分を合算する。
+# - check_test_dependencies(): 必須依存が無い環境でのスキップ判定
+# - register_tmp_cleanup()/cleanup_registered_tmp_paths(): 一時ディレクトリの後片付け
+# - finish_tests(): 各テストファイル末尾で呼ぶサマリー出力・exit判定
 
 COMMON_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$COMMON_LIB_DIR/../.." && pwd)"
@@ -63,32 +50,19 @@ skip() {
   printf 'SKIP: %s\n' "$1"
 }
 
-# check_test_dependencies: 必須依存（git・backlog・bash）が無ければ
-# その旨を報告して exit 0 する（テスト対象の不具合として扱わず
-# スキップする）。各テストファイルの冒頭で呼ぶ。
+# 必須依存（git・backlog・bash）が無ければ報告して exit 0 する（テスト対象の
+# 不具合ではなくスキップとして扱う）。各テストファイルの冒頭で呼ぶ。
 #
-# bash は「zsh でも代替できる依存」ではなく単独の必須依存である。
-# tests/run.sh は各テストファイルを bash "$test_path" として起動し、
-# githooks/pre-commit も exec bash で run.sh を起動する。テスト本体も
-# BASH_SOURCE・BASH_REMATCH・shopt など zsh では同じ意味にならない
-# bash 固有の機能に依存している。
+# bash は zsh で代替できる依存ではなく単独の必須依存である。run.sh は各テスト
+# ファイルを bash で起動し、テスト本体も BASH_SOURCE・BASH_REMATCH・shopt など
+# zsh では同じ意味にならない機能に依存している。bash と zsh を or 条件で見ると、
+# zsh さえあれば依存を満たすと判定され、そのあと command not found で落ちても
+# 原因が依存不足だと伝わらない。
 #
-# このリポジトリは macOS での実行を前提としており（README「前提条件」）、
-# macOS では /bin/bash が OS 同梱で削除できないため、bash が欠けて
-# ここに引っかかることは通常は起こらない。それでも bash を単独の必須依存
-# として見ているのは、PATH を絞った実行など例外的な状況で判定が素通り
-# しないようにするためである。以前はここで bash と zsh を or 条件で見て
-# いたため、zsh さえあれば依存を満たすと判定され、そのあとテスト本体が
-# command not found で落ちても失敗の原因が依存不足だとは伝わらなかった
-# （TASK-81）。
-#
-# zsh はここでは見ない。zsh が要るのは install.zsh（シバンが
-# #!/usr/bin/env zsh の zsh 専用スクリプト）を実行するときだけであり、
-# bash の代わりに使えるものではない。その依存は install.zsh を実際に
-# 実行する tests/test_setup_improvement_loop.sh が、使用箇所で
-# command -v zsh を見て skip する形で局所的に扱う。ここで zsh を共通の
-# 必須依存にすると、install.zsh に触れないテストまで zsh が無いだけで
-# 丸ごと止まってしまう。
+# zsh はここでは見ない。zsh が要るのは install.zsh を実行するときだけなので、
+# その依存は実際に実行する tests/test_setup_improvement_loop.sh が使用箇所で
+# skip する形で局所的に扱う。ここで共通の必須依存にすると、install.zsh に
+# 触れないテストまで zsh が無いだけで丸ごと止まる。
 check_test_dependencies() {
   local missing=()
   local cmd
@@ -104,9 +78,9 @@ check_test_dependencies() {
   fi
 }
 
-# 一時ディレクトリの後片付けレジストリ。
-# 新しい一時ディレクトリを使うテストを追加する際は、ディレクトリを
-# 作った直後に register_tmp_cleanup へパスを渡して登録するだけでよい。
+# 一時ディレクトリの後片付けレジストリ。作った直後に register_tmp_cleanup へ
+# パスを渡して登録するだけでよい。trap は source 時に一度だけ設定するので、
+# テストを追加するたびに trap 行を書き換える必要は無い。
 TMP_CLEANUP_PATHS=()
 register_tmp_cleanup() {
   TMP_CLEANUP_PATHS+=("$@")
@@ -118,8 +92,8 @@ cleanup_registered_tmp_paths() {
 }
 trap cleanup_registered_tmp_paths EXIT
 
-# finish_tests: 各テストファイルの末尾で呼ぶ。サマリー行を出力し、
-# FAIL が1件でもあれば非ゼロで終了する。
+# 各テストファイルの末尾で呼ぶ。サマリー行を出力し、FAIL が1件でもあれば
+# 非ゼロで終了する。tests/run.sh はこのサマリー行をパースして全ファイル分を合算する。
 finish_tests() {
   echo ""
   echo "=== サマリー ==="

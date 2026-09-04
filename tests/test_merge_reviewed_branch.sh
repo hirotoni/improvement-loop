@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-# tests/test_merge_reviewed_branch.sh
-#
-# claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch に対する
-# テスト。単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
-# 全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
+# claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch に対するテスト。
 
 set -uo pipefail
 
@@ -17,11 +10,8 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 8. claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch の動作確認 ==="
-# improvement-dispatch 手順3（auto_merge_reviewed: true）のマージ判定を
-# 切り出した claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch を、
-# 一時 git リポジトリに対して実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
-# 3-way衝突の4パターンを、それぞれ独立した一時リポジトリで確認する
-# （TASK-22 受入基準 #1-#4 に対応）。
+# 一時 git リポジトリに対して実際に実行し、前提条件未達・ff-only 成功・3-way 衝突無し
+# 成功・3-way 衝突の4パターンを、それぞれ独立した一時リポジトリで確認する。
 
 echo ""
 echo "--- 7a. 前提条件未達: メインの作業木が汚れている ---"
@@ -59,10 +49,8 @@ fi
 echo ""
 echo "--- 7b. ff-only マージが成功し、対応するワークツリーが片付けられる ---"
 TMP_MERGE_FF="$(mktemp -d)"
-# 対応するワークツリー（$TMP_MERGE_FF-wt）もここで一緒に登録する。
-# アサーション後の単発 rm -rf に任せると、ワークツリー作成後・その rm
-# 行より前で中断された場合にディレクトリが残ってしまうため、EXIT trap で
-# 確実に片付くようここで登録しておく。
+# 対応するワークツリーもここで一緒に登録する。アサーション後の単発 rm -rf に任せると、
+# 作成後・その rm 行より前で中断された場合にディレクトリが残るためである。
 register_tmp_cleanup "$TMP_MERGE_FF" "$TMP_MERGE_FF-wt"
 
 (cd "$TMP_MERGE_FF" && git init -q -b main && git commit -q --allow-empty -m init)
@@ -205,11 +193,9 @@ fi
 
 echo ""
 echo "--- 7e. マージは完了するが、対応するワークツリーが汚れており片付け・ブランチ削除の両方が失敗する ---"
-# ワークツリーに未コミットの変更を残しておくと、git worktree remove は --force
-# しない限り失敗する。さらにそのワークツリーが存在する限り、ブランチはそこで
-# 使用中のままなので git branch -d も失敗する。この状況で、マージ自体
-# （RESULT/exit code）が成功のまま変わらないこと（AC#3: worktree片付けと同様の
-# 扱い）と、--force/-D を使わずワークツリー・ブランチの両方が削除されずに
+# ワークツリーに未コミットの変更があると git worktree remove は --force しない限り失敗し、
+# そのワークツリーがある限りブランチも使用中なので git branch -d も失敗する。この状況で
+# マージ自体（RESULT/exit code）は成功のまま変わらず、--force/-D を使わずに両方が
 # 残ることを確認する。
 TMP_MERGE_DIRTY_WT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_MERGE_DIRTY_WT" "$TMP_MERGE_DIRTY_WT-wt"
@@ -249,13 +235,9 @@ fi
 
 echo ""
 echo "--- 7f. マージ済み（main との差分が無い）だが片付けが未完了の状態からの再実行で片付けが再試行される（TASK-57） ---"
-# 7e と同様に、まず1回目の呼び出しでワークツリーを dirty にしたまま
-# マージを成功させ、片付け（worktree remove・branch -d）を失敗させる。
-# その後、ワークツリーを clean な状態に戻してから同じブランチに対して
-# もう一度スクリプトを呼び出す。main との差分は既に無い
-# （PRECONDITION_NOT_MET）が、対応するワークツリー・ブランチの片付けが
-# まだ残っているため、この2回目の呼び出しでその片付けだけが再試行され
-# 成功することを確認する（AC#1）。
+# 7e と同様に1回目でワークツリーを dirty にしたままマージを成功させ、片付けを失敗させる。
+# その後 clean に戻して同じブランチにもう一度呼び出す。main との差分は既に無い
+# （PRECONDITION_NOT_MET）が、片付けが残っているのでそれだけが再試行され成功する。
 TMP_MERGE_RECOVER="$(mktemp -d)"
 register_tmp_cleanup "$TMP_MERGE_RECOVER" "$TMP_MERGE_RECOVER-wt"
 
@@ -264,8 +246,7 @@ register_tmp_cleanup "$TMP_MERGE_RECOVER" "$TMP_MERGE_RECOVER-wt"
 (cd "$TMP_MERGE_RECOVER-wt" && git commit -q --allow-empty -m "feature recover work")
 echo "uncommitted in worktree" > "$TMP_MERGE_RECOVER-wt/uncommitted.txt"
 
-# 1回目: マージは成功するが、ワークツリーが dirty なため片付けは失敗する
-# （7e と同じ状況を作るだけで、ここではアサーションしない）。
+# 1回目: マージは成功するが、ワークツリーが dirty なため片付けは失敗する。
 (cd "$TMP_MERGE_RECOVER" && "$MERGE_SCRIPT" feature-recover >/dev/null 2>&1)
 
 if [ -d "$TMP_MERGE_RECOVER-wt" ] && [ -n "$(cd "$TMP_MERGE_RECOVER" && git branch --list feature-recover)" ]; then
@@ -330,11 +311,9 @@ fi
 
 echo ""
 echo "--- 7h. デフォルトブランチが main 以外（master）でも ff-only マージが成功する（TASK-61 AC#1） ---"
-# メインの作業木用ディレクトリは、デフォルトブランチが "master" のソース
-# リポジトリを git clone して作る。git clone はローカルパスの clone でも
-# refs/remotes/origin/HEAD を自動設定するため、ネットワーク無しで
-# merge-reviewed-branch の symbolic-ref 経由のデフォルトブランチ判定
-# （create-worktree と同じ核心ロジック）を再現できる。
+# デフォルトブランチが "master" のソースリポジトリを git clone して作る。clone は
+# ローカルパスでも refs/remotes/origin/HEAD を自動設定するので、ネットワーク無しで
+# symbolic-ref 経由のデフォルトブランチ判定を再現できる。
 TMP_MERGE_MASTER_SRC="$(mktemp -d)"
 register_tmp_cleanup "$TMP_MERGE_MASTER_SRC"
 (cd "$TMP_MERGE_MASTER_SRC" && git init -q -b master && git commit -q --allow-empty -m init)

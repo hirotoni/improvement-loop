@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-# tests/test_select_next_task.sh
-#
 # claude-code/skills/improvement-dispatch/scripts/select-next-task に対するテスト。
-# 単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
-# 全体実行の一部としても呼ばれる。
-#
-# 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
-# 報告してスキップする（テスト対象の不具合として失敗にはしない）。
 
 set -uo pipefail
 
@@ -17,25 +10,16 @@ source "$SCRIPT_DIR/lib/common.sh"
 check_test_dependencies
 
 echo "=== 7. claude-code/skills/improvement-dispatch/scripts/select-next-task の選定ロジック検証 ==="
-# improvement-dispatch 手順4の選定ロジック（除外集合の計算・依存確認・
-# 優先度ソート・max_in_progress/max_in_review の閾値判定）を切り出した
-# claude-code/skills/improvement-dispatch/scripts/select-next-task を、improvement ループの6ステータスが揃った一時
-# backlog リポジトリに対して実行し、次の6パターンを検証する。
-#   7a. NO_CANDIDATE（To Do タスクが1件も無い）
-#   7b. 通常選定（優先度最高のものが選ばれる）
-#   7c. blocked:needs-decision ラベル除外 + 同優先度タイブレーク（ID最小）
-#   7d. 未完了の依存タスクを持つものの除外、依存解消後の再選定
-#   7e. max_in_progress 以上のときの GATED
-#   7f. max_in_review 以上のときの GATED
+# improvement ループの6ステータスが揃った一時 backlog リポジトリに対して
+# select-next-task を実行し、選定ロジック（除外集合の計算・依存確認・優先度ソート・
+# 閾値判定）の各パターンを検証する。
 
 TMP_REPO_SELECT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SELECT"
 
-# 一時リポジトリの準備に bin/setup-improvement-loop は使わない。select-next-task が
-# 必要とするのは improvement ループの6ステータスが揃った .backlog/config.yml だけで
-# あり（max_in_progress/max_in_review は引数で受け取るので config.my.yml は読まない）、
-# setup-improvement-loop を通すと backlog CLI が5回起動して約900ms かかるためである
-# （TASK-82 で計測）。下の8節が既に採っている、config.yml を直接書く方式に揃える。
+# 一時リポジトリの準備に bin/setup-improvement-loop は使わない。select-next-task が要るのは
+# 6ステータスが揃った .backlog/config.yml だけで（閾値は引数で受け取るため config.my.yml は
+# 読まない）、setup を通すと backlog CLI が5回起動して約900ms かかるためである。
 (cd "$TMP_REPO_SELECT" && git init -q)
 mkdir -p "$TMP_REPO_SELECT/.backlog"
 cat > "$TMP_REPO_SELECT/.backlog/config.yml" <<'YAML'
@@ -144,14 +128,10 @@ fi
 
 echo ""
 echo "=== 8. task_prefix をカスタマイズしたリポジトリでの回帰テスト（TASK-54） ==="
-# backlog task list --plain が出力する ID は .backlog/config.yml の task_prefix に
-# 応じて変わる（既定は "TASK-<n>" だが、task_prefix: "issue" なら "ISSUE-<n>"）。
-# select-next-task の ID 抽出・件数カウントを "TASK-" 固定パターンで行うと、
-# task_prefix をカスタマイズしたリポジトリでは件数カウントが常に0、
-# 候補抽出も常に0件になり、To Do タスクが実在しても RESULT: NO_CANDIDATE を
-# 返し続け、max_in_progress/max_in_review によるゲーティングも機能しなく
-# なる。この不具合の回帰テスト（tests/test_setup_improvement_loop.sh の
-# 7d節・migrate_reviewed_tasks の回帰テストと同じ手法で一時リポジトリを作る）。
+# ID は .backlog/config.yml の task_prefix に応じて変わる（task_prefix: "issue" なら
+# "ISSUE-<n>"）。ID 抽出・件数カウントを "TASK-" 固定パターンで行うと、prefix を
+# カスタマイズしたリポジトリでは常に0件になり、To Do が実在しても NO_CANDIDATE を返し続け、
+# 閾値によるゲーティングも機能しなくなる。その回帰テストである。
 
 TMP_REPO_CUSTOM_PREFIX_SELECT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX_SELECT"
