@@ -23,6 +23,10 @@
 #     コメントは上書きしない。既に存在する場合は、配布元テンプレートにあって
 #     導入先に無いキーだけを、テンプレート側のコメント・既定値付きで補う
 #     （ensure_backlog_statuses と同じ「不足分だけ安全に追加する」パターン）。
+#     既にあるキーの説明コメントがテンプレートと食い違っている場合は、書き換えず
+#     に警告として報告するにとどめる。どちらが新しいか（古いテンプレート由来か、
+#     ユーザーが書き換えたものか）をスクリプトからは区別できないためである
+#     （TASK-74。詳細は warn_config_my_yml_comment_drift のコメント）。
 #   - .git/info/exclude への追記は、同じ行が無い場合だけ行う。
 #   - backlog init は .backlog/config.yml が無いときだけ実行する。
 #   - .backlog/config.yml の statuses は、欠けている improvement ループ既定の
@@ -573,6 +577,46 @@ setup_workspace() {
   log "  2. $placed_skill_list スキルを、このワークスペースディレクトリで使う（opt-in 済みのリポジトリだけを対象に横断処理する）"
 }
 
+# config.my.yml の improvement_loop: 配下にある「有効なキー」（コメントアウト
+# されていないキー行）の名前を、ファイル中の出現順に1行1件で標準出力に書く。
+# ensure_config_my_yml_keys と warn_config_my_yml_comment_drift が同じキーの
+# 見つけ方を共有するための共通ヘルパー（両者で正規表現を二重に持つと、片方だけ
+# 直したときに「補完はするが差異検出はしない」といった食い違いが生じる）。
+list_config_my_yml_keys() {
+  grep -E '^  [A-Za-z0-9_]+:' "$1" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/'
+}
+
+# config.my.yml（配布元テンプレート・導入先のどちらでも）から、指定したキーの
+# 「ブロック」を抽出して標準出力に書く。ブロックとは、そのキー行の直前にある
+# 連続する2スペースインデントのコメント行（キーの説明・既定値の記述）である。
+# 空行または別のキー行に当たった時点で、それ以前に溜めたコメント行は「別のキーに
+# 属するもの」として捨てる。
+# 第3引数が "with-key"（既定）ならキー行自体も末尾に含め、"comments-only" なら
+# コメント行だけを出す。該当キーが有効なキー行として存在しなければ何も出力しない。
+# ensure_config_my_yml_keys（不足キーの追記）と warn_config_my_yml_comment_drift
+# （説明コメントの陳腐化検出）の共通ヘルパー。
+extract_config_my_yml_block() {
+  local file="$1"
+  local key="$2"
+  local mode="${3:-with-key}"
+
+  awk -v key="$key" -v mode="$mode" '
+    BEGIN { n = 0 }
+    {
+      line = $0
+      if (line ~ /^[[:space:]]*$/) { n = 0; next }
+      if (line ~ ("^  " key ":")) {
+        for (i = 1; i <= n; i++) print buf[i]
+        if (mode != "comments-only") print line
+        exit
+      }
+      if (line ~ /^  [A-Za-z0-9_]+:/) { n = 0; next }
+      if (line ~ /^  #/) { n++; buf[n] = line; next }
+      n = 0
+    }
+  ' "$file"
+}
+
 # .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
 # （backlog-md/config.my.yml）にあって導入先の既存ファイルに無いキー
 # だけを、テンプレート側のコメント・既定値付きで補う。ensure_backlog_statuses() と
@@ -588,17 +632,15 @@ ensure_config_my_yml_keys() {
   local target_file="$1"
   local source_file="$2"
 
-  local key_re='^  [A-Za-z0-9_]+:'
-
   local source_keys=()
   while IFS= read -r k; do
     source_keys+=("$k")
-  done < <(grep -E "$key_re" "$source_file" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/')
+  done < <(list_config_my_yml_keys "$source_file")
 
   local target_keys=()
   while IFS= read -r k; do
     target_keys+=("$k")
-  done < <(grep -E "$key_re" "$target_file" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/')
+  done < <(list_config_my_yml_keys "$target_file")
 
   local missing_keys=()
   local commented_keys=()
@@ -632,26 +674,10 @@ ensure_config_my_yml_keys() {
   fi
 
   for key in "${missing_keys[@]}"; do
-    # そのキーの直前にある連続する2スペースインデントのコメント行（キーの
-    # 説明・既定値の記述）と、キー行自体をひとまとまりのブロックとして
-    # source から抽出する。空行または別のキー行に当たった時点で、それ以前に
-    # 溜めたコメント行は「別のキーに属するもの」として捨てる。
+    # そのキーの直前にある連続するコメント行（キーの説明・既定値の記述）と、
+    # キー行自体をひとまとまりのブロックとして source から抽出する。
     local block
-    block="$(awk -v key="$key" '
-      BEGIN { n = 0 }
-      {
-        line = $0
-        if (line ~ /^[[:space:]]*$/) { n = 0; next }
-        if (line ~ ("^  " key ":")) {
-          for (i = 1; i <= n; i++) print buf[i]
-          print line
-          exit
-        }
-        if (line ~ /^  [A-Za-z0-9_]+:/) { n = 0; next }
-        if (line ~ /^  #/) { n++; buf[n] = line; next }
-        n = 0
-      }
-    ' "$source_file")"
+    block="$(extract_config_my_yml_block "$source_file" "$key" with-key)"
 
     if [ -z "$block" ]; then
       err "config.my.yml テンプレートからキー '$key' のブロックを抽出できなかった。手動で確認すること: $source_file"
@@ -663,6 +689,86 @@ ensure_config_my_yml_keys() {
   done
 
   CREATED+=(".backlog/config.my.yml (不足していたキーを追加: ${missing_keys[*]})")
+}
+
+# 導入先の .backlog/config.my.yml に既にあるキーについて、その説明コメントが配布元
+# テンプレートと異なっていないかを確認し、異なるものを警告として報告する（TASK-74）。
+# ファイルは一切書き換えない（読み取りのみ）。
+#
+# 解こうとしている問題: ensure_config_my_yml_keys が補うのは「不足しているキー」
+# だけなので、既にあるキーの説明コメントは永久に更新されない。テンプレート側の
+# コメントに重要な訂正（誤解を招く記述の訂正、新しい制限の明記）が入っても、
+# 既に導入済みのリポジトリには再実行しても届かない。実例として TASK-69 は
+# forbidden_paths/allowed_paths のコメントに「git 管理外のパスは機械的には
+# 止まらない」という限界の説明を足したが、既存の導入先には旧説明
+# （「機械的に拒否・検知する仕組みではない」）が残り続ける。
+#
+# なぜ書き換えず警告にとどめるか: 導入先の config.my.yml には「どのテンプレート版
+# から導入されたか」の記録が無い。そのため、あるコメント行が「古いテンプレート由来
+# （＝差し替えてよい）」なのか「ユーザーが自分で書き足した・書き換えた（＝壊しては
+# いけない）」なのかを、このスクリプトが区別できる情報が原理的に無い。ユーザー所有
+# ファイルを壊さないことを優先し、機械的な差し替えは行わず、「テンプレート側の説明が
+# 更新されているので読み比べること」を人間に伝えるにとどめる。
+#
+# 検出対象は、テンプレートと導入先の双方に「有効なキー行」として存在するキーだけで
+# ある。導入先に無いキーは ensure_config_my_yml_keys がテンプレートのコメントごと
+# 追記するので定義上ズレない。導入先でコメントアウトされたキー（TASK-37）は
+# ユーザーが意図的に無効化した状態として ensure_config_my_yml_keys が別途 [skip] で
+# 報告済みであり、ブロック抽出が "^  <キー名>:" を起点にしている以上ここでは検出
+# できない。
+# 比較はコメント行の完全一致で行い、キー行そのもの（＝ユーザーが決めた値）は比較
+# しない。したがってユーザーが説明コメントに自分でメモを書き足している場合や、
+# 逆にコメントを全部削って値だけの最小構成にしている場合も差異として報告され、
+# その状態のままなら実行のたびに同じ報告が出る。これは上と同じ理由（どちらが新しい
+# かを区別できない）による意図的な振る舞いであり、報告されるだけでファイルは変わら
+# ない。うるさければ、テンプレート側の説明を取り込むか、その差異を承知の上で報告を
+# 読み流すかのどちらかを人間が選ぶ。
+warn_config_my_yml_comment_drift() {
+  local target_file="$1"
+  local source_file="$2"
+
+  local source_keys=()
+  while IFS= read -r k; do
+    source_keys+=("$k")
+  done < <(list_config_my_yml_keys "$source_file")
+
+  local target_keys=()
+  while IFS= read -r k; do
+    target_keys+=("$k")
+  done < <(list_config_my_yml_keys "$target_file")
+
+  local drifted_keys=()
+  local key source_comments target_comments
+  for key in ${source_keys[@]+"${source_keys[@]}"}; do
+    if ! array_contains "$key" ${target_keys[@]+"${target_keys[@]}"}; then
+      continue
+    fi
+    source_comments="$(extract_config_my_yml_block "$source_file" "$key" comments-only)"
+    target_comments="$(extract_config_my_yml_block "$target_file" "$key" comments-only)"
+    if [ "$source_comments" = "$target_comments" ]; then
+      continue
+    fi
+    drifted_keys+=("$key")
+  done
+
+  if [ "${#drifted_keys[@]}" -eq 0 ]; then
+    log "[skip] .backlog/config.my.yml の既存キーの説明コメントは配布元テンプレートと一致している。"
+    SKIPPED+=(".backlog/config.my.yml (既存キーの説明コメントはテンプレートと一致)")
+    return 0
+  fi
+
+  local line
+  for key in "${drifted_keys[@]}"; do
+    log "[warn] .backlog/config.my.yml のキー '$key' の説明コメントが配布元テンプレートと異なる。"
+    log "       テンプレート側の説明が更新されている場合、その内容は導入先には自動では反映されない。"
+    log "       ユーザー所有ファイルを壊さないため、このスクリプトは書き換えない。次のテンプレート側の説明を読み、必要なら手で反映すること。"
+    log "       --- 配布元テンプレート ($source_file) の '$key' の説明 ---"
+    while IFS= read -r line; do
+      log "       $line"
+    done < <(extract_config_my_yml_block "$source_file" "$key" comments-only)
+    log "       --- ここまで ---"
+  done
+  WARNED+=(".backlog/config.my.yml (説明コメントがテンプレートと異なるキー: ${drifted_keys[*]})")
 }
 
 # ---- 0. このスクリプト自身の場所から、配布元リポジトリのルートを解決する ----
@@ -812,6 +918,9 @@ log ""
 
 CREATED=()
 SKIPPED=()
+# 書き換えはしなかったが人間に読んでほしい事項（TASK-74 の説明コメントの
+# 陳腐化など）。該当が無ければサマリーにこの節自体を出さない。
+WARNED=()
 
 # ---- 3. backlog init ----
 BACKLOG_CONFIG_YML="$TARGET_REPO_ROOT/.backlog/config.yml"
@@ -858,6 +967,10 @@ mkdir -p "$TARGET_REPO_ROOT/.backlog"
 if [ -f "$TARGET_CONFIG_FILE" ]; then
   log "[skip] .backlog/config.my.yml は既に存在する。既存のキーは上書きしない（ユーザー所有ファイル）。"
   ensure_config_my_yml_keys "$TARGET_CONFIG_FILE" "$SOURCE_CONFIG_FILE"
+  # 既存キーの説明コメントがテンプレートから取り残されていないかを確認する。
+  # 書き換えはせず、差異があることだけを人間に伝える（TASK-74）。新規配置
+  # （下の else）はテンプレートの丸ごとコピーなので定義上ズレず、呼ばない。
+  warn_config_my_yml_comment_drift "$TARGET_CONFIG_FILE" "$SOURCE_CONFIG_FILE"
 else
   cp "$SOURCE_CONFIG_FILE" "$TARGET_CONFIG_FILE"
   log "[new]  .backlog/config.my.yml を配置した。"
@@ -887,6 +1000,13 @@ if [ "${#SKIPPED[@]}" -eq 0 ]; then
   log "  (なし)"
 else
   for item in "${SKIPPED[@]}"; do
+    log "  - $item"
+  done
+fi
+# 該当が無ければ節ごと出さない（従来の出力を変えないため）。
+if [ "${#WARNED[@]}" -gt 0 ]; then
+  log "人手での確認が要る項目 (${#WARNED[@]} 件):"
+  for item in "${WARNED[@]}"; do
     log "  - $item"
   done
 fi

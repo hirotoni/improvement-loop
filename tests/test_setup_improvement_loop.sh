@@ -715,6 +715,244 @@ else
 fi
 
 echo ""
+echo "=== 6c. 既存キーの説明コメントがテンプレートから取り残された場合の検出（TASK-74） ==="
+# ensure_config_my_yml_keys が補うのは「導入先に無いキー」だけなので、既にある
+# キーの説明コメントは setup-improvement-loop を何度再実行しても更新されない。
+# その結果、テンプレート側のコメントに入った重要な訂正が既存の導入先に永久に
+# 届かなかった。実例は TASK-69 で、forbidden_paths/allowed_paths の説明に
+# 「git 管理外のパスは機械的には止まらない」という限界を書き足したが、既存の
+# 導入先には旧説明（「機械的に拒否・検知する仕組みではない」）が残り続けた。
+#
+# ユーザー所有ファイルを壊さないことを優先し、機械的な差し替えはしない
+# （どちらが新しいかをスクリプトから区別できないため）。代わりに、差異がある
+# ことと、テンプレート側の最新の説明そのものを利用者に示す。
+# ここではその報告が出ること、および報告のためにファイルを一切書き換えない
+# ことを検証する。
+
+TMP_REPO_COMMENT_DRIFT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_COMMENT_DRIFT"
+
+(cd "$TMP_REPO_COMMENT_DRIFT" && git init -q)
+mkdir -p "$TMP_REPO_COMMENT_DRIFT/.backlog"
+
+drift_config="$TMP_REPO_COMMENT_DRIFT/.backlog/config.my.yml"
+cp "$SOURCE_CONFIG" "$drift_config"
+
+# 「TASK-69 より前のテンプレートで導入されたリポジトリ」を再現する。
+# テンプレートの文面に依存しないよう、forbidden_paths のキー行の直前にある
+# 連続コメント行（＝そのキーの説明ブロック）の先頭行だけを、旧テンプレートの
+# 文言に差し替える。他のキー・値・ユーザー独自の記述には触れない。
+drift_config_tmp="$(mktemp)"
+awk '
+  { lines[NR] = $0 }
+  END {
+    keyline = 0
+    for (i = 1; i <= NR; i++) {
+      if (lines[i] ~ /^  forbidden_paths:/) { keyline = i; break }
+    }
+    if (keyline == 0) { exit 1 }
+    start = keyline
+    for (i = keyline - 1; i >= 1; i--) {
+      if (lines[i] ~ /^  #/) { start = i } else { break }
+    }
+    lines[start] = "  # これはAIエージェントへの指示にとどまり、変更を機械的に拒否・検知する仕組みではない。"
+    for (i = 1; i <= NR; i++) { print lines[i] }
+  }
+' "$drift_config" > "$drift_config_tmp"
+mv "$drift_config_tmp" "$drift_config"
+
+if ! grep -Fq '  # これはAIエージェントへの指示にとどまり、変更を機械的に拒否・検知する仕組みではない。' "$drift_config"; then
+  fail "テスト前提が壊れている: forbidden_paths の説明コメントを旧文言に差し替えられなかった"
+fi
+
+# テンプレート側の説明ブロックの先頭行（＝導入先では旧文言に置き換わっている行）。
+# 警告出力にテンプレート側の最新の説明そのものが載ることの検証に使う。
+template_first_comment_line="$(awk '
+  { lines[NR] = $0 }
+  END {
+    keyline = 0
+    for (i = 1; i <= NR; i++) {
+      if (lines[i] ~ /^  forbidden_paths:/) { keyline = i; break }
+    }
+    if (keyline == 0) { exit 1 }
+    start = keyline
+    for (i = keyline - 1; i >= 1; i--) {
+      if (lines[i] ~ /^  #/) { start = i } else { break }
+    }
+    print lines[start]
+  }
+' "$SOURCE_CONFIG")"
+
+# 実行前のファイル内容を控え、実行後に1バイトも変わっていないことを確かめる。
+drift_config_before="$(mktemp)"
+cp "$drift_config" "$drift_config_before"
+
+drift_output="$("$SETUP_SCRIPT" "$TMP_REPO_COMMENT_DRIFT" 2>&1)"
+drift_exit=$?
+if [ "$drift_exit" -eq 0 ]; then
+  pass "説明コメントが古い config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
+else
+  fail "説明コメントが古い config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${drift_exit}）:
+$drift_output"
+fi
+
+# AC#1: 差異があることが利用者に分かる形で報告される
+if printf '%s\n' "$drift_output" | grep -Fq "[warn] .backlog/config.my.yml のキー 'forbidden_paths' の説明コメントが配布元テンプレートと異なる。"; then
+  pass "説明コメントがテンプレートと異なるキー forbidden_paths が [warn] として報告される"
+else
+  fail "説明コメントがテンプレートと異なるキー forbidden_paths が報告されない:
+$drift_output"
+fi
+if printf '%s\n' "$drift_output" | grep -Fq "人手での確認が要る項目"; then
+  pass "説明コメントの差異が最後のサマリーにも現れる"
+else
+  fail "説明コメントの差異がサマリーに現れない:
+$drift_output"
+fi
+# 差異の報告だけでなく、テンプレート側の最新の説明そのものが出力に載ること
+# （キー名だけでは「何がどう変わったか」が利用者に届かないため）。
+if printf '%s\n' "$drift_output" | grep -Fq "$template_first_comment_line"; then
+  pass "テンプレート側の最新の説明そのものが警告に出力される"
+else
+  fail "テンプレート側の最新の説明が警告に出力されない（期待した行: ${template_first_comment_line}）:
+$drift_output"
+fi
+# 差異が無いキーまで報告しない（過剰報告の回避）
+if printf '%s\n' "$drift_output" | grep -Fq "キー 'allowed_paths' の説明コメントが"; then
+  fail "テンプレートと一致している allowed_paths まで差異として報告された:
+$drift_output"
+else
+  pass "テンプレートと一致しているキー allowed_paths は報告されない"
+fi
+
+# AC#2: 報告のためにユーザー所有ファイルを1バイトも書き換えない
+if cmp -s "$drift_config_before" "$drift_config"; then
+  pass "説明コメントの差異を報告しても config.my.yml は一切書き換えられない"
+else
+  fail "説明コメントの差異の報告で config.my.yml が書き換えられた:
+$(diff "$drift_config_before" "$drift_config" || true)"
+fi
+rm -f "$drift_config_before"
+
+echo ""
+echo "--- 6c-2. ユーザーが変更した値・独自キー・コメントアウトしたキーは壊れない（TASK-74 AC#2） ---"
+# 説明コメントの差異検出を追加しても、既存の3つの保護（値の保持・独自キーの保持・
+# コメントアウトされたキーを有効化しない）が崩れないことを、1つのファイルに
+# 全部を同居させた状態で確認する。
+
+TMP_REPO_DRIFT_USEREDIT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_DRIFT_USEREDIT"
+
+(cd "$TMP_REPO_DRIFT_USEREDIT" && git init -q)
+mkdir -p "$TMP_REPO_DRIFT_USEREDIT/.backlog"
+
+useredit_config="$TMP_REPO_DRIFT_USEREDIT/.backlog/config.my.yml"
+cp "$drift_config" "$useredit_config"
+
+useredit_config_tmp="$(mktemp)"
+sed -E \
+  -e 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
+  -e 's/^  max_in_progress: 1$/  # max_in_progress: 1/' \
+  "$useredit_config" > "$useredit_config_tmp"
+mv "$useredit_config_tmp" "$useredit_config"
+printf '\n  # ユーザー独自の調整値。テンプレートには存在しない。\n  my_custom_key: "keep-me"\n' >> "$useredit_config"
+
+if ! grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$useredit_config" \
+  || ! grep -Fq '  # max_in_progress: 1' "$useredit_config"; then
+  fail "テスト前提が壊れている: ユーザー変更・コメントアウトの再現に失敗した"
+fi
+
+useredit_output="$("$SETUP_SCRIPT" "$TMP_REPO_DRIFT_USEREDIT" 2>&1)"
+useredit_exit=$?
+if [ "$useredit_exit" -eq 0 ]; then
+  pass "ユーザー変更を含む config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
+else
+  fail "ユーザー変更を含む config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${useredit_exit}）:
+$useredit_output"
+fi
+if grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$useredit_config"; then
+  pass "説明コメントの差異検出を経てもユーザーが変更した値・行末コメントが保たれる"
+else
+  fail "説明コメントの差異検出でユーザーが変更した値・行末コメントが失われた"
+fi
+if grep -Fq '  my_custom_key: "keep-me"' "$useredit_config"; then
+  pass "説明コメントの差異検出を経てもテンプレートに無い独自キーが保たれる"
+else
+  fail "説明コメントの差異検出でテンプレートに無い独自キーが失われた"
+fi
+useredit_active_count="$(grep -Ec '^  max_in_progress:' "$useredit_config" || true)"
+if [ "$useredit_active_count" = "0" ] && grep -Fq '  # max_in_progress: 1' "$useredit_config"; then
+  pass "説明コメントの差異検出を経てもコメントアウトされたキーが有効化・重複追記されない"
+else
+  fail "説明コメントの差異検出でコメントアウトされたキー max_in_progress が有効化された（${useredit_active_count} 件）"
+fi
+# コメントアウトされたキーは有効なキー行として存在しないため、差異検出の対象外である
+# （この限界は warn_config_my_yml_comment_drift の契約コメントに明記されている）。
+if printf '%s\n' "$useredit_output" | grep -Fq "キー 'max_in_progress' の説明コメントが"; then
+  fail "コメントアウトされたキー max_in_progress が差異検出の対象になった:
+$useredit_output"
+else
+  pass "コメントアウトされたキー max_in_progress は差異検出の対象にならない"
+fi
+
+echo ""
+echo "--- 6c-3. テンプレートと一致していれば警告は出ない（TASK-74 AC#1 の裏側） ---"
+TMP_REPO_NO_DRIFT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_NO_DRIFT"
+
+(cd "$TMP_REPO_NO_DRIFT" && git init -q)
+mkdir -p "$TMP_REPO_NO_DRIFT/.backlog"
+cp "$SOURCE_CONFIG" "$TMP_REPO_NO_DRIFT/.backlog/config.my.yml"
+
+no_drift_output="$("$SETUP_SCRIPT" "$TMP_REPO_NO_DRIFT" 2>&1)"
+no_drift_exit=$?
+if [ "$no_drift_exit" -eq 0 ]; then
+  pass "テンプレートと同一の config.my.yml に対する実行が成功する（exit 0）"
+else
+  fail "テンプレートと同一の config.my.yml に対する実行が失敗した（exit ${no_drift_exit}）:
+$no_drift_output"
+fi
+if printf '%s\n' "$no_drift_output" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
+  fail "テンプレートと同一なのに説明コメントの差異が報告された:
+$no_drift_output"
+else
+  pass "テンプレートと同一なら説明コメントの差異は報告されない"
+fi
+if printf '%s\n' "$no_drift_output" | grep -Fq "人手での確認が要る項目"; then
+  fail "警告が無いのにサマリーへ「人手での確認が要る項目」の節が出力された:
+$no_drift_output"
+else
+  pass "警告が無ければサマリーの出力は従来どおり（余分な節を出さない）"
+fi
+
+echo ""
+echo "--- 6c-4. 新規導入（config.my.yml が無い状態）は従来どおりテンプレートのコピー（TASK-74 AC#3） ---"
+TMP_REPO_FRESH_CONFIG="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_FRESH_CONFIG"
+
+(cd "$TMP_REPO_FRESH_CONFIG" && git init -q)
+
+fresh_output="$("$SETUP_SCRIPT" "$TMP_REPO_FRESH_CONFIG" 2>&1)"
+fresh_exit=$?
+if [ "$fresh_exit" -eq 0 ]; then
+  pass "config.my.yml が無い新規導入の実行が成功する（exit 0）"
+else
+  fail "config.my.yml が無い新規導入の実行が失敗した（exit ${fresh_exit}）:
+$fresh_output"
+fi
+if cmp -s "$SOURCE_CONFIG" "$TMP_REPO_FRESH_CONFIG/.backlog/config.my.yml"; then
+  pass "新規導入の config.my.yml はテンプレートと完全に一致する"
+else
+  fail "新規導入の config.my.yml がテンプレートと一致しない"
+fi
+if printf '%s\n' "$fresh_output" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
+  fail "新規導入で説明コメントの差異が報告された（差異検出は既存ファイルがある場合だけ動くべき）:
+$fresh_output"
+else
+  pass "新規導入では説明コメントの差異検出が動かない"
+fi
+
+echo ""
 echo "=== 7. 旧ステータス名 Reviewed が残る既存 consumer リポジトリの移行（TASK-48） ==="
 # TASK-8 で Reviewed は Approved にリネームされたが、この移行は本リポジトリ自身の
 # .backlog/config.yml のみを対象に行われ、setup-improvement-loop（配布ロジック）
