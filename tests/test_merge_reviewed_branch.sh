@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test_merge_reviewed_branch.sh
 #
-# claude-skills/improvement-dispatch/scripts/merge-reviewed-branch に対する
+# claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch に対する
 # テスト。単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
 # 全体実行の一部としても呼ばれる。
 #
@@ -16,9 +16,9 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 8. claude-skills/improvement-dispatch/scripts/merge-reviewed-branch の動作確認 ==="
+echo "=== 8. claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch の動作確認 ==="
 # improvement-dispatch 手順3（auto_merge_reviewed: true）のマージ判定を
-# 切り出した claude-skills/improvement-dispatch/scripts/merge-reviewed-branch を、
+# 切り出した claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch を、
 # 一時 git リポジトリに対して実際に実行して検証する。前提条件未達・ff-only成功・3-way衝突無し成功・
 # 3-way衝突の4パターンを、それぞれ独立した一時リポジトリで確認する
 # （TASK-22 受入基準 #1-#4 に対応）。

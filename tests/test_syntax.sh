@@ -27,11 +27,11 @@ echo "=== 1. 構文チェック ==="
 # 各要素はパイプ区切りの1行で「<パス変数>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
 # - `-x -P SCRIPTDIR` が必要なのは、他のスクリプト/ライブラリを source する
 #   スクリプト（bin/setup-improvement-loop・install.zsh・
-#   bin/lib/list_opted_in_repos.sh・claude-skills-workspace/workspace-dispatch・
+#   bin/lib/list_opted_in_repos.sh・claude-code/workspace-skills/workspace-dispatch・
 #   workspace-scout・workspace-scout-major の各 scripts/list-target-repos・
-#   claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths・
+#   claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths・
 #   bin/lib/worktree_porcelain.sh を source するようになった
-#   claude-skills/improvement-dispatch/scripts/create-worktree・
+#   claude-code/skills/improvement-dispatch/scripts/create-worktree・
 #   merge-reviewed-branch（TASK-64））である。
 #   source 先を実際に追って検査させる指定で、無いと常に SC1091 で誤って失敗する。
 # - install.zsh だけ hard failure にしない（4フィールド目が true）。zsh 専用
@@ -55,16 +55,16 @@ CHECK_SCRIPTS=(
   "$YAML_UNQUOTE_SCRIPT|bin/lib/yaml_unquote.sh|--shell=bash|false"
   "$LIST_OPTED_IN_REPOS_SCRIPT|bin/lib/list_opted_in_repos.sh|-x -P SCRIPTDIR --shell=bash|false"
   "$WORKTREE_PORCELAIN_SCRIPT|bin/lib/worktree_porcelain.sh|--shell=bash|false"
-  "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
-  "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
-  "$WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT|claude-skills-workspace/workspace-scout-major/scripts/list-target-repos|-x -P SCRIPTDIR|false"
-  "$CREATE_WORKTREE_SCRIPT|claude-skills/improvement-dispatch/scripts/create-worktree|-x -P SCRIPTDIR|false"
-  "$MERGE_SCRIPT|claude-skills/improvement-dispatch/scripts/merge-reviewed-branch|-x -P SCRIPTDIR|false"
-  "$SELECT_SCRIPT|claude-skills/improvement-dispatch/scripts/select-next-task||false"
-  "$CHECK_HANDOFF_SCRIPT|claude-skills/improvement-work/scripts/check-handoff||false"
+  "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
+  "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
+  "$WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-scout-major/scripts/list-target-repos|-x -P SCRIPTDIR|false"
+  "$CREATE_WORKTREE_SCRIPT|claude-code/skills/improvement-dispatch/scripts/create-worktree|-x -P SCRIPTDIR|false"
+  "$MERGE_SCRIPT|claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch|-x -P SCRIPTDIR|false"
+  "$SELECT_SCRIPT|claude-code/skills/improvement-dispatch/scripts/select-next-task||false"
+  "$CHECK_HANDOFF_SCRIPT|claude-code/skills/improvement-work/scripts/check-handoff||false"
   "$PRECOMMIT_HOOK|githooks/pre-commit||false"
-  "$CHECK_RECOVERY_SCRIPT|claude-skills/improvement-dispatch/scripts/check-progress-recovery||false"
-  "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
+  "$CHECK_RECOVERY_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-progress-recovery||false"
+  "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
 )
 
 SYNTAX_ERR_FILE="/tmp/tests-run-sh-syntax-err.$$"
@@ -116,9 +116,9 @@ fi
 
 echo ""
 echo "=== 1c. SKILL.md 埋め込み bash ブロックの構文チェック ==="
-# claude-skills/improvement-dispatch/SKILL.md、claude-skills/improvement-work/SKILL.md、
-# claude-skills-workspace/workspace-dispatch/SKILL.md、
-# claude-skills-workspace/workspace-scout/SKILL.md には、
+# claude-code/skills/improvement-dispatch/SKILL.md、claude-code/skills/improvement-work/SKILL.md、
+# claude-code/workspace-skills/workspace-dispatch/SKILL.md、
+# claude-code/workspace-skills/workspace-scout/SKILL.md には、
 # dispatch/work が実際に実行する bash コードブロックが埋め込まれている
 # （例: improvement-dispatch の手順3・手順5）。ここでは各 ```bash フェンスブロックを抽出し、
 # bash -n で構文チェックする。フェンスは箇条書きの入れ子（行頭に空白のインデント）で

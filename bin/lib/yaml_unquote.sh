@@ -6,7 +6,7 @@
 # "  - \"a\"" 形式）の各要素から、前後の空白と、それを囲む引用符
 # （シングル/ダブル、両端が対になっている場合のみ）を取り除く」という同じ
 # 引用符除去ロジックが、bin/setup-improvement-loop の parse_statuses_block と
-# claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
+# claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
 # parse_path_list に、それぞれ独立実装として存在していた。前者はダブル
 # クォートしか剥がさない不具合（TASK-62 の報告内容）があり、
 # .backlog/config.yml の statuses をシングルクォートで書くと無音で壊れて

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test_check_forbidden_allowed_paths.sh
 #
-# claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths に
+# claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths に
 # 対するテスト。単体で実行すると、このファイルの検証だけが走る。
 # tests/run.sh から全体実行の一部としても呼ばれる。
 #
@@ -16,7 +16,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 14. claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の動作確認 ==="
+echo "=== 14. claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の動作確認 ==="
 # TASK-44: forbidden_paths/allowed_pathsと変更ファイル一覧を突き合わせる判定
 # ロジックを、一時 git リポジトリに対して実際に実行して検証する。
 #   14a. forbidden_paths に前方一致する変更ファイルがある -> VIOLATION（AC#1）
@@ -51,7 +51,7 @@ echo "=== 14. claude-skills/improvement-dispatch/scripts/check-forbidden-allowed
 #        渡せば VIOLATION になる（TASK-69 AC#1。死角は判定側ではなく一覧の
 #        作り方の側にあることを固定する）
 #   14q. .claude/skills/<スキル名> 配下についても同じ（TASK-69 AC#2）
-#   14r. その限界が、設定箇所（backlogmd-custom-config/config.my.yml）と
+#   14r. その限界が、設定箇所（backlog-md/config.my.yml）と
 #        スクリプトの契約コメントの両方に明記されている（TASK-69 AC#1/AC#2。
 #        記述が黙って消えるのを防ぐ）
 
