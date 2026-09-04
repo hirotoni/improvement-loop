@@ -2,8 +2,9 @@
 # tests/test_syntax.sh
 #
 # improvement-loop の各スクリプト・SKILL.md 埋め込み bash ブロックに対する
-# 構文チェック（bash -n / shellcheck）。単体で実行すると、このファイルの
-# 検証だけが走る。tests/run.sh から全体実行の一部としても呼ばれる。
+# 構文チェック（bash -n / shellcheck）と、tests/ 配下が一時パスの後片付け作法に
+# 揃っているかの横断チェック。単体で実行すると、このファイルの検証だけが走る。
+# tests/run.sh から全体実行の一部としても呼ばれる。
 #
 # 依存は bash/zsh・git・backlog のみ。いずれか欠けていれば、その旨を
 # 報告してスキップする（テスト対象の不具合として失敗にはしない）。
@@ -67,17 +68,22 @@ CHECK_SCRIPTS=(
   "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
 )
 
-SYNTAX_ERR_FILE="/tmp/tests-run-sh-syntax-err.$$"
-: > "$SYNTAX_ERR_FILE"
+# bash -n の診断出力は一時ファイルではなくコマンド置換で変数に取る。以前は
+# `/tmp/tests-run-sh-syntax-err.$$` を直接組み立てて 2> でそこへ捨て、正常経路の
+# rm -f だけで消していたため、作成から削除までの間にシグナルで中断されると
+# /tmp に残骸が残った（後片付けレジストリにも登録されていなかった。TASK-80）。
+# 変数に取れば一時パスを一切作らないので、trap の発火に依存せず残骸が生じない。
+# 変数代入の終了コードはコマンド置換の終了コードなので、if の判定はそのまま使える。
+# 2>&1 でまとめるのは、下の SKILL.md 埋め込みブロック側の検査と同じ形である
+# （bash -n は構文エラーを標準エラーにしか出さないため、混ざる標準出力は無い）。
 for entry in "${CHECK_SCRIPTS[@]}"; do
   IFS='|' read -r script_path script_label _sc_flags _sc_allow_fail <<<"$entry"
-  if bash -n "$script_path" 2>"$SYNTAX_ERR_FILE"; then
+  if syntax_err="$(bash -n "$script_path" 2>&1)"; then
     pass "bash -n $script_label"
   else
-    fail "bash -n $script_label: $(cat "$SYNTAX_ERR_FILE")"
+    fail "bash -n $script_label: $syntax_err"
   fi
 done
-rm -f "$SYNTAX_ERR_FILE"
 
 if command -v shellcheck >/dev/null 2>&1; then
   # install.zsh とその他のスクリプトをまとめて1回の shellcheck 呼び出しで渡すと、
@@ -185,6 +191,9 @@ check_skill_bash_blocks() {
 
       local block_tmp
       block_tmp="$(mktemp)"
+      # 直後の rm -f で消しているが、その手前で中断された場合に備えて
+      # 後片付けレジストリにも登録しておく（tests/lib/common.sh の作法）。
+      register_tmp_cleanup "$block_tmp"
       printf '%s' "$sanitized" > "$block_tmp"
 
       local err_out
@@ -218,5 +227,81 @@ check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-dispatch/SKILL.md" "impr
 check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-work/SKILL.md" "improvement-work/SKILL.md"
 check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-dispatch/SKILL.md" "workspace-dispatch/SKILL.md"
 check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-scout/SKILL.md" "workspace-scout/SKILL.md"
+
+echo ""
+echo "=== 1d. tests/ 配下の一時パスの後片付け作法 ==="
+# tests/lib/common.sh は一時パスの後片付けレジストリ（register_tmp_cleanup /
+# cleanup_registered_tmp_paths と trap ... EXIT）を提供し、同ファイル冒頭のコメントで
+# 「一時パスは作った直後に register_tmp_cleanup へ渡す」を唯一の作法だと定めている。
+# ところが作法から外れたことに気づける機械的な検査が無く、実際に tests/test_syntax.sh
+# だけが登録漏れのまま残っていた（TASK-80）。同じ取りこぼしを繰り返さないための検査を
+# ここに置く。新しいテストファイルを増やさないのは、このファイルが既に CHECK_SCRIPTS や
+# SKILL.md 埋め込みブロックのようにリポジトリ全体を横断して検査する役割を持っているためである。
+#
+# 走査対象は tests/lib/common.sh を source するファイル、すなわち tests/test_*.sh と
+# tests/lib/*.sh に限る。tests/run.sh は各テストファイルを子プロセスとして起動する
+# ランナーであり common.sh を source しないので、レジストリをそもそも使えない（対象外）。
+#
+# 検査する規約は2つある。
+# - 規約A: 一時パスを固定の絶対パスで組み立てない。作成は mktemp に任せる。
+#   TASK-80 以前の tests/test_syntax.sh は PID を混ぜただけの予測可能なパスを
+#   一時ディレクトリ直下に直接組み立てていた。
+# - 規約B: mktemp の結果を代入した変数は、同じファイルの中で register_tmp_cleanup に渡す。
+#   直後に mv で消費する場合でも登録する。登録の要否を呼び出し側の文脈から
+#   判別しようとすると検査が脆くなるため、例外を設けず一律に登録側を揃える
+#   （cleanup_registered_tmp_paths は rm -rf なので、既に無いパスの登録は無害である）。
+check_tests_tmp_path_convention() {
+  # 規約Aの検出パターンに使う一時ディレクトリ名を変数に持たせているのは、
+  # パターンをこの行に直書きすると、このファイル自身も走査対象に含まれるため
+  # 自分の grep パターンを規約A違反として検出してしまうからである。
+  local tmp_dir_literal='/tmp'
+
+  local scan_files=()
+  local f
+  for f in "$REPO_ROOT"/tests/test_*.sh "$REPO_ROOT"/tests/lib/*.sh; do
+    [ -f "$f" ] && scan_files+=("$f")
+  done
+
+  if [ "${#scan_files[@]}" -eq 0 ]; then
+    fail "一時パスの後片付け作法: 走査対象のファイルが1つも見つからない（走査条件の不具合の可能性がある）"
+    return
+  fi
+
+  local violations=""
+  local rel hits line var register_re
+  for f in "${scan_files[@]}"; do
+    rel="${f#"$REPO_ROOT"/}"
+
+    # 規約A: コメント行を除いたうえで、一時ディレクトリ直下のパスを直書きしている行を探す。
+    hits="$(grep -nE "$tmp_dir_literal/" "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      violations+="  $rel:$line  → 規約A: 一時パスは mktemp で作る"$'\n'
+    done <<<"$hits"
+
+    # 規約B: mktemp の結果を代入している変数名を集め、同じファイル内に
+    # register_tmp_cleanup への引き渡しがあるかを確かめる。
+    hits="$(grep -nE '^[[:space:]]*(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="\$\(mktemp' "$f" || true)"
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      var="$(printf '%s\n' "$line" | sed -E 's/^[0-9]+:[[:space:]]*(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*$/\2/')"
+      # 行頭（インデント可）から始まる register_tmp_cleanup の呼び出しに限定して探す。
+      # コメントアウトされた登録行を有効な登録と誤認しないためである。
+      register_re='^[[:space:]]*register_tmp_cleanup[[:space:]].*"\$\{?'"$var"'\}?"'
+      if ! grep -qE "$register_re" "$f"; then
+        violations+="  $rel:${line%%:*}: \$$var  → 規約B: mktemp の直後に register_tmp_cleanup へ登録する"$'\n'
+      fi
+    done <<<"$hits"
+  done
+
+  if [ -z "$violations" ]; then
+    pass "tests/test_*.sh・tests/lib/*.sh の一時パスが後片付け作法（mktemp + register_tmp_cleanup）に揃っている（走査 ${#scan_files[@]} ファイル）"
+  else
+    fail "一時パスの後片付け作法に反する箇所がある（tests/lib/common.sh の register_tmp_cleanup を参照）:
+${violations%$'\n'}"
+  fi
+}
+
+check_tests_tmp_path_convention
 
 finish_tests

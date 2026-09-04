@@ -588,6 +588,7 @@ fi
 # 既存キー（max_in_review）をユーザーが値・コメント付きで変更した状態を作る
 # （AC#2 検証用）。sed -i は使わず、他の箇所と同じ mktemp+mv で書き換える。
 migration_config_tmp="$(mktemp)"
+register_tmp_cleanup "$migration_config_tmp"
 sed 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
   "$migration_config" > "$migration_config_tmp"
 mv "$migration_config_tmp" "$migration_config"
@@ -667,6 +668,7 @@ cp "$SOURCE_CONFIG" "$commented_config"
 
 # 既存キー max_in_review を、ユーザーが一時的に無効化した想定でコメントアウトする。
 commented_config_tmp="$(mktemp)"
+register_tmp_cleanup "$commented_config_tmp"
 sed -E 's/^(  )max_in_review: 3$/\1# max_in_review: 3/' "$commented_config" > "$commented_config_tmp"
 mv "$commented_config_tmp" "$commented_config"
 
@@ -743,6 +745,7 @@ cp "$SOURCE_CONFIG" "$drift_config"
 # 連続コメント行（＝そのキーの説明ブロック）の先頭行だけを、旧テンプレートの
 # 文言に差し替える。他のキー・値・ユーザー独自の記述には触れない。
 drift_config_tmp="$(mktemp)"
+register_tmp_cleanup "$drift_config_tmp"
 awk '
   { lines[NR] = $0 }
   END {
@@ -785,6 +788,7 @@ template_first_comment_line="$(awk '
 
 # 実行前のファイル内容を控え、実行後に1バイトも変わっていないことを確かめる。
 drift_config_before="$(mktemp)"
+register_tmp_cleanup "$drift_config_before"
 cp "$drift_config" "$drift_config_before"
 
 drift_output="$("$SETUP_SCRIPT" "$TMP_REPO_COMMENT_DRIFT" 2>&1)"
@@ -850,6 +854,7 @@ useredit_config="$TMP_REPO_DRIFT_USEREDIT/.backlog/config.my.yml"
 cp "$drift_config" "$useredit_config"
 
 useredit_config_tmp="$(mktemp)"
+register_tmp_cleanup "$useredit_config_tmp"
 sed -E \
   -e 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
   -e 's/^  max_in_progress: 1$/  # max_in_progress: 1/' \
