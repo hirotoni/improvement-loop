@@ -107,7 +107,8 @@ git config core.hooksPath githooks
 ```
 
 有効化すると、以降このリポジトリで行う `git commit` のたびに `tests/run.sh` が実行され、FAIL があればコミットが中断される。
-`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash・git・backlog）が欠けている場合は、対象テストが SKIP として報告される。
+`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash・git・backlog）が欠けている場合は、対象テストが SKIP として報告され、総合サマリーの SKIP 件数に計上される。総合サマリーには PASS/FAIL/SKIP の件数に続けて、テストファイル単位の内訳（実行 / 丸ごとスキップ / 集計不能）も出力される。
+依存不足で全テストファイルがスキップされ、検証が1件も実行されなかった場合は、全件成功した場合と区別できるよう FAIL を1件計上して非ゼロで終了する（pre-commit フックはコミットをブロックする）。終了ステータスしか見ない利用者から両者が区別できないと、1件も検証しないままコミットが通ってしまうためである。
 zsh はテストの共通の依存ではない。zsh を使うのは `install.zsh` を実際に実行する `tests/test_setup_improvement_loop.sh` の1箇所だけで、zsh が無い環境ではその検証だけが SKIP になり、他のテストはそのまま実行される。
 GitHub Actions 等の CI はこのリポジトリでは対象外とする。
 
