@@ -17,6 +17,11 @@ npm install -g backlog.md
 
 動作確認済みの最小バージョンは `1.48.0`（`backlog --version` で確認）。これより古いバージョンでは、上記フラグの一部が使えず、improvement-dispatch/improvement-work 実行中にエラーになる場合がある。`setup-improvement-loop` は `backlog` コマンドの存在確認のみ行い、バージョンまでは確認しない。
 
+シェルは zsh と bash の両方を使う。用途が分かれており、一方がもう一方の代わりにはならない。
+
+- zsh: 下記インストール手順1の `install.zsh` の実行に必要。`install.zsh` はシバンが `#!/usr/bin/env zsh` の zsh 専用スクリプトで、`${0:A:h}` など zsh 固有の構文を使う。bash では実行できない。
+- bash: `bin/setup-improvement-loop` と各スキルの `scripts/` 配下のスクリプト、および下記「開発者向け情報」の `tests/run.sh` の実行に必要。これらはシバンが `#!/usr/bin/env bash` で、`BASH_SOURCE` など bash 固有の機能を使う。zsh では実行できない。
+
 ## インストール手順
 
 1. `install.zsh` を実行する。`bin/setup-improvement-loop` を `$HOME/.local/bin` にシンボリックリンクし、パスから使えるようにする。
@@ -98,7 +103,8 @@ git config core.hooksPath githooks
 ```
 
 有効化すると、以降このリポジトリで行う `git commit` のたびに `tests/run.sh` が実行され、FAIL があればコミットが中断される。
-`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash/zsh・git・backlog）が欠けている場合は、対象テストが SKIP として報告される。
+`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash・git・backlog）が欠けている場合は、対象テストが SKIP として報告される。
+zsh はテストの共通の依存ではない。zsh を使うのは `install.zsh` を実際に実行する `tests/test_setup_improvement_loop.sh` の1箇所だけで、zsh が無い環境ではその検証だけが SKIP になり、他のテストはそのまま実行される。
 GitHub Actions 等の CI はこのリポジトリでは対象外とする。
 
 ## ライセンス
