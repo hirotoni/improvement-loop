@@ -1,51 +1,26 @@
 #!/usr/bin/env bash
-# claude-code/skills/improvement-dispatch/scripts/select-next-task
+# improvement-dispatch 手順4（次に引き渡す To Do タスクの選定）を決定論的に行う。
 #
-# improvement-dispatch 手順4（次に引き渡す To Do タスクの選定）を
-# 決定論的に行う。
-#
-# 使い方:
-#   .claude/skills/improvement-dispatch/scripts/select-next-task <max_in_progress> <max_in_review>
-#
-# 引数（どちらも正の整数、または 0）:
-#   max_in_progress  .backlog/config.my.yml の improvement_loop.max_in_progress
-#                     の値（既定 1）。SKILL.md 手順1 で読んだ値をそのまま渡す。
-#   max_in_review    .backlog/config.my.yml の improvement_loop.max_in_review
-#                     の値（既定 3）。同上。
+# 使い方: select-next-task <max_in_progress> <max_in_review>
+# 引数はどちらも0以上の整数で、.backlog/config.my.yml の improvement_loop の
+# 同名キー（既定 1 / 3）を SKILL.md 手順1 で読んだ値をそのまま渡す。
 #
 # 前提: カレントディレクトリが backlog CLI の対象リポジトリであること
-# （.backlog/ が見える場所）。bin/setup-improvement-loop と異なり、対象
-# リポジトリのパスを引数では受け取らない（呼び出し元は常にそのリポジトリの
-# 作業木の中で実行する）。
+# （対象リポジトリのパスを引数では受け取らない）。
 #
-# 処理:
-#   1. `backlog task list --plain`（フィルタ無し・1回のみ）で全ステータスを
-#      まとめて取得し、"In Progress:" / "In Review:" / "To Do:" の各セクション
-#      をそれぞれ切り出す（TASK-59。`--status` 違いで3回個別に呼ぶより、
-#      backlog CLI 自体の起動コストを1回分に抑えられる）。
-#   2. In Progress セクションの件数を数え、max_in_progress 以上なら選定を
-#      行わず GATED で終了する。
-#   3. In Review セクションの件数を数え、max_in_review 以上なら選定を
-#      行わず GATED で終了する。
-#   4. To Do セクションを候補として使う。
-#   5. `blocked:needs-decision` ラベルが付いているものを除外する
-#      （`backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain`
-#      との差集合。このフィルタ呼び出しは対象外＝そのまま残す）。
-#   6. 各候補について `backlog task view TASK-<n> --plain` の Dependencies
-#      行を確認し、依存タスクが1つでも Done でなければ除外する
-#      （依存タスクが見つからない場合も安全側に倒して「未完了」扱いにする）。
-#   7. 残った候補を優先度（High=0 → Medium=1 → Low=2 → 未設定=3）→
-#      数値 ID 昇順でソートし、先頭を選ぶ。backlog CLI 自体の `--sort`
-#      の並び順（未文書化の tie-break に依存する）には頼らず、この
-#      スクリプト自身が比較を行う。
+# 選定の順序:
+#   1. In Progress・In Review がそれぞれ上限以上なら選定せず GATED で終わる。
+#   2. To Do のうち blocked:needs-decision ラベルが付いたものを除外する。
+#   3. Dependencies の依存タスクが1つでも Done でないものを除外する
+#      （依存タスクが見つからない場合も安全側に倒して未完了扱い）。
+#   4. 残りを優先度（High→Medium→Low→未設定）→数値ID昇順で並べ先頭を選ぶ。
+#      backlog CLI の --sort（未文書化の tie-break に依存する）には頼らない。
 #
-# 出力: 標準出力の1行目に `RESULT: <値>` を出す。
-#   RESULT: SELECTED      -> 2行目に `TASK_ID: TASK-<n>`
-#   RESULT: GATED         -> 2行目に `REASON: max_in_progress` または
-#                             `max_in_review`、3行目以降に件数の内訳
-#   RESULT: NO_CANDIDATE  -> 除外後に残る候補が無い
-#   RESULT: ERROR         -> 引数不正・backlog コマンド不在など
-#                             （詳細は標準エラーに出す）
+# 出力: 標準出力の1行目に必ず RESULT: <値> を出す。
+#   RESULT: SELECTED      2行目に TASK_ID: <ID>
+#   RESULT: GATED         2行目に REASON: max_in_progress|max_in_review、3行目以降に件数
+#   RESULT: NO_CANDIDATE  除外後に残る候補が無い
+#   RESULT: ERROR         引数不正・backlog コマンド不在など（詳細は標準エラー）
 #
 # 終了ステータス: 0=SELECTED, 1=GATED, 2=NO_CANDIDATE, 3=ERROR
 
@@ -80,22 +55,14 @@ case "$MAX_IN_REVIEW" in
 esac
 
 # ---- 0. ID抽出ヘルパー ----
-# `backlog task list --plain` の各タスク行は "  <ID> - <title>" または
-# "  [PRIORITY] [type] <ID> - <title>" の形式（先頭に0個以上の "[...] "
-# タグが付く）。<ID> は .backlog/config.yml の task_prefix に応じて
-# "TASK-<n>" とは限らない（例: task_prefix: "issue" なら "ISSUE-<n>"）ため、
-# "TASK-" 固定のパターンで抽出すると task_prefix をカスタマイズした
-# リポジトリで該当タスクを一切検出できない（TASK-54。bin/setup-improvement-loop
-# の migrate_reviewed_tasks が TASK-48 で同種の不具合を修正した際と同じ理由）。
-# また、タスクの title 自体に "TASK-999" のような文字列が含まれるケースも
-# あるため、行のどこかに現れる ID らしき文字列を無条件に拾うと title 中の
-# 偽陽性まで ID として誤検出してしまう。行頭の空白・タグ群を取り除いた直後に
-# 来る "<接頭辞>-<n> - " の形のものだけを ID として採用することで、prefix
-# 非依存かつ title 中の偽陽性を避けて抽出する。migrate_reviewed_tasks と
-# 同じ正規表現を使う。
+# `backlog task list --plain` のタスク行は "  [PRIORITY] [type] <ID> - <title>"
+# （先頭のタグは0個以上）。ID の接頭辞は .backlog/config.yml の task_prefix 次第で
+# "TASK-" とは限らないため固定パターンでは抽出しない。一方、行のどこかにある
+# ID らしき文字列を無条件に拾うと title 中の "TASK-999" まで誤検出する。そこで
+# 行頭の空白・タグ群を取り除いた直後の "<接頭辞>-<n> - " だけを ID として採用する
+# （bin/setup-improvement-loop の migrate_reviewed_tasks と同じ正規表現）。
 #
-# extract_task_id: $1 = backlog task list --plain の1行。マッチすれば ID を
-# 標準出力へ書く（マッチしなければ何も出力しない）。
+# $1 = タスク行。マッチすれば ID を標準出力へ書く。
 extract_task_id() {
   local line="$1"
   local stripped
@@ -105,9 +72,8 @@ extract_task_id() {
   fi
 }
 
-# count_task_lines: $1 = backlog task list --plain の出力全体。タスク行
-# （extract_task_id がマッチする行）の件数を数える。見出し行（"In Progress:"
-# 等）や "No tasks found." はマッチしない。
+# $1 = task list の出力。タスク行の件数を数える（見出し行や "No tasks found." は
+# マッチしないので数えられない）。
 count_task_lines() {
   local output="$1"
   printf '%s\n' "$output" \
@@ -115,19 +81,13 @@ count_task_lines() {
     | grep -cE '^[A-Za-z][A-Za-z0-9_-]*-[0-9]+ - ' || true
 }
 
-# `backlog task list --plain`（フィルタ無し）は、対象が1件以上あるステータス
-# についてのみ "<Status>:" という見出し行（先頭に空白が無く、コロンで終わる。
-# 例: "In Progress:" "To Do:"）を出し、その直後にそのステータスに属する
-# タスク行（先頭が空白のインデント行）を、次の見出し行または出力末尾まで
-# 並べる（該当タスクが1件も無いステータスは見出し自体が出ない。全ステータス
-# 合計で0件なら "No tasks found." の1行だけになる）。`--status` 違いで3回
-# 個別に呼ぶ代わりに、この1回の出力からステータスごとのセクションを切り出す
-# （TASK-59）。
+# フィルタ無しの `backlog task list --plain` は、1件以上あるステータスについてのみ
+# "<Status>:" という見出し行（行頭に空白が無くコロンで終わる）を出し、その直後に
+# インデントされたタスク行を次の見出しまで並べる。--status 違いで複数回呼ぶ代わりに、
+# この1回の出力からセクションを切り出して backlog CLI の起動コストを1回に抑える。
 #
-# extract_status_section: $1 = backlog task list --plain の全出力、
-# $2 = 見出し文字列（コロン無し。例: "In Progress"）。該当セクションの
-# タスク行（見出し行自体は含まない）を標準出力へ書く。該当セクションが
-# 出力に無ければ何も出力しない（= 0件として扱われる）。
+# $1 = 全出力、$2 = 見出し文字列（コロン無し。例: "In Progress"）。
+# 該当セクションのタスク行を出す（見出し行自体は含まない）。無ければ何も出さない。
 extract_status_section() {
   local full_output="$1"
   local heading="$2:"
@@ -138,15 +98,10 @@ extract_status_section() {
   '
 }
 
-# ---- 1. フィルタ無しの1回の呼び出しで In Progress / In Review / To Do の
-#         セクションをまとめて取得する ----
-# backlog task list/view はコマンドが存在し引数の形が正しい限り、対象が
-# 0件・not found でも exit 0 で返す（実測済み）。それでも `set -e` 下では
-# 何らかの理由（backlog 自体の異常終了など）で非ゼロ終了した場合、代入
-# 単体の失敗は RESULT: 行を出さないまま無言でスクリプトを終了させてしまい、
-# ヘッダーで宣言した出力契約（標準出力1行目に必ず RESULT: を出す）を破る。
-# `if ! var="$(cmd)"; then ...; fi` の形にして、失敗を確実に検知し
-# result_error（RESULT: ERROR, exit 3）に倒す。
+# ---- 1. 1回の呼び出しで In Progress / In Review / To Do をまとめて取得する ----
+# 代入単体で失敗させると、set -e が RESULT: 行を出さないままスクリプトを終わらせ、
+# 「1行目に必ず RESULT: を出す」という出力契約を破る。`if ! var="$(cmd)"` の形にして
+# 必ず result_error（RESULT: ERROR, exit 3）に倒す。
 if ! all_output="$(backlog task list --plain)"; then
   result_error 'backlog task list --plain が失敗した'
 fi
@@ -174,9 +129,8 @@ if [ "$in_review_count" -ge "$MAX_IN_REVIEW" ]; then
 fi
 
 # ---- 2. To Do 候補と blocked:needs-decision の除外集合を取得する ----
-# To Do セクションは手順1で取得済みの all_output から切り出す（追加の
-# backlog 呼び出しは不要）。blocked:needs-decision の除外集合は `--labels`
-# フィルタが必要なため、この呼び出しだけは対象外のまま残す（TASK-59）。
+# blocked:needs-decision の除外集合だけは --labels フィルタが要るので、
+# ここでもう1回だけ backlog を呼ぶ。
 todo_output="$(extract_status_section "$all_output" "To Do")"
 if ! blocked_output="$(backlog task list --status "To Do" --labels 'blocked:needs-decision' --plain)"; then
   result_error "backlog task list --status \"To Do\" --labels 'blocked:needs-decision' --plain が失敗した"
@@ -190,15 +144,11 @@ while IFS= read -r line; do
   fi
 done <<< "$blocked_output"
 
-# 以下 is_blocked / has_incomplete_dependency は `if is_blocked ...; then` の
-# ように if の条件式として呼ぶことを前提にしている。bash は `set -e` を、
-# 条件式として評価されるコマンド（の呼び出し先の関数本体すべて）の中では
-# 適用しない。そのため関数内で backlog 呼び出しが結果を result_error
-# （exit 3）に倒す前に他の理由で非ゼロを返しても、それだけでは
-# スクリプト全体は落ちない（呼び出し側の if がその真偽を見るだけになる）。
-# これを変更し、戻り値を一旦変数に代入してから判定する形
-# （例: `blocked=$(is_blocked ...)` 相当）に書き換えると、この
-# set -e 抑制が効かなくなり挙動が変わるので注意すること。
+# is_blocked / has_incomplete_dependency は `if is_blocked ...; then` のように
+# if の条件式として呼ぶ前提である。bash は条件式として評価されるコマンドの本体には
+# set -e を適用しないので、関数内で非ゼロが返ってもスクリプト全体は落ちない。
+# 戻り値を一旦変数に代入してから判定する形へ書き換えると、この抑制が効かなくなり
+# 挙動が変わるので注意すること。
 is_blocked() {
   local needle="$1"
   if [ "${#BLOCKED_IDS[@]}" -eq 0 ]; then
@@ -213,14 +163,12 @@ is_blocked() {
   return 1
 }
 
-# $1 = TASK-<n>。依存タスクが1つでも Done でなければ真を返す（依存無しなら偽）。
-# Status 行はグリフ（○/◒/✔ 等）付きだが、6ステータスのうち末尾が "Done" で
-# 終わるのは Done のみなので、行末一致で判定する。依存タスクが見つからない
-# 場合（"Task TASK-<n> not found." で Status 行自体が無い。backlog task view
-# はこの場合も exit 0 で返す）も安全側に倒して「未完了」扱いにする。
-# backlog task view 自体が非ゼロ終了した場合（コマンド不整合など、通常は
-# 起きない）は、上のコメントの通り if の条件式内であるため set -e では
-# 検知できない。result_error で明示的に ERROR へ倒す。
+# $1 = タスクID。依存タスクが1つでも Done でなければ真を返す（依存無しなら偽）。
+# Status 行はグリフ付きだが、末尾が "Done" で終わるのは Done だけなので行末一致で
+# 判定する。依存タスクが見つからない場合（Status 行自体が無い。この場合も
+# backlog task view は exit 0 で返す）も安全側に倒して未完了扱いにする。
+# view 自体の非ゼロ終了は上のコメントの通り set -e では検知できないため、
+# result_error で明示的に ERROR へ倒す。
 has_incomplete_dependency() {
   local task_id="$1"
   local view_output
@@ -298,9 +246,8 @@ while [ "$i" -lt "${#FINAL_IDS[@]}" ]; do
   if [ "${FINAL_RANK[$i]}" -lt "${FINAL_RANK[$best_idx]}" ]; then
     best_idx=$i
   elif [ "${FINAL_RANK[$i]}" -eq "${FINAL_RANK[$best_idx]}" ]; then
-    # ID は "<接頭辞>-<n>" の形（接頭辞は task_prefix によって変わる。
-    # TASK-54）。`##*-` で最後のハイフンまでを最長一致で取り除き、
-    # 接頭辞の値を読まずに末尾の数値部分だけを取り出す。
+    # `##*-` で最後のハイフンまでを最長一致で取り除き、接頭辞の値を読まずに
+    # 末尾の数値部分だけを取り出す（接頭辞は task_prefix によって変わる）。
     id_i="${FINAL_IDS[$i]##*-}"
     id_best="${FINAL_IDS[$best_idx]##*-}"
     if [ "$id_i" -lt "$id_best" ]; then

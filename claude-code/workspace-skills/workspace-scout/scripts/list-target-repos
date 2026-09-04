@@ -1,27 +1,13 @@
 #!/usr/bin/env bash
-# claude-code/workspace-skills/workspace-scout/scripts/list-target-repos
+# workspace-scout が対象とする、improvement-scout に opt-in 済みのリポジトリを列挙する
+# 薄いラッパー。実体は bin/lib/list_opted_in_repos.sh の list_opted_in_repos() で、
+# ここは skill_marker_name を "improvement-scout" に固定して呼ぶだけである。
 #
-# workspace-scout が対象とする、improvement-scout に opt-in 済みの
-# リポジトリを列挙する薄いラッパー。実体のロジックは
-# bin/lib/list_opted_in_repos.sh の list_opted_in_repos() にあり、ここでは
-# skill_marker_name を "improvement-scout" に固定して呼ぶだけである。
-#
-# 使い方:
-#   list-target-repos [ワークスペースディレクトリ]
-#
-# 引数を省略した場合は現在のディレクトリを対象とする（workspace-scout は
-# 通常ワークスペースルートで実行される前提）。
+# 使い方: list-target-repos [ワークスペースディレクトリ]
+# 省略時はカレントディレクトリを対象とする。
 #
 # 出力: opt-in 済みリポジトリの絶対パスを1行1件、ソート済みで標準出力に書く。
 # 該当が0件でも exit 0（何も出力しない）。
-#
-# このスクリプト自身は claude-code/workspace-skills/workspace-scout/scripts/ 配下に
-# 置かれ、`.claude/skills/workspace-scout` シンボリックリンク（配布元
-# ディレクトリ丸ごとへのリンク。bin/setup-improvement-loop --workspace が配置する）
-# 経由で実行される。bin/lib/list_opted_in_repos.sh を source するには配布元
-# リポジトリのルートを知る必要があるが、この時点ではまだシンボリックリンクを
-# 解決していない。bin/setup-improvement-loop 冒頭のブートストラップ処理と
-# 同じ理由・同じロジックで、まず自分自身の実パスを解決する。
 
 set -euo pipefail
 
@@ -40,8 +26,9 @@ _bootstrap_resolve_own_path() {
 
 SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-# SCRIPT_DIR は <配布元リポジトリ>/claude-code/workspace-skills/workspace-scout/scripts。
-# 4階層上が配布元リポジトリのルートである。
+# `.claude/skills/workspace-scout` シンボリックリンク経由で実行されるため、BASH_SOURCE を
+# そのまま使えない。上で解決した実パスから配布元リポジトリのルートを求める
+# （SCRIPT_DIR は <配布元>/claude-code/workspace-skills/workspace-scout/scripts。4階層上がルート）。
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 # shellcheck source=../../../../bin/lib/list_opted_in_repos.sh

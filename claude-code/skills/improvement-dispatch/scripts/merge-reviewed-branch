@@ -1,66 +1,33 @@
 #!/usr/bin/env bash
-# merge-reviewed-branch
+# Approved になった improvement-loop の作業ブランチを、決定論的な手順でデフォルト
+# ブランチにマージする（improvement-dispatch 手順3の auto_merge_reviewed: true パート）。
 #
-# Reviewed になった improvement-loop の作業ブランチを、決定論的な手順で
-# デフォルトブランチ（通常は main）にマージする（improvement-dispatch 手順3の
-# auto_merge_reviewed: true パートに対応する）。
+# 使い方: merge-reviewed-branch <作業ブランチ名>
 #
-# デフォルトブランチ名は claude-code/skills/improvement-dispatch/scripts/create-worktree
-# （161-166行目）と同じ核心ロジックで判定する：`git symbolic-ref --short
-# refs/remotes/origin/HEAD` を試し、解決できなければ "main" にフォールバックする。
-# create-worktree と異なり、このスクリプトは `git fetch origin` を行わない
-# （このスクリプトの決定論性・オフライン動作の方針を優先し、ローカルに既に
-# キャッシュされている refs/remotes/origin/HEAD をそのまま使う。通常は
-# git clone の時点で設定済みである。TASK-61）。
+# 呼び出し元のカレントディレクトリが属する git リポジトリをメインの作業木として扱い、
+# 切り替えとマージはそこで行う。対象の作業ブランチ用ワークツリーには立ち入らず、
+# マージ完了後に git worktree remove で片付けるだけである。
 #
-# 使い方:
-#   .claude/skills/improvement-dispatch/scripts/merge-reviewed-branch <作業ブランチ名>
+# 前提条件（メインの作業木がクリーン、対象ブランチが存在、デフォルトブランチとの
+# 差分がある）を確認してから、ff-only → 衝突が無ければ 3-way の順にマージし、
+# 完了した場合だけワークツリーと作業ブランチを片付ける。
+# 差分が既に無い場合は新規のマージはしないが、片付けが未完了なら再試行する
+# （過去の呼び出しでマージだけ成功して片付けが失敗した状態からの回復のため）。
 #
-# 呼び出し元のカレントディレクトリ（の属する git リポジトリ）を
-# メインの作業木として扱う。ブランチの切り替え・マージはそのリポジトリに
-# 対して行う。対象の作業ブランチ用ワークツリー（存在する場合）には
-# 立ち入らず、マージ完了後に `git worktree remove` で片付けるだけである。
+# デフォルトブランチ名は create-worktree と同じ核心ロジック（git symbolic-ref --short
+# refs/remotes/origin/HEAD、解決できなければ "main"）で判定する。ただし create-worktree
+# と違って git fetch origin はしない。決定論性とオフライン動作を優先し、ローカルに
+# キャッシュ済みの refs/remotes/origin/HEAD をそのまま使う。
 #
-# 行うこと（すべて機械的に判定できる分岐のみ）:
-#   1. メインの作業木がクリーンか（git status --porcelain が空か）を確認する。
-#   2. 対象ブランチが存在し、デフォルトブランチとの差分があるかを確認する。
-#      差分が無い（既にデフォルトブランチにマージ済み）場合でも、対応するワークツリー・
-#      作業ブランチの片付け（手順5-6）が未完了なら、ここでその片付けだけを
-#      再試行する（TASK-57）。これは過去の呼び出しでマージ自体は成功した
-#      ものの、対象ワークツリーが dirty 等の理由で片付け（手順5-6）が
-#      失敗して残った状態からの回復のためである。片付けの再試行が成功しても
-#      失敗しても、今回の呼び出しでは新規のマージは発生していないため、
-#      結果は PRECONDITION_NOT_MET のまま変えない。
-#   3. git merge --ff-only を試す。成功すればマージ完了。
-#   4. 早送りできなければ git merge --no-commit --no-ff でドライランする。
-#      衝突していれば abort し、衝突したファイルを報告して終了する
-#      （git 状態・backlog タスクの状態は一切変更しない）。
-#      衝突していなければそのままコミットしてマージを完了する。
-#   5. マージが完了した場合のみ、対応するワークツリーを git worktree remove
-#      で片付ける（未コミットの変更等で失敗しても --force はしない）。
-#   6. マージが完了した場合のみ、対応する作業ブランチ自体も git branch -d
-#      で削除する（安全削除のみ。--force/-D はせず、失敗してもエラーを
-#      報告して先に進む。worktree の片付けと同じ扱いである）。
+# 終了ステータスと、標準出力の最終行 "RESULT: <値>" で結果を判別する。
+#   exit 0 / MERGED               マージ完了
+#   exit 1 / PRECONDITION_NOT_MET マージ未実施（前提条件を満たさない）
+#   exit 2 / CONFLICT             3-way マージが衝突した。abort 済みで git 状態は変更前と同じ
+#   exit 3 / ERROR                想定外のエラー。マージ未実施
+# 各値に対する dispatch 側の対応は
+# claude-code/skills/improvement-dispatch/SKILL.md 手順3 が正本。
 #
-# 終了ステータスと、標準出力の最後の行に出す "RESULT: <値>" で結果を判別する。
-#
-#   exit 0, RESULT: MERGED               マージ完了（ff-only または衝突無し3-way）
-#   exit 1, RESULT: PRECONDITION_NOT_MET マージ未実施。メインの作業木が汚れている、
-#                                         対象ブランチが存在しない、または
-#                                         デフォルトブランチとの差分が無い（この場合、対応する
-#                                         ワークツリー・ブランチの片付けが未完了
-#                                         なら再試行される。片付けの成否は標準
-#                                         出力・標準エラー出力のメッセージで判別
-#                                         する。TASK-57）
-#   exit 2, RESULT: CONFLICT             マージ未実施。3-wayマージが衝突した
-#                                         （人間の判断が必要。abort 済みで
-#                                         git 状態は変更前と同じ）
-#   exit 3, RESULT: ERROR                想定外のエラー（引数不足、git 操作
-#                                         自体の失敗等）。マージ未実施
-#
-# backlog タスクのステータス変更はこのスクリプトの責務外。呼び出し元
-# （improvement-dispatch）が終了ステータスに応じて行う。
-#
+# 責務外: backlog タスクのステータス変更。
 # rebase は使わない（人間がレビューしたコミットの同一性を変えないため）。
 # --force を伴う操作もしない。
 
@@ -74,12 +41,9 @@ emit_result() {
   printf 'RESULT: %s\n' "$1"
 }
 
-# git merge --abort を実行し、実際にメインの作業木がマージ前のクリーンな
-# 状態に戻ったことまで確認する。abort コマンド自体の失敗、または abort 後も
-# MERGE_HEAD や未コミットの変更が残っている場合は、git 状態の復元を保証
-# できないとみなして 1 を返す。呼び出し元はこの場合、CONFLICT 等ではなく
-# ERROR として報告しなければならない（「git 状態は変更前と同じ」という
-# 保証が崩れているため、衝突ファイルの報告だけでは不十分）。
+# git merge --abort を実行し、実際にマージ前のクリーンな状態へ戻ったことまで確認する。
+# 復元を保証できない場合は 1 を返す。呼び出し元はそのとき CONFLICT ではなく ERROR を
+# 報告すること（「git 状態は変更前と同じ」という保証が崩れているため）。
 abort_and_verify_restored() {
   if ! git -C "$REPO_ROOT" merge --abort >/dev/null 2>&1; then
     err "git merge --abort 自体が失敗した"
@@ -102,20 +66,15 @@ abort_and_verify_restored() {
 }
 
 # 対応するワークツリー（存在すれば）と作業ブランチ自体を片付ける。
-# マージ完了直後の片付け（手順5-6）と、デフォルトブランチとの差分が既に無い場合の
-# 片付け再試行（TASK-57）の両方から呼ぶ共通処理である。
-# git worktree remove / git branch -d はいずれも安全側の操作のみで、
-# --force/-D はしない。失敗してもエラーメッセージを出すだけで、
-# 呼び出し元の結果（exit code・RESULT）は変えない。
+# git worktree remove / git branch -d はいずれも安全側の操作のみで --force/-D はしない。
+# 失敗してもエラーを出すだけで、呼び出し元の結果（exit code・RESULT）は変えない。
 cleanup_worktree_and_branch() {
   local repo_root="$1"
   local branch="$2"
 
-  # パスに半角スペースを含む場合の復元ロジックは bin/lib/worktree_porcelain.sh の
-  # worktree_porcelain_pairs() に集約されている（TASK-64。以前はここに
-  # create-worktree と同じ substr(index()) パターンを独立実装していた）。
-  # worktree_porcelain_pairs() は branch を refs/heads/ を除いた短縮名で
-  # 出すので、比較対象も "refs/heads/$branch" ではなく $branch にする。
+  # パスに半角スペースが含まれても壊れないよう、porcelain 出力の解析は
+  # bin/lib/worktree_porcelain.sh の worktree_porcelain_pairs() に任せる。
+  # branch は refs/heads/ を除いた短縮名で出るので、比較対象も短縮名にする。
   local worktree_path
   worktree_path="$(git -C "$repo_root" worktree list --porcelain | worktree_porcelain_pairs | awk -F'\t' -v branch="$branch" '
     $2 == branch { print $1 }
@@ -160,25 +119,15 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
   exit 3
 fi
 
-# worktree_porcelain_pairs() の唯一の定義は bin/lib/worktree_porcelain.sh に
-# あり、それを source して使う（TASK-64）。このスクリプト自身は
-# claude-code/skills/improvement-dispatch/scripts/ 配下に置かれ、`.claude/skills/
-# improvement-dispatch` シンボリックリンク（配布元ディレクトリ丸ごとへの
-# リンク）経由で実行されることがあるため、bin/lib/worktree_porcelain.sh を
-# source するにはまず配布元リポジトリのルートを知る必要がある。
-# check-forbidden-allowed-paths（TASK-62）と同じ理由・同じロジックで、
-# まず自分自身の実パスを解決する。
+# bin/lib/worktree_porcelain.sh を source するために、まず自分自身の実パスから
+# 配布元リポジトリのルートを解決する（`.claude/skills/improvement-dispatch`
+# シンボリックリンク経由で実行されうるため、BASH_SOURCE をそのまま使えない）。
+# ここで求める DIST_REPO_ROOT（配布元）は REPO_ROOT（操作対象）とは別物である。
 #
-# 配置場所についての注意（create-worktree:TASK-58回帰対策と揃える）: この
-# source は、上の git rev-parse --show-toplevel（git 不在時に最初に失敗する
-# 外部コマンド呼び出し）より後に置く。_bootstrap_resolve_own_path 自体が
-# realpath/readlink/dirname/basename という外部コマンドを使うため、これより
-# 前に置くと、git が PATH に無い環境で本来の診断より先に生の
-# "command not found" が出てしまう（create-worktree で実際に踏んだ回帰）。
-#
-# 注意: ここで解決する配布元リポジトリのルート（DIST_REPO_ROOT）は、上の
-# REPO_ROOT（マージ・ワークツリー片付けの対象リポジトリのルート）とは
-# 別物であり、混同しないこと。
+# この source を上の git rev-parse より前へ移動しないこと。
+# _bootstrap_resolve_own_path は realpath/dirname 等を使うため、前に置くと git が
+# PATH に無い環境で本来の診断より先に生の "command not found" が出る
+# （create-worktree で実際に踏んだ回帰であり、同じ配置をここでも守っている）。
 _bootstrap_resolve_own_path() {
   if command -v realpath >/dev/null 2>&1; then
     realpath "$1"
@@ -193,17 +142,15 @@ _bootstrap_resolve_own_path() {
 }
 SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-# SCRIPT_DIR は <配布元リポジトリ>/claude-code/skills/improvement-dispatch/scripts。
-# 4階層上が配布元リポジトリのルートである。
+# SCRIPT_DIR は <配布元>/claude-code/skills/improvement-dispatch/scripts。4階層上がルート。
 DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 # shellcheck source=../../../../bin/lib/worktree_porcelain.sh
 source "$DIST_REPO_ROOT/bin/lib/worktree_porcelain.sh"
 
 # ---- 1. 前提条件: メインの作業木がクリーンか ----
-# git status 自体の失敗（リポジトリの破損、ロック等）を、クリーンである
-# こと（$dirty_status が空）と取り違えて先に進まないよう、コマンド自体の
-# 終了ステータスも明示的に確認する（フェイルクローズ）。
+# git status 自体の失敗（リポジトリの破損、ロック等）を「クリーン」と取り違えて
+# 先に進まないよう、コマンドの終了ステータスも確認する（フェイルクローズ）。
 if ! dirty_status="$(git -C "$REPO_ROOT" status --porcelain)"; then
   err "git status の実行に失敗した。マージを行わない: $REPO_ROOT"
   emit_result "ERROR"
@@ -224,9 +171,7 @@ if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
 fi
 
 # ---- 3. 前提条件: デフォルトブランチとの差分があるか ----
-# デフォルトブランチ名は create-worktree と同じ核心ロジックで判定する
-# （git symbolic-ref --short refs/remotes/origin/HEAD、解決できなければ main
-# にフォールバック。fetch はしない。理由はファイル冒頭のコメントを参照。TASK-61）。
+# fetch をしない理由はファイル冒頭のコメントを参照。
 DEFAULT_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
 if [ -z "$DEFAULT_BRANCH" ]; then
   DEFAULT_BRANCH="main"
@@ -241,12 +186,9 @@ fi
 commit_count="$(git -C "$REPO_ROOT" rev-list --count "$DEFAULT_BRANCH..$BRANCH" 2>/dev/null || true)"
 if [ -z "$commit_count" ] || [ "$commit_count" -eq 0 ]; then
   err "作業ブランチ '$BRANCH' に $DEFAULT_BRANCH との差分が無い"
-  # 差分が無い＝ブランチの内容は既にデフォルトブランチに取り込み済みである。過去の
-  # 呼び出しでマージ自体は成功したが、対応するワークツリー・ブランチの
-  # 片付け（手順5-6）が失敗して残っている可能性があるため、ここで
-  # その片付けだけを再試行する（TASK-57）。今回は新規のマージを行って
-  # いないため、片付けの成否によらず結果は PRECONDITION_NOT_MET のまま
-  # 変えない。
+  # 差分が無い＝既に取り込み済み。過去の呼び出しで片付けだけが失敗して残っている
+  # 可能性があるので、片付けだけ再試行する。今回は新規のマージをしていないため、
+  # 片付けの成否によらず結果は PRECONDITION_NOT_MET のまま変えない。
   err "対応するワークツリー・作業ブランチの片付けが未完了なら再試行する"
   cleanup_worktree_and_branch "$REPO_ROOT" "$BRANCH"
   emit_result "PRECONDITION_NOT_MET"
@@ -285,8 +227,7 @@ else
   fi
 
   if [ "$merge_status" -ne 0 ]; then
-    # 衝突ではないが merge 自体が失敗した（想定外）。安全側に倒し、
-    # 進行中のマージがあれば abort してマージ前の状態に戻す。
+    # 衝突ではないが merge 自体が失敗した（想定外）。安全側に倒して abort する。
     err "3-wayマージが衝突以外の理由で失敗した: $merge_output"
     if ! abort_and_verify_restored; then
       err "abort による状態の復元も確認できなかった。メインの作業木の状態を手動で確認すること: $REPO_ROOT"
@@ -296,8 +237,7 @@ else
   fi
 
   if ! git -C "$REPO_ROOT" commit --no-edit >/dev/null 2>&1; then
-    # 衝突は無くマージ自体は進んだが、コミットに失敗した（フック等）。
-    # 安全側に倒し、abort してマージ前の状態に戻す。
+    # 衝突は無かったがコミットに失敗した（フック等）。安全側に倒して abort する。
     err "衝突は無かったがマージコミットに失敗した。"
     if ! abort_and_verify_restored; then
       err "abort による状態の復元も確認できなかった。メインの作業木の状態を手動で確認すること: $REPO_ROOT"
@@ -313,11 +253,6 @@ merged_sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
 echo "$DEFAULT_BRANCH の位置: $merged_sha"
 
 # ---- 7-8. 対応するワークツリー・作業ブランチを片付ける ----
-# git branch -d は安全削除（HEAD にマージ済みでないブランチは拒否する）であり、
-# --force に相当する -D は使わない。ワークツリーの片付けに失敗してブランチが
-# まだそのワークツリーで使用中の場合も、この削除は失敗する。いずれの失敗も
-# エラーを報告するだけに留め、--force はせず、スクリプト全体の結果
-# （exit code・RESULT）は変えない。
 cleanup_worktree_and_branch "$REPO_ROOT" "$BRANCH"
 
 emit_result "MERGED"

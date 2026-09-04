@@ -1,133 +1,23 @@
 #!/usr/bin/env bash
-# claude-code/skills/improvement-dispatch/scripts/create-worktree
+# improvement-dispatch 手順5（ワークツリーを作って引き渡す）の実体。
 #
-# claude-code/skills/improvement-dispatch/SKILL.md 手順5（ワークツリーを作って引き渡す）
-# が行うワークツリー作成の一連の処理を、決定論的な単一のスクリプトとして実行する。
-# 以前はこの処理が SKILL.md に埋め込まれた bash ブロックとして書かれており、
-# dispatch（AI）が起動のたびに読み取って組み立てて実行していた。
+# 使い方: create-worktree <task-id>   例: task-14-worktree-script-extraction
 #
-# 使い方:
-#   .claude/skills/improvement-dispatch/scripts/create-worktree <task-id>
+# worktree_base_dir（.backlog/config.my.yml、既定はリポジトリルート配下の .worktree/）の
+# 下の <ベース>/<リポジトリ名>/<task-id> に作業ブランチ improvement/<task-id> の
+# ワークツリーを作り、.backlog シンボリックリンクと占有記録 .worktree-occupancy を置き、
+# 必要な除外行を .git/info/exclude に足したうえで、起点の鮮度を診断して標準出力へ報告する。
+# 同じ <task-id> で何度実行しても既存のブランチ・ワークツリー・除外行を再利用する（冪等）。
 #
-# <task-id> の例: task-14-worktree-script-extraction
-#   （backlog のタスク番号と英小文字スラッグをハイフンで連結したもの）
+# 標準出力の契約（RESULT / BASE_REF / BASE_COMMIT / STALE_REASON / MISSING_COMMITS /
+# STALE_EXCLUDE / WORKTREE_DIR / BRANCH の各行の意味と、STALE_* を受けた対応）、
+# 占有記録の形式、起点の決め方は claude-code/skills/improvement-dispatch/SKILL.md
+# 手順5・手順6 が正本。WORKTREE_DIR と BRANCH が出力の最後の2行であることは
+# 呼び出し側との契約であり、診断行は必ずそれより前に出す。
 #
-# 実行するもの:
-#   1. improvement_loop.worktree_base_dir（.backlog/config.my.yml）を読み、
-#      ワークツリーの作成先ベースディレクトリを決定・正規化する
-#      （未設定なら既定でリポジトリルート配下の .worktree/）。
-#      この配下にさらにリポジトリ名で名前空間分けする。
-#   2. ベースディレクトリがリポジトリ内を指す場合だけ、.git/info/exclude に
-#      除外パターンを追記する（リポジトリ外を指す場合は追記しない）。あわせて
-#      管理対象の除外行をマーカーコメント1行として記録し、以前の
-#      worktree_base_dir の除外行が失効したまま残っていないかを検査する
-#      （下記「失効した除外行の検知」を参照）。
-#   3. git worktree prune の後、デフォルトブランチを判定し（フェッチできれば
-#      origin/HEAD、できなければ main にフォールバック）、起点（BASE_REF）を
-#      決める（下記「起点の決め方」を参照）。
-#   4. 作業ブランチのワークツリーを作る。既にワークツリーが存在し、割り当て
-#      ブランチが一致する場合は何もしない（再実行の冪等性）。ワークツリーは
-#      無いがブランチだけ存在する場合は、新規作成せずそのブランチを割り当てる
-#      （再引き渡し等）。どちらも無ければ、起点（BASE_REF）から新規作成する。
-#   5. .backlog/ を git 管理外のシンボリックリンクとしてワークツリーへ張る
-#      （メインの作業木の .backlog/ を指す。既に存在すれば何もしない）。
-#   6. .git/info/exclude に .backlog の除外パターンを追記する（無ければ）。
-#   7. ワークツリー直下に占有記録（.worktree-occupancy）を書き込む/上書きする
-#      （新規作成・既存ワークツリー再利用のどちらの経路でも実行する。
-#      形式は下記「占有記録の形式」を参照）。
-#   8. .git/info/exclude に .worktree-occupancy の除外パターンを追記する（無ければ）。
-#   9. 割り当てたブランチが起点の先端を含んでいるかを検査し、結果を
-#      RESULT: 行として出力する（下記「起点の鮮度検査」を参照）。
-#
-# 起点の決め方（TASK-75）:
-#   improvement_loop.auto_merge_reviewed（.backlog/config.my.yml、既定 false）で
-#   分岐する。
-#     false（既定・PR 運用）: 従来どおり、フェッチできれば
-#       origin/<デフォルトブランチ>、できなければ main を起点にする。ローカルの
-#       デフォルトブランチが古くても最新から分岐できるようにするためであり、
-#       レビューを通っていない未 push のローカルコミットを起点に混ぜないという
-#       意味も持つ。
-#     true（push しない完全ローカル運用）: origin は原理的に進まないため、
-#       ローカルとリモートのデフォルトブランチの包含関係で起点を選ぶ。
-#       ローカルが origin を含む（先行・同一）ならローカル、ローカルが遅れて
-#       いるなら origin を起点にする。分岐している場合はローカルを起点にした
-#       うえで STALE_BASE として報告する（マージも rebase もしない）。
-#
-# 起点の鮮度検査（TASK-75）:
-#   ワークツリーの作成・再利用が済んだ後、割り当てブランチが「含んでいるべき
-#   参照」を実際に含むかを git merge-base --is-ancestor で確認する。含んで
-#   いるべき参照は、採用した起点（BASE_REF）と、auto_merge_reviewed: true の
-#   ときは採用しなかった側の候補である。既存のワークツリー/ブランチを再利用
-#   する経路では BASE_REF がそもそも使われないため、この検査が無いと
-#   デフォルトブランチが進んだ後の再引き渡しで古い起点のまま気づかずに
-#   引き渡されうる。検査結果は RESULT: 行として出力するだけで、引き渡しを
-#   止めるかどうかの判断は呼び出し側（dispatch）が行う（下記「責務外」）。
-#   終了ステータスは検査結果によって変えない（STALE_BASE でも 0 で終わる）。
-#
-# 失効した除外行の検知（TASK-79）:
-#   .git/info/exclude への追記は追記専用であり、worktree_base_dir を変更して
-#   再実行すると古い値の除外行が残り続ける。残った行は既に失効した理由で git の
-#   追跡を黙って止め続けるため、検知して報告する。管理対象の除外行は
-#   `# improvement-loop worktree_base_dir added=<yes|no> path=<相対パス>` という
-#   コメント行1行として .git/info/exclude 自身に記録する（`#` 始まりなので git の
-#   除外判定には影響しない）。この記録と現在の値が食い違い、かつ古い行が今も
-#   残っている場合に STALE_EXCLUDE 行を出す。
-#   既存の除外行の削除・書き換えは一切行わない。.git/info/exclude は利用者と
-#   他ツールの共有物であり、マーカー導入以前からある行を improvement-loop が
-#   書いたと証明する情報が無いためである（TASK-74 と同じ判断）。書き換えるのは
-#   固定接頭辞で一意に識別できる自分のマーカー行だけである。
-#
-# 冪等性: 同じ <task-id> で複数回実行しても、既存のブランチ・ワークツリー・
-# シンボリックリンク・.git/info/exclude の記述を再利用/スキップし、
-# エラーにならない。占有記録（.worktree-occupancy）は実行のたびに上書きされ、
-# タイムスタンプ系フィールドが最新の実行時刻に更新される。
-#
-# 占有記録の形式（TASK-40）:
-#   場所: <WORKTREE_DIR>/.worktree-occupancy（ワークツリー直下、git 管理外）
-#   形式: KEY=VALUE の行が3行（シェルの代入文としてもそのまま source 可能）。
-#     TASK_ID=<task-id>              例: task-40-worktree-occupancy-record
-#     ASSIGNED_AT=<ISO8601 UTC>      例: 2026-08-23T12:34:56Z
-#                                    （date -u +%FT%TZ と同じ書式。人間可読用）
-#     ASSIGNED_AT_EPOCH=<UNIX秒>     例: 1755937696（date -u +%s）
-#                                    鮮度判定など数値比較に使う場合はこちらを使うこと。
-#                                    ISO8601文字列はGNU date（-d解析可）とBSD date
-#                                    （macOS、-d非対応）で扱いが割れるため。
-#   更新契機: create-worktree の実行のたびに丸ごと上書きする
-#   （新規作成・既存ワークツリー再利用のどちらでも同じ）。追記はしない。
-#
-# 責務外: backlog タスクのステータス変更（In Progress への遷移）はこの
-# スクリプトの外（呼び出し側）で行う。このスクリプトは git ワークツリーの
-# 作成・配置と、起点の鮮度の診断にのみ責任を持つ。RESULT: STALE_BASE を
-# 受けて引き渡しを止めるか進めるかの判断も呼び出し側（dispatch）が行う。
-# push・merge・rebase は一切行わない（SKILL.md 禁止事項）。
-#
-# 標準出力の契約:
-#   1行目に RESULT: <値> を出す。
-#     RESULT: OK          割り当てブランチが含んでいるべき参照をすべて含む
-#     RESULT: STALE_BASE  含んでいない参照がある（下の STALE_REASON を参照）
-#   続けて次の2行を出す。
-#     BASE_REF=<採用した起点の参照名>
-#     BASE_COMMIT=<その短縮ハッシュ。解決できない場合は N/A>
-#   STALE_BASE のときだけ、理由と欠けているコミット数を1件1行で出す
-#   （複数該当する場合は複数行になる）。
-#     STALE_REASON=reused_branch_behind_base   既存ブランチの再利用で起点の
-#                                              先端を含まない（再引き渡し等）
-#     STALE_REASON=diverged_default_branch     ローカルとリモートのデフォルト
-#                                              ブランチが分岐している
-#     STALE_REASON=branch_behind_default_branch 起点以外の候補を含まない
-#     STALE_REASON=base_ref_unresolved         起点そのものを解決できない
-#     MISSING_COMMITS=<参照名>:<含まれていないコミット数>
-#   以前の worktree_base_dir の除外行が .git/info/exclude に残っている場合だけ、
-#   次の行を出す（RESULT: の値には影響しない。OK・STALE_BASE のどちらとも
-#   同時に出うる）。人間向けの詳しい警告は同時に標準エラーへ出す。
-#     STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexisting>
-#       added_by_improvement_loop  その行は improvement-loop が追記したもの
-#       preexisting                improvement-loop が追記しようとした時点で
-#                                  既に存在していた（所有者を特定できない）
-#   最後に次の2行を出力する（呼び出し側が後続手順で使う。この2行が最後で
-#   あることは従来からの契約であり、上の診断行は必ずこれより前に出る）。
-#     WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
-#     BRANCH=<割り当てた作業ブランチ名>
+# 責務外: backlog タスクのステータス変更と、STALE_BASE を受けて引き渡しを止めるかの
+# 判断（どちらも呼び出し側 = dispatch）。push・merge・rebase は行わない。
+# 診断結果によらず終了ステータスは 0 である。
 
 set -euo pipefail
 
@@ -135,9 +25,8 @@ err() {
   printf 'エラー: %s\n' "$*" >&2
 }
 
-# 実行を止めない診断の報告先。標準出力は出力契約（RESULT: 行以降）専用なので
-# 標準エラーへ出す。err() と接頭辞を分けているのは、呼び出し側（dispatch）が
-# 「失敗した」と読み違えないようにするためである。
+# 実行を止めない診断の報告先。標準出力は出力契約専用なので標準エラーへ出す。
+# err() と接頭辞を分けるのは、呼び出し側が「失敗した」と読み違えないためである。
 warn() {
   printf '警告: %s\n' "$*" >&2
 }
@@ -161,29 +50,16 @@ fi
 cd "$REPO_ROOT"
 REPO_NAME="$(basename "$REPO_ROOT")"
 
-# worktree_porcelain_pairs() の唯一の定義は bin/lib/worktree_porcelain.sh に
-# あり、それを source して使う（TASK-64）。このスクリプト自身は
-# claude-code/skills/improvement-dispatch/scripts/ 配下に置かれ、`.claude/skills/
-# improvement-dispatch` シンボリックリンク（配布元ディレクトリ丸ごとへの
-# リンク）経由で実行されることがあるため、bin/lib/worktree_porcelain.sh を
-# source するにはまず配布元リポジトリのルートを知る必要がある。
-# check-forbidden-allowed-paths（TASK-62）と同じ理由・同じロジックで、
-# まず自分自身の実パスを解決する。
+# bin/lib/worktree_porcelain.sh を source するために、まず自分自身の実パスから
+# 配布元リポジトリのルートを解決する（`.claude/skills/improvement-dispatch`
+# シンボリックリンク経由で実行されうるため、BASH_SOURCE をそのまま使えない）。
+# ここで求める DIST_REPO_ROOT（配布元）は REPO_ROOT（操作対象）とは別物である。
 #
-# 配置場所についての注意（TASK-58回帰対策）: この source は、上の
-# git rev-parse --show-toplevel（git が PATH に無い環境で最初に失敗する
-# 外部コマンド呼び出し）より後に置くこと。tests/test_create_worktree.sh の
-# 9c（TASK-58）は「git 以外の外部コマンドはこれより前に登場しない」ことを
-# 前提に、git を含まない最小 PATH で git 不在時の診断メッセージ
-# （err() 経由、生の "command not found" が出ない）を検証している。
-# _bootstrap_resolve_own_path 自体は realpath/readlink/dirname/basename と
-# いった外部コマンドを使うため、git 呼び出しより前に置くとこのテストの
-# 前提が崩れ、git 不在時に本来の診断より先に "dirname: command not found"
-# 等の生エラーが出てしまう。
-#
-# 注意: ここで解決する配布元リポジトリのルート（DIST_REPO_ROOT）は、上の
-# REPO_ROOT（このスクリプトが実際にワークツリーを作成する対象リポジトリの
-# ルート）とは別物であり、混同しないこと。
+# この source を上の git rev-parse より前へ移動しないこと。
+# tests/test_create_worktree.sh の 9c は「git 以外の外部コマンドはそれより前に
+# 登場しない」ことを前提に、git を含まない最小 PATH で git 不在時の診断メッセージを
+# 検証している。_bootstrap_resolve_own_path は realpath/dirname 等を使うため、
+# 前に置くとその前提が崩れ、生の "command not found" が先に出る。
 _bootstrap_resolve_own_path() {
   if command -v realpath >/dev/null 2>&1; then
     realpath "$1"
@@ -198,8 +74,7 @@ _bootstrap_resolve_own_path() {
 }
 SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-# SCRIPT_DIR は <配布元リポジトリ>/claude-code/skills/improvement-dispatch/scripts。
-# 4階層上が配布元リポジトリのルートである。
+# SCRIPT_DIR は <配布元>/claude-code/skills/improvement-dispatch/scripts。4階層上がルート。
 DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 # shellcheck source=../../../../bin/lib/worktree_porcelain.sh
@@ -214,9 +89,8 @@ esac
 
 # ---- .backlog/config.my.yml の improvement_loop 配下のスカラー値を読む ----
 # ファイルが無い、またはキーが無い場合は空文字（＝既定値扱い）を返す。
-# 値の前後の空白・行末コメント・両端の引用符を取り除く。
-# 対象は単一行のスカラー値のみである（配列やネストは扱わない。配列を読む
-# 必要がある check-forbidden-allowed-paths は独自の parse_path_list を持つ）。
+# 単一行のスカラー値のみを扱う（配列が要る check-forbidden-allowed-paths は
+# 独自の parse_path_list を持つ）。
 CONFIG_FILE="$REPO_ROOT/.backlog/config.my.yml"
 read_config_scalar() {
   local key="$1"
@@ -238,17 +112,14 @@ read_config_scalar() {
 
 WORKTREE_BASE_DIR_CONFIG="$(read_config_scalar worktree_base_dir)"
 
-# improvement_loop.auto_merge_reviewed（既定 false）。true のときこのリポジトリは
-# push を行わない完全ローカル運用であり、起点の決め方が変わる（下の
-# 「起点（BASE_REF）の決定」を参照。TASK-75）。値の解釈だけをここで行い、
-# 設定値そのものの意味は SKILL.md 手順3の記述から動かさない。
+# auto_merge_reviewed: true は push を行わない完全ローカル運用を意味し、起点の
+# 決め方が変わる（下の「起点（BASE_REF）の決定」）。既定は false。
 case "$(read_config_scalar auto_merge_reviewed)" in
   true|True|TRUE) AUTO_MERGE_REVIEWED=1 ;;
   *) AUTO_MERGE_REVIEWED=0 ;;
 esac
 
-# 絶対パス、またはリポジトリルート起点の相対パスを指定できる。実際の作成先は
-# この配下にさらにリポジトリ名で名前空間分けされる（BASE_DIR/$REPO_NAME/<task-id>）。
+# 設定値は絶対パスでもリポジトリルート起点の相対パスでもよい。
 if [ -z "$WORKTREE_BASE_DIR_CONFIG" ]; then
   BASE_DIR="$REPO_ROOT/.worktree"
 elif [[ "$WORKTREE_BASE_DIR_CONFIG" = /* ]]; then
@@ -257,10 +128,8 @@ else
   BASE_DIR="$REPO_ROOT/$WORKTREE_BASE_DIR_CONFIG"
 fi
 
-# 相対パス・末尾スラッシュ・".." などの表記ゆれを解決してから使う。
-# 解決前の文字列のまま次のリポジトリ内外判定（case 文）を行うと、
-# 例えば末尾スラッシュ付きでリポジトリ内判定を素通りしたり、".." で
-# 実際にはリポジトリ外なのに内側だと誤判定したりする恐れがある。
+# 末尾スラッシュや ".." などの表記ゆれを解決してから使う。解決前の文字列のまま
+# 下のリポジトリ内外判定（case 文）を行うと内外を取り違える。
 mkdir -p "$BASE_DIR"
 BASE_DIR="$(cd "$BASE_DIR" && pwd -P)"
 if [ -z "$BASE_DIR" ]; then
@@ -272,14 +141,12 @@ mkdir -p "$BASE_DIR/$REPO_NAME"
 WORKTREE_DIR="$BASE_DIR/$REPO_NAME/$TASK_ID"
 BRANCH="improvement/$TASK_ID"
 
-# BASE_DIR（正規化済み）がリポジトリルート内を指す場合だけ、.git/info/exclude
-# に除外パターンを追加し、git の追跡対象に入らないようにする。リポジトリ外を
-# 指す場合は追記しない（既にリポジトリの外なので対象外であり、追記の必要が無い）。
+# リポジトリ内を指す場合だけ .git/info/exclude に除外パターンを足す。
+# リポジトリ外なら追記しない（そもそも追跡対象にならない）。
 case "$BASE_DIR" in
   "$REPO_ROOT")
-    # BASE_DIR がリポジトリルートそのものと一致する退行的な設定値の場合、
-    # "." を除外パターンにするとリポジトリ全体が git status から隠れてしまう
-    # ため、代わりにリポジトリ名のディレクトリ単位で除外する。
+    # "." を除外パターンにするとリポジトリ全体が git status から消えるため、
+    # リポジトリ名のディレクトリ単位で除外する。
     REL_BASE_DIR="$REPO_NAME"
     ;;
   "$REPO_ROOT"/*)
@@ -290,51 +157,30 @@ case "$BASE_DIR" in
     ;;
 esac
 
-# EXCLUDE_FILE は以降（.backlog・.worktree-occupancy の追記、下のマーカー行の
-# 読み書き）でも同じものを使う。以前はここと .backlog の追記箇所で別々の変数
-# （BASE_DIR_EXCLUDE_FILE / EXCLUDE_FILE）に同じパスを二重に代入していた。
 EXCLUDE_FILE="$GIT_COMMON_DIR/info/exclude"
 mkdir -p "$(dirname "$EXCLUDE_FILE")"
 
-# ---- 失効した worktree_base_dir 除外行の検知（TASK-79） ----
-# .git/info/exclude への追記は追記専用であり、worktree_base_dir を変更して
-# 再実行すると新しい値の行が増える一方で、古い値の行はそのまま残る。残った
-# 行は「improvement ループがワークツリー置き場として使っていた」という既に
-# 失効した理由で git の追跡を黙って止め続ける（利用者が後からその名前の
-# ディレクトリを git 管理下に置こうとしても git status にも git add の警告にも
-# 現れない）。
-#
-# 検知の足がかりとして、improvement-loop が管理対象にした除外行を、次の書式の
-# コメント行1行として .git/info/exclude 自身に記録する。`#` で始まるコメント
-# 行なので git の除外判定には一切影響しない。
+# ---- 失効した worktree_base_dir 除外行の検知 ----
+# .git/info/exclude への追記は追記専用なので、worktree_base_dir を変えて再実行すると
+# 古い値の除外行が残り、失効した理由で git の追跡を黙って止め続ける。それを検知する
+# ため、管理対象の除外行を次の書式のコメント行1行として exclude 自身に記録する
+# （`#` 始まりなので git の除外判定には影響しない）。
 #
 #   # improvement-loop worktree_base_dir added=<yes|no> path=<リポジトリ相対パス>
 #
-#   path=  improvement-loop が最後に管理対象とした除外行（＝そのときの
-#          REL_BASE_DIR）。設定値そのものではなく、除外行として書かれた形。
-#   added= その除外行を improvement-loop 自身が追記したか（yes）、追記しようと
-#          した時点で既に同じ行が存在していたか（no）。後者はユーザーや他ツール
-#          が先に書いた可能性があり、improvement-loop の所有物とは言えない。
+#   path=  最後に管理対象とした除外行（設定値そのものではなく除外行として書かれた形）。
+#   added= その行を improvement-loop 自身が追記したか（yes）、追記しようとした時点で
+#          既に存在していたか（no）。no はユーザーや他ツールが書いた可能性がある。
 #
-# 検知したら報告するだけで、除外行の削除・書き換えは一切行わない。
-# .git/info/exclude は利用者と他ツール（`# interview-dev-loop plan docs`、
-# `# claude-code-runtime` 等）の共有物であり、マーカー導入以前から存在する行に
-# ついては「improvement-loop が書いた」と証明できる情報が原理的に無いためである
-# （bin/setup-improvement-loop の warn_config_my_yml_comment_drift が
-# config.my.yml に対して出したのと同じ結論。TASK-74）。書き換えるのは自分の
-# マーカー行だけで、それは固定の接頭辞で一意に識別できる。
-#
-# 既知の限界: マーカーが無い状態（このリポジトリでこのスクリプトの本版を一度も
-# 実行していない導入先）では、既に残っている失効行を検知できない。マーカーは
-# 本版の初回実行時に現在の値で書かれ、そこから先の変更を検知できるようになる。
+# 検知しても報告するだけで、既存行の削除・書き換えはしない。.git/info/exclude は
+# 利用者と他ツールの共有物であり、マーカー導入以前の行の所有者を証明できないためである。
+# 書き換えるのは固定接頭辞で識別できる自分のマーカー行だけである。
+# 既知の限界: マーカーが無い導入先では、既に残っている失効行を検知できない。
 EXCLUDE_MARKER_PREFIX="# improvement-loop worktree_base_dir "
-# マーカー行を見つけるための正規表現。接頭辞は固定文字列で正規表現の
-# メタ文字を含まないため、そのまま連結してよい。grep と awk の両方で
-# 同じ判定を使うので、定義はここ1箇所に置く。
+# grep と awk の両方で同じ判定を使うため、定義はここ1箇所に置く。
 EXCLUDE_MARKER_RE="^${EXCLUDE_MARKER_PREFIX}added=(yes|no) path="
 STALE_EXCLUDE_LINES=()
 
-# 既存のマーカー行（最初の1件）を読む。無ければ EXCLUDE_MARKER_FOUND が 0 のままになる。
 EXCLUDE_MARKER_FOUND=0
 PREV_EXCLUDE_ADDED=""
 PREV_EXCLUDE_PATH=""
@@ -342,8 +188,6 @@ if [ -f "$EXCLUDE_FILE" ]; then
   exclude_marker_line="$(grep -m1 -E "$EXCLUDE_MARKER_RE" "$EXCLUDE_FILE" || true)"
   if [ -n "$exclude_marker_line" ]; then
     EXCLUDE_MARKER_FOUND=1
-    # added= と path= の値を取り出す。書式が固定なのでシェルの文字列操作だけで
-    # 済み、sed の区切り文字と正規表現の | の衝突といった落とし穴も避けられる。
     exclude_marker_rest="${exclude_marker_line#"${EXCLUDE_MARKER_PREFIX}added="}"
     PREV_EXCLUDE_ADDED="${exclude_marker_rest%% *}"
     # path= の値はパスなので半角スペースを含みうる。行末までを丸ごと値とする。
@@ -375,7 +219,6 @@ if [ -n "$PREV_EXCLUDE_PATH" ] && [ "$PREV_EXCLUDE_PATH" != "$REL_BASE_DIR" ] &&
   warn "このスクリプトは共有物である .git/info/exclude の既存行を削除・書き換えしない（報告のみ）。"
 fi
 
-# 除外行の追記そのものは従来どおり「同じ行が無ければ追記する」だけである。
 EXCLUDE_ADDED="no"
 if [ -n "$REL_BASE_DIR" ]; then
   if grep -Fxq "$REL_BASE_DIR" "$EXCLUDE_FILE" 2>/dev/null; then
@@ -387,22 +230,14 @@ if [ -n "$REL_BASE_DIR" ]; then
     EXCLUDE_ADDED="yes"
   fi
 
-  # マーカー行を現在の管理対象に合わせる。既に一致していれば何も書かない
-  # （worktree_base_dir を変えていない再実行ではファイルが1バイトも変わらない）。
+  # マーカー行を現在の管理対象に合わせる。一致していれば1バイトも書かない。
   DESIRED_EXCLUDE_MARKER="${EXCLUDE_MARKER_PREFIX}added=$EXCLUDE_ADDED path=$REL_BASE_DIR"
   if ! grep -Fxq "$DESIRED_EXCLUDE_MARKER" "$EXCLUDE_FILE" 2>/dev/null; then
     if [ "$EXCLUDE_MARKER_FOUND" -eq 1 ]; then
-      # 自分のマーカー行だけを差し替える。他の行はそのまま出力する
-      # （書き換えのイディオムは bin/setup-improvement-loop の
-      # replace_statuses_line と同じ mktemp + awk）。
-      # 書き戻しは mv ではなく元ファイルへの上書きで行う。mv は mktemp が
-      # 作った 0600 のパーミッションと inode ごと差し替えてしまい、利用者と
-      # 他ツールの共有物である .git/info/exclude の属性を黙って変えることに
-      # なるためである。awk が最後まで成功してから上書きするので、途中で
-      # 失敗して元ファイルを壊すことはない（set -e）。
-      # 何らかの理由でマーカー行が複数ある場合は、最初の1行を差し替えて
-      # 残りを落とす（マーカー行は improvement-loop 自身が書いたものなので
-      # 削除してよい唯一の行である）。これで行が増え続けることはない。
+      # 書き戻しは mv ではなく元ファイルへの上書きで行う。mv だと mktemp の 0600 と
+      # inode ごと差し替わり、共有物である .git/info/exclude の属性を黙って変えてしまう。
+      # マーカー行が複数ある場合は最初の1行を差し替えて残りを落とす（自分が書いた行なので
+      # 削除してよい）。行が増え続けるのを防ぐ。
       exclude_tmp_file="$(mktemp "${EXCLUDE_FILE}.XXXXXX")"
       awk -v marker="$DESIRED_EXCLUDE_MARKER" -v re="$EXCLUDE_MARKER_RE" '
         $0 ~ re { if (!replaced) { print marker; replaced = 1 } ; next }
@@ -418,26 +253,19 @@ fi
 
 git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
 
-# ---- 起点（BASE_REF）の決定（TASK-75） ----
-# 既定（auto_merge_reviewed が true 以外）では従来どおり、フェッチできれば
-# origin/<デフォルトブランチ>、できなければ main を起点にする。ローカルの
-# デフォルトブランチが古くても最新の内容から分岐できるようにするためであり、
-# PR 運用ではレビューを通っていない未 push のローカルコミットを作業ブランチの
-# 起点に混ぜないという意味も持つ。
-#
-# auto_merge_reviewed: true は push を行わない完全ローカル運用であり
-# （SKILL.md 手順3・禁止事項）、origin は原理的に進まない。この設定では
-# ローカルのデフォルトブランチだけが先行タスクの成果の正本になるため、
-# ローカルとリモートの包含関係を見て起点を選び直す。
+# ---- 起点（BASE_REF）の決定 ----
+# 既定（auto_merge_reviewed が true 以外）: フェッチできれば origin/<デフォルトブランチ>、
+# できなければ main。未 push のローカルコミットを起点に混ぜないためである。
+# auto_merge_reviewed: true は push しない完全ローカル運用で origin が進まないため、
+# ローカルとリモートの包含関係を見て起点を選び直す（詳細は SKILL.md 手順5）。
 DEFAULT_BRANCH=""
 FETCH_OK=0
 if git fetch origin 2>/dev/null; then
   FETCH_OK=1
   DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 fi
-# デフォルトブランチ名の判定は origin/HEAD からのみ行い、判定できない場合は
-# main にフォールバックする（この挙動は TASK-38 の経路が依存しているため
-# 変えない。ローカルの HEAD からは求めない）。
+# デフォルトブランチ名は origin/HEAD からのみ判定し、駄目なら main へフォールバックする
+# （ローカルの HEAD からは求めない。下の worktree add の診断がこの挙動に依存している）。
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 
 ORIGIN_REF=""
@@ -455,31 +283,24 @@ if [ "$AUTO_MERGE_REVIEWED" -eq 1 ] && [ "$FETCH_OK" -eq 1 ] &&
    git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null; then
   LOCAL_REF="$DEFAULT_BRANCH"
   if git merge-base --is-ancestor "$ORIGIN_REF" "$LOCAL_REF"; then
-    # ローカルが origin を含む（先行、または同一コミット）。push しない運用では
-    # 先行タスクの成果はここにしか無いので、ローカル側を起点にする。
+    # ローカルが origin を含む（先行・同一）。先行タスクの成果はここにしか無い。
     BASE_REF="$LOCAL_REF"
   elif git merge-base --is-ancestor "$LOCAL_REF" "$ORIGIN_REF"; then
     # ローカルが遅れている。従来どおり origin から分岐する。
     BASE_REF="$ORIGIN_REF"
   else
-    # 分岐しており、どちらを起点にしても片方のコミットが欠ける。ここで
-    # マージ・rebase はしない（SKILL.md 禁止事項）。ローカル側を起点にした
-    # うえで、下の鮮度検査で欠落として報告する。
+    # 分岐しており、どちらを起点にしても片方のコミットが欠ける。マージ・rebase は
+    # しない（禁止事項）。ローカル側を起点にし、下の鮮度検査で欠落として報告する。
     BASE_REF="$LOCAL_REF"
     DIVERGED_DEFAULT_BRANCH=1
   fi
 fi
 
-# $WORKTREE_DIR が既に登録済みの git ワークツリーであり、割り当てブランチが
-# $BRANCH と一致するなら、そのまま再利用する（再実行しても git worktree add が
-# 「既に存在する」で失敗しないようにするための冪等性ガード）。
+# 再実行しても git worktree add が「既に存在する」で失敗しないための冪等性ガード。
 existing_worktree_branch=""
 if [ -d "$WORKTREE_DIR" ]; then
-  # パスに半角スペースを含むと awk のデフォルトフィールド分割（$2）では
-  # スペース以降が切り捨てられ、$WORKTREE_DIR と一致しなくなる（TASK-55）。
-  # そのパス復元ロジックは bin/lib/worktree_porcelain.sh の
-  # worktree_porcelain_pairs() に集約されている（TASK-64。以前はここに
-  # merge-reviewed-branch と同じ substr(index()) パターンを独立実装していた）。
+  # パスに半角スペースが含まれても壊れないよう、porcelain 出力の解析は
+  # bin/lib/worktree_porcelain.sh の worktree_porcelain_pairs() に任せる。
   existing_worktree_branch="$(git worktree list --porcelain | worktree_porcelain_pairs | awk -F'\t' -v d="$WORKTREE_DIR" '
     $1 == d { print $2; exit }
   ')"
@@ -492,16 +313,12 @@ elif [ -d "$WORKTREE_DIR" ]; then
   err "内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねること。"
   exit 1
 elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  # 再引き渡し等で既にブランチが存在する場合は、新規作成せずそのブランチを割り当てる。
-  # git worktree add 自身の進捗出力（"HEAD is now at ..." 等）は標準出力に出るため、
-  # 標準エラーへ回して標準出力を下の出力契約（RESULT: 行以降）だけに保つ。
+  # 既にブランチがある（再引き渡し等）なら新規作成せず割り当てる。
+  # git worktree add の進捗出力は標準エラーへ回し、標準出力を出力契約だけに保つ。
   git worktree add "$WORKTREE_DIR" "$BRANCH" >&2
 else
-  # BASE_REF はフェッチ失敗時に "main" へフォールバックした値（上の
-  # 「起点（BASE_REF）の決定」を参照）であり、
-  # ローカルのデフォルトブランチが "main" 以外の場合は実在しない参照になりうる。
-  # その場合に git worktree add の生のエラーでスクリプトが異常終了しないよう、
-  # 他の失敗経路と同様に err() で診断してから明示的な exit code で終了する（TASK-38）。
+  # BASE_REF は main へのフォールバック値になりうるので、実在しない参照のことがある。
+  # 生のエラーで落ちないよう、他の失敗経路と同様に err() で診断してから終了する。
   if ! git worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF" >&2 2>/dev/null; then
     err "BASE_REF ($BASE_REF) の解決に失敗し、ワークツリーを作成できなかった"
     err "リモート 'origin' が設定されているか、ローカルのデフォルトブランチ名が \"main\" と一致するか確認すること。一致しない場合は create-worktree 内の main フォールバック値を実際のデフォルトブランチ名に書き換える必要がある。"
@@ -509,23 +326,21 @@ else
   fi
 fi
 
-# .backlog/ は git 管理外（.git/info/exclude で除外）なので、
-# git worktree add では新しいワークツリーに作られない。
-# メインの作業木の .backlog/ へのシンボリックリンクにして、タスクデータを共有する。
+# .backlog/ は git 管理外なので worktree add では作られない。メインの作業木の
+# .backlog/ へのシンボリックリンクにして、タスクデータを共有する。
 if [ -e "$REPO_ROOT/.backlog" ] && [ ! -e "$WORKTREE_DIR/.backlog" ]; then
   ln -s "$REPO_ROOT/.backlog" "$WORKTREE_DIR/.backlog"
 fi
 
-# 古いインストール（.git/info/exclude が末尾スラッシュ付きの ".backlog/" のまま）だと、
-# 上のシンボリックリンクは除外パターンにマッチせず、ワークツリー内で git status が
-# 常に汚れて見える。スラッシュ無しの ".backlog" は両方にマッチするので、無ければ足す。
-# EXCLUDE_FILE は worktree_base_dir の除外行を扱う箇所（上）で定義済みである。
+# 除外行が末尾スラッシュ付きの ".backlog/" だと、上のシンボリックリンクはマッチせず
+# ワークツリー内の git status が常に汚れて見える。スラッシュ無しは両方にマッチする。
 grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE_FILE"
 
-# ---- 占有記録（TASK-40） ----
-# このワークツリーが「いつ・どのタスクに割り当てられたか」を記録する。
-# 新規作成・既存ワークツリー再利用のどちらの経路でもここを通るため、
-# 常に最新の実行時刻で上書きする（形式はスクリプト冒頭のコメントを参照）。
+# ---- 占有記録 ----
+# このワークツリーが「いつ・どのタスクに割り当てられたか」を記録する。新規作成・再利用の
+# どちらの経路でも通るため、実行のたびに丸ごと上書きする（追記しない）。
+# ASSIGNED_AT_EPOCH を併記するのは、ISO8601 文字列の解析が GNU date と BSD date で
+# 割れるためで、鮮度の数値比較にはそちらを使う（読み手は check-progress-recovery）。
 OCCUPANCY_FILE="$WORKTREE_DIR/.worktree-occupancy"
 ASSIGNED_AT="$(date -u +%FT%TZ)"
 ASSIGNED_AT_EPOCH="$(date -u +%s)"
@@ -538,25 +353,17 @@ ASSIGNED_AT_EPOCH="$(date -u +%s)"
 # .worktree-occupancy も .backlog と同様に git 管理外にする。
 grep -Fxq ".worktree-occupancy" "$EXCLUDE_FILE" 2>/dev/null || echo ".worktree-occupancy" >> "$EXCLUDE_FILE"
 
-# ---- 起点の鮮度検査（TASK-75） ----
-# 割り当てたブランチが、含んでいるべき参照を実際に含んでいるかを検査する。
-# 新規作成の経路では起点から作った直後なので通常は満たされるが、既存の
-# ワークツリー/ブランチを再利用した経路（再引き渡し等）では BASE_REF が
-# そもそも使われないため、その後に進んだデフォルトブランチのコミットを
-# 含まないまま引き渡されうる。ここはその見落としを機械的に検知する。
-#
-# 含んでいるべき参照:
-#   - 採用した起点（BASE_REF）。
-#   - auto_merge_reviewed: true のときは、採用しなかった側の候補も含める。
-#     この運用ではローカルとリモートのどちらのコミットも失いたくないため、
-#     分岐している場合はここで欠落として現れる。
+# ---- 起点の鮮度検査 ----
+# 既存のワークツリー/ブランチを再利用する経路（再引き渡し等）では BASE_REF が使われず、
+# その後に進んだデフォルトブランチのコミットを含まないまま引き渡されうる。それを検知する。
+# 含んでいるべき参照は、採用した起点（BASE_REF）と、auto_merge_reviewed: true のときは
+# 採用しなかった側の候補（どちらのコミットも失いたくないため）。
 STALE_REASONS=()
 MISSING_LINES=()
 
 BASE_COMMIT="$(git rev-parse --short "$BASE_REF" 2>/dev/null || true)"
 if [ -z "$BASE_COMMIT" ]; then
-  # 既存のワークツリー/ブランチを再利用したため BASE_REF を解決できないまま
-  # ここまで来た経路（リモートが消えた等）。起点との比較自体ができない。
+  # 起点そのものを解決できない（リモートが消えた等）。比較自体ができない。
   BASE_COMMIT="N/A"
   STALE_REASONS+=("base_ref_unresolved")
   MISSING_LINES+=("MISSING_COMMITS=$BASE_REF:unknown")
@@ -602,8 +409,8 @@ fi
 if [ "${#MISSING_LINES[@]}" -gt 0 ]; then
   printf '%s\n' "${MISSING_LINES[@]}"
 fi
-# 失効した除外行の検知結果（TASK-79）。RESULT: の値には載せない。引き渡しを
-# 止める理由にはならず、STALE_BASE と同時に成立しうるためである。
+# 失効した除外行の検知結果。引き渡しを止める理由にはならず STALE_BASE と同時にも
+# 成立しうるので、RESULT: の値には載せない。
 if [ "${#STALE_EXCLUDE_LINES[@]}" -gt 0 ]; then
   printf '%s\n' "${STALE_EXCLUDE_LINES[@]}"
 fi
