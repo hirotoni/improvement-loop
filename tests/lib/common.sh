@@ -27,6 +27,7 @@ WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT="$REPO_ROOT/claude-code/workspace-skill
 WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT="$REPO_ROOT/claude-code/workspace-skills/workspace-scout-major/scripts/list-target-repos"
 INSTALL_SCRIPT="$REPO_ROOT/install.zsh"
 PRECOMMIT_HOOK="$REPO_ROOT/githooks/pre-commit"
+TESTS_RUNNER_SCRIPT="$REPO_ROOT/tests/run.sh"
 SOURCE_CONFIG="$REPO_ROOT/backlog-md/config.my.yml"
 SOURCE_SKILLS_DIR="$REPO_ROOT/claude-code/skills"
 SOURCE_WORKSPACE_SKILLS_DIR="$REPO_ROOT/claude-code/workspace-skills"
@@ -50,8 +51,17 @@ skip() {
   printf 'SKIP: %s\n' "$1"
 }
 
-# 必須依存（git・backlog・bash）が無ければ報告して exit 0 する（テスト対象の
-# 不具合ではなくスキップとして扱う）。各テストファイルの冒頭で呼ぶ。
+# 必須依存（git・backlog・bash）が無ければ SKIP を1件計上して finish_tests() で
+# 終了する（テスト対象の不具合ではなくスキップとして扱うので終了ステータスは 0）。
+# 各テストファイルの冒頭で呼ぶ。
+#
+# ここで finish_tests() を通すのは、サマリー行（PASS: x, FAIL: y, SKIP: z）を必ず
+# 出力させるためである。tests/run.sh はこの行だけを見て各ファイルの結果を合算する
+# ので、サマリー行を出さずに exit 0 すると、そのファイルは PASS にも FAIL にも
+# SKIP にも計上されない。以前はここが printf + exit 0 だったため、backlog が
+# PATH に無い環境では全ファイルがこの経路に入り、総合サマリーが
+# PASS: 0, FAIL: 0, SKIP: 0 かつ exit 0 という「全件成功」と区別できない出力に
+# なっていた（TASK-91）。
 #
 # bash は zsh で代替できる依存ではなく単独の必須依存である。run.sh は各テスト
 # ファイルを bash で起動し、テスト本体も BASH_SOURCE・BASH_REMATCH・shopt など
@@ -73,8 +83,8 @@ check_test_dependencies() {
   done
 
   if [ "${#missing[@]}" -gt 0 ]; then
-    printf 'このテストの必須依存が無いためスキップする: %s\n' "${missing[*]}"
-    exit 0
+    skip "このテストの必須依存が無いためスキップする: ${missing[*]}"
+    finish_tests
   fi
 }
 
