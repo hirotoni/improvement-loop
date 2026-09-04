@@ -71,10 +71,16 @@ skip() {
 # tests/run.sh は各テストファイルを bash "$test_path" として起動し、
 # githooks/pre-commit も exec bash で run.sh を起動する。テスト本体も
 # BASH_SOURCE・BASH_REMATCH・shopt など zsh では同じ意味にならない
-# bash 固有の機能に依存している。以前はここで bash と zsh を or 条件で
-# 見ていたため、bash が PATH に無く zsh だけがある環境では判定を素通り
-# したあとにテスト本体が command not found で落ち、失敗の原因が依存不足
-# だと利用者に伝わらなかった（TASK-81）。
+# bash 固有の機能に依存している。
+#
+# このリポジトリは macOS での実行を前提としており（README「前提条件」）、
+# macOS では /bin/bash が OS 同梱で削除できないため、bash が欠けて
+# ここに引っかかることは通常は起こらない。それでも bash を単独の必須依存
+# として見ているのは、PATH を絞った実行など例外的な状況で判定が素通り
+# しないようにするためである。以前はここで bash と zsh を or 条件で見て
+# いたため、zsh さえあれば依存を満たすと判定され、そのあとテスト本体が
+# command not found で落ちても失敗の原因が依存不足だとは伝わらなかった
+# （TASK-81）。
 #
 # zsh はここでは見ない。zsh が要るのは install.zsh（シバンが
 # #!/usr/bin/env zsh の zsh 専用スクリプト）を実行するときだけであり、

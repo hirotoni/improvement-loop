@@ -17,10 +17,14 @@ npm install -g backlog.md
 
 動作確認済みの最小バージョンは `1.48.0`（`backlog --version` で確認）。これより古いバージョンでは、上記フラグの一部が使えず、improvement-dispatch/improvement-work 実行中にエラーになる場合がある。`setup-improvement-loop` は `backlog` コマンドの存在確認のみ行い、バージョンまでは確認しない。
 
+このリポジトリは macOS での実行を前提としている。macOS には `/bin/bash` が OS 同梱で入っており、読み取り専用のシステムボリューム上にあるため削除できない。したがって bash が欠けた環境は想定していない。
+
 シェルは zsh と bash の両方を使う。用途が分かれており、一方がもう一方の代わりにはならない。
 
 - zsh: 下記インストール手順1の `install.zsh` の実行に必要。`install.zsh` はシバンが `#!/usr/bin/env zsh` の zsh 専用スクリプトで、`${0:A:h}` など zsh 固有の構文を使う。bash では実行できない。
 - bash: `bin/setup-improvement-loop` と各スキルの `scripts/` 配下のスクリプト、および下記「開発者向け情報」の `tests/run.sh` の実行に必要。これらはシバンが `#!/usr/bin/env bash` で、`BASH_SOURCE` など bash 固有の機能を使う。zsh では実行できない。
+
+対象とする bash のバージョンは macOS 同梱の 3.2 系（`/bin/bash --version` は 3.2.57）である。`declare -A`（連想配列）・`mapfile` / `readarray`・`${var^^}` など bash 4 以降の機能は使えない。既存のスクリプトはこの制約のもとで書かれているので、変更する際も 3.2 の範囲に収める。
 
 ## インストール手順
 
