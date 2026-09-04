@@ -1,32 +1,24 @@
 #!/usr/bin/env bash
-# setup-improvement-loop
-#
-# improvement-loop リポジトリの内容（claude skills / backlog 設定）を、
-# 対象リポジトリへ冪等に「安全収束」させる形で配置する。
+# improvement-loop の内容（claude skills / backlog 設定）を、対象リポジトリへ
+# 冪等に「安全収束」させる形で配置する。
 #
 # 使い方:
 #   setup-improvement-loop [対象リポジトリのパス]
 #   setup-improvement-loop --workspace [対象ワークスペースディレクトリのパス]
+# 引数を省略した場合はカレントディレクトリを対象とする。
 #
-# 引数を省略した場合は現在のディレクトリを対象とする。
-# --workspace を指定すると、対象を単一リポジトリではなくワークスペース
-# ディレクトリとして扱い、claude-code/workspace-skills/ 配下のスキル一式
-# （動的に列挙されるため個数・名前は固定ではない）を配置する別経路
-# （setup_workspace）に切り替わる。この経路では backlog init
-# や .backlog/ 配下の配置は一切行わないため、backlog CLI は不要になる
-# （対象ディレクトリが git リポジトリである必要も無い）。
+# --workspace は、対象を単一リポジトリではなくワークスペースディレクトリとして扱い、
+# claude-code/workspace-skills/ 配下のスキル一式を配置する別経路（setup_workspace）に
+# 切り替える。この経路では backlog init も .backlog/ 配下の配置も行わないため、
+# backlog CLI は不要で、対象ディレクトリが git リポジトリである必要も無い。
 #
 # 冪等性の方針:
-#   - シンボリックリンクは正しいリンク先を指していれば何もしない。
-#     別の実体（別リンク先のリンクを含む）が既に存在すればエラーで停止する。
-#   - .backlog/config.my.yml はユーザー所有ファイルなので、既存のキーの値・
-#     コメントは上書きしない。既に存在する場合は、配布元テンプレートにあって
-#     導入先に無いキーだけを、テンプレート側のコメント・既定値付きで補う
-#     （ensure_backlog_statuses と同じ「不足分だけ安全に追加する」パターン）。
-#     既にあるキーの説明コメントがテンプレートと食い違っている場合は、書き換えず
-#     に警告として報告するにとどめる。どちらが新しいか（古いテンプレート由来か、
-#     ユーザーが書き換えたものか）をスクリプトからは区別できないためである
-#     （TASK-74。詳細は warn_config_my_yml_comment_drift のコメント）。
+#   - シンボリックリンクは正しいリンク先を指していれば何もしない。別の実体
+#     （別リンク先のリンクを含む）が既に存在すればエラーで停止する。
+#   - .backlog/config.my.yml はユーザー所有ファイルなので、既存のキーの値・コメントは
+#     上書きしない。テンプレートにあって導入先に無いキーだけを補う。既にあるキーの
+#     説明コメントの食い違いは書き換えず警告にとどめる（理由は
+#     warn_config_my_yml_comment_drift のコメント）。
 #   - .git/info/exclude への追記は、同じ行が無い場合だけ行う。
 #   - backlog init は .backlog/config.yml が無いときだけ実行する。
 #   - .backlog/config.yml の statuses は、欠けている improvement ループ既定の
@@ -34,8 +26,8 @@
 
 set -euo pipefail
 
-# improvement ループの4スキル（scout/add/dispatch/work）が前提とする状態遷移。
-# この順序を正準順序として、欠けているものを config.yml の statuses に補う。
+# improvement ループのスキルが前提とする状態遷移。この順序を正準順序として、
+# 欠けているものを config.yml の statuses に補う。
 REQUIRED_STATUSES=(Proposed "To Do" "In Progress" "In Review" Approved Done)
 
 log() {
@@ -75,25 +67,17 @@ array_index_of() {
   printf '%s\n' "-1"
 }
 
-# .backlog/config.yml の statuses（例: statuses: ["To Do", "In Progress", "Done"]、
-# または複数行YAMLリスト形式 statuses:\n  - "To Do"\n  - "In Progress" ...）を
-# 解析する。ensure_backlog_statuses と migrate_reviewed_status_in_config（TASK-48）
-# の両方が使う共通ヘルパー。呼び出し元のシェル変数を書き換える方式（サブシェル化
-# すると呼び出し元に結果が伝わらないため、コマンド置換 $(...) 経由で呼ばないこと）:
+# .backlog/config.yml の statuses を解析する（インライン配列形式と複数行YAMLリスト
+# 形式の両方）。結果は次のグローバル変数に書く。サブシェル化すると呼び出し元へ
+# 伝わらないので、コマンド置換 $(...) 経由で呼ばないこと。
 #   PARSED_STATUSES_LINE_NUM     statuses 行の開始行番号
 #   PARSED_STATUSES_END_LINE_NUM 置換・削除すべき行範囲の終端行番号
-#     （インライン形式では PARSED_STATUSES_LINE_NUM と同じ。複数行リスト形式では
-#     直後から連続する "  - ..." 行の最後の行番号まで広げる）
+#     （インライン形式では開始行と同じ。複数行リスト形式では連続する "  - ..." 行の末尾まで）
 #   PARSED_STATUSES_LINE_RAW     statuses 行そのものの生テキスト
 #   PARSED_STATUSES_ITEMS        既存要素の配列（順序保持、ユーザー独自ステータス含む）
-# python3 等の追加依存を避け、grep/sed/awk のみで実装する。
-# 各要素の引用符除去（シングル/ダブル対称）は bin/lib/yaml_unquote.sh の
-# trim_and_unquote() を使う（TASK-62。以前はここでダブルクォートしか
-# 剥がさない独自の grep/sed 実装を使っており、.backlog/config.yml の
-# statuses をシングルクォートで書くと無音で壊れる不具合があった。
-# claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
-# parse_path_list も同じ trim_and_unquote を使うため、引用符除去の挙動は
-# 両者で一致する）。
+# python3 等の追加依存を避け、grep/sed/awk のみで実装する。引用符除去は
+# bin/lib/yaml_unquote.sh の trim_and_unquote() を使い、check-forbidden-allowed-paths の
+# parse_path_list と挙動を一致させる。
 parse_statuses_block() {
   local config_file="$1"
 
@@ -108,9 +92,7 @@ parse_statuses_block() {
   PARSED_STATUSES_ITEMS=()
 
   if [[ "$PARSED_STATUSES_LINE_RAW" == *'['* ]]; then
-    # インライン配列形式（例: statuses: ["To Do", "Done"] や statuses: ['To Do', 'Done']）。
-    # "[" と "]" の間をカンマ区切りで分割し、要素ごとに trim_and_unquote する
-    # （check-forbidden-allowed-paths の parse_path_list と同じ考え方）。
+    # インライン配列形式（例: statuses: ["To Do", "Done"]）。
     local inline_content=""
     if [[ "$PARSED_STATUSES_LINE_RAW" =~ \[(.*)\] ]]; then
       inline_content="${BASH_REMATCH[1]}"
@@ -126,9 +108,7 @@ parse_statuses_block() {
       done
     fi
   else
-    # 複数行YAMLリスト形式（statuses: の次行以降に "  - \"To Do\"" や
-    # "  - 'To Do'" のように列挙）。
-    # statuses: の直後から連続する "- ..." 行を集め、それぞれの値を積む。
+    # 複数行YAMLリスト形式。statuses: の直後から連続する "- ..." 行を集める。
     local total_lines next_line_num list_line item
     total_lines="$(awk 'END { print NR }' "$config_file")"
     next_line_num=$((PARSED_STATUSES_LINE_NUM + 1))
@@ -145,9 +125,9 @@ parse_statuses_block() {
   fi
 }
 
-# parse_statuses_block で読み取った行範囲を、渡された要素列でインライン配列形式
-# 1行に丸ごと置換して書き戻す。呼び出し前に対象 config_file で parse_statuses_block
-# を実行済みであること（PARSED_STATUSES_* を使う）。書き戻した新しい行を標準出力に返す。
+# parse_statuses_block が読み取った行範囲を、渡された要素列でインライン配列形式1行に
+# 置換して書き戻し、その新しい行を標準出力に返す。呼び出し前に同じ config_file で
+# parse_statuses_block を実行しておくこと（PARSED_STATUSES_* を使う）。
 # 引数: config_file, item1, item2, ...（0個も可）
 write_statuses_block() {
   local config_file="$1"
@@ -163,10 +143,8 @@ write_statuses_block() {
     new_line+="\"${items[$i]}\""
   done
   new_line+="]"
-  # 元の行が `]` の後に何かを持っていた場合（例: 末尾コメント）は保持する。
-  # `]` を含まない行（複数行リスト形式の "statuses:" 行など）ではこの展開は
-  # パターン非マッチのため元の行全体が返ってしまう点に注意し、`]` を含む場合
-  # だけ適用する。
+  # 元の行が `]` の後に持っていたもの（末尾コメント等）は保持する。`]` を含まない行
+  # ではこの展開が非マッチとなり元の行全体を返してしまうので、含む場合だけ適用する。
   if [[ "$PARSED_STATUSES_LINE_RAW" == *']'* ]]; then
     new_line+="${PARSED_STATUSES_LINE_RAW##*]}"
   fi
@@ -193,10 +171,9 @@ ensure_backlog_statuses() {
   parse_statuses_block "$config_file"
   local existing=(${PARSED_STATUSES_ITEMS[@]+"${PARSED_STATUSES_ITEMS[@]}"})
 
-  # bash 3.2（macOS の既定 /bin/bash）は set -u 下で、空配列を
-  # "${arr[@]}" のように無条件展開すると "unbound variable" で落ちる
-  # （bash 4.4 で修正されたバグ）。既存 statuses が空（例: statuses: []）
-  # の場合に踏むため、"${arr[@]+"${arr[@]}"}" 形式のガード付き展開を使う。
+  # bash 3.2（macOS の既定 /bin/bash）は set -u 下で空配列を "${arr[@]}" と
+  # 無条件展開すると unbound variable で落ちる。既存 statuses が空（statuses: []）
+  # のときに踏むため、"${arr[@]+"${arr[@]}"}" 形式のガード付き展開を使う。
   local working=(${existing[@]+"${existing[@]}"})
 
   local status
@@ -204,8 +181,8 @@ ensure_backlog_statuses() {
     if array_contains "$status" ${working[@]+"${working[@]}"}; then
       continue
     fi
-    # status より正準順序で後にある REQUIRED_STATUSES のうち、working に
-    # 既に存在する最初のものの直前に挿入する。無ければ末尾に追加する。
+    # 正準順序で status より後にあり、working に既に存在する最初のものの直前へ
+    # 挿入する。無ければ末尾に追加する。
     local insert_idx=${#working[@]}
     local reached=false
     local candidate
@@ -238,20 +215,13 @@ ensure_backlog_statuses() {
   CREATED+=(".backlog/config.yml statuses (不足していた improvement ループの既定ステータスを追加)")
 }
 
-# .backlog/config.yml の statuses に残る旧名 "Reviewed" を検知し、"Approved" へ
-# 安全に統合する（TASK-48）。TASK-8 で "Reviewed" は "Approved" にリネームされたが、
-# この移行は本リポジトリ自身の .backlog/config.yml のみを対象に行われ、
-# setup-improvement-loop（配布ロジック）自体には反映されていなかった。TASK-8 以前に
-# このツールをセットアップした既存 consumer リポジトリでは、ensure_backlog_statuses
-# が欠けている "Approved" を末尾側に追加挿入するだけで、旧名 "Reviewed" が重複して
-# 残り続ける。
+# .backlog/config.yml の statuses に残る旧名 "Reviewed" を取り除く（"Approved" への統合）。
+# 既に存在しなければ何もしない。
+#
 # 呼び出しは、対象タスクの移行（migrate_reviewed_tasks）より後に行うこと。
-# "Reviewed" を config.yml の有効なステータス値から先に外してしまうと、
-# 将来の backlog CLI バージョンが `--status`/`-s` の値を configured statuses に
-# 対して厳格に検証するようになった場合に、旧ステータスのタスクを検出・移行
-# できなくなるおそれがあるため（現行の backlog CLI 1.48.0 ではこの検証は行われず、
-# 順序に関係なく動作することを実機で確認済みだが、安全側に倒す）。
-# "Reviewed" が既に存在しなければ何もしない（AC#3）。
+# "Reviewed" を config.yml の有効なステータス値から先に外すと、将来の backlog CLI が
+# --status の値を configured statuses に対して厳格に検証するようになった場合、
+# 旧ステータスのタスクを検出・移行できなくなるおそれがある（安全側に倒す）。
 migrate_reviewed_status_in_config() {
   local config_file="$1"
 
@@ -264,8 +234,7 @@ migrate_reviewed_status_in_config() {
     return 0
   fi
 
-  # "Reviewed" だけを取り除き、他の要素の順序・値は一切変更しない
-  # （ユーザー独自のステータスを含む）。
+  # "Reviewed" だけを取り除き、他の要素の順序・値は変更しない。
   local working=()
   local item
   for item in ${existing[@]+"${existing[@]}"}; do
@@ -283,11 +252,9 @@ migrate_reviewed_status_in_config() {
 }
 
 # 対象リポジトリに status: Reviewed の既存タスクがあれば、backlog CLI 経由で
-# Approved へ移行する（TASK-48）。.backlog/ 配下の md ファイルを直接書き換えない。
-# `backlog task list --status "Reviewed" --plain` は "Reviewed" が config.yml の
-# statuses に無くてもエラーにならず該当タスクが無ければ "No tasks found." を返す
-# ことを実機で確認済みのため、事前の存在チェックは行わず常に呼び出す。
-# 候補が無ければ何もしない（AC#3）。
+# Approved へ移行する。.backlog/ 配下の md ファイルは直接書き換えない。
+# `backlog task list --status "Reviewed" --plain` は "Reviewed" が statuses に
+# 無くてもエラーにならないので、事前の存在チェックはせず常に呼び出す。
 migrate_reviewed_tasks() {
   local target_repo_root="$1"
 
@@ -297,18 +264,12 @@ migrate_reviewed_tasks() {
     exit 1
   fi
 
-  # `backlog task list --plain` の各タスク行は "  <ID> - <title>" または
-  # "  [PRIORITY] [type] <ID> - <title>" の形式（先頭に0個以上の "[...] "
-  # タグが付く）。<ID> は config.yml の task_prefix に応じて "TASK-<n>" とは
-  # 限らない（例: task_prefix: "issue" なら "ISSUE-<n>"）ため、"TASK-" 固定の
-  # パターンで抽出すると task_prefix をカスタマイズしたリポジトリで該当タスクを
-  # 一切検出できず、statuses からだけ "Reviewed" が消えてタスク側が永久に
-  # 取り残される。また、タスクの title 自体に "TASK-999" のような文字列が
-  # 含まれるケースもあるため、行のどこかに現れる ID らしき文字列を無条件に拾うと
-  # （grep -oE '[A-Za-z]+-[0-9]+' のような素朴な実装だと）title 中の偽陽性まで
-  # ID として誤検出してしまう。行頭の空白・タグ群を取り除いた直後に来る
-  # "<接頭辞>-<n> - " の形のものだけを ID として採用することで、prefix 非依存かつ
-  # title 中の偽陽性を避けて抽出する。
+  # ID の接頭辞は config.yml の task_prefix 次第で "TASK-" とは限らない。固定パターンで
+  # 抽出すると、prefix をカスタマイズしたリポジトリでタスクを一切検出できず、statuses から
+  # だけ "Reviewed" が消えてタスク側が取り残される。一方、行のどこかにある ID らしき
+  # 文字列を無条件に拾うと title 中の "TASK-999" まで誤検出する。そこで、行頭の空白・
+  # タグ群を取り除いた直後の "<接頭辞>-<n> - " だけを ID として採用する
+  # （select-next-task の extract_task_id と同じ正規表現）。
   local task_ids=()
   while IFS= read -r id; do
     [ -n "$id" ] && task_ids+=("$id")
@@ -335,13 +296,10 @@ migrate_reviewed_tasks() {
   CREATED+=("status: Reviewed の既存タスク移行 (${#task_ids[@]} 件を Approved へ: ${task_ids[*]})")
 }
 
-# improvement-loop は push を前提としない完全ローカル運用（config.my.yml の
-# auto_merge_reviewed の解説を参照）のため、backlog CLI の remote git 操作
-# （fetch 等）に依存させる理由がない。backlog init --defaults の既定値
-# remoteOperations: true を、ensure_backlog_statuses と同様に対象リポジトリへ
-# 冪等に収束させる。ユーザーが後から明示的に true へ戻した場合はそれを正とし、
-# このスクリプトの再実行では上書きしない（"false である" ことだけを確認し、
-# 既に false ならスキップする）。
+# backlog CLI の remote git 操作（fetch 等）に依存させる理由が無いので、
+# backlog init --defaults の既定値 remoteOperations: true を false に収束させる。
+# ユーザーが後から明示的に true へ戻した場合はそれを正とし、再実行では上書きしない
+# （false であることだけを確認し、既に false ならスキップする）。
 ensure_remote_operations_disabled() {
   local target_repo_root="$1"
 
@@ -361,14 +319,12 @@ ensure_remote_operations_disabled() {
   CREATED+=("backlog config remoteOperations (false に設定)")
 }
 
-# defaultAssignee はタスクの起票者を improvement-loop-bot に統一するための
-# 既定アサイニー設定。backlog CLI 1.48.0（README.md 記載の動作確認済み最小
-# バージョン）にはまだこのキーが存在せず、`backlog config set defaultAssignee`
-# は "Unknown config key" で失敗する（より新しいバージョンで追加された機能）。
-# CLI が対応していれば正規の手段で設定し、対応していない場合は config.yml に
-# 直接追記する（値は将来 CLI がこのキーを読めるようになった時点で自動的に
-# 有効になる）。既に default_assignee が設定されている場合はユーザーの値を
-# 優先し、上書きしない。
+# タスクの起票者を improvement-loop-bot に統一する既定アサイニー設定。
+# backlog CLI 1.48.0（README.md 記載の動作確認済み最小バージョン）にはこのキーが
+# 無く `backlog config set defaultAssignee` は "Unknown config key" で失敗するため、
+# CLI が対応していれば正規の手段で設定し、対応していなければ config.yml へ直接
+# 追記する（将来 CLI が読めるようになった時点で有効になる）。
+# 既に default_assignee があればユーザーの値を優先し、上書きしない。
 ensure_default_assignee() {
   local target_repo_root="$1"
   local config_file="$2"
@@ -391,16 +347,11 @@ ensure_default_assignee() {
   CREATED+=(".backlog/config.yml default_assignee (CLI未対応のため直接追記)")
 }
 
-# place_skill_symlinks: `.claude/skills/$name` へのシンボリックリンクを冪等に
-# 配置する共有関数（従来の手順4のロジックを、単一リポジトリ経路と
-# --workspace 経路の両方から呼べる形に切り出したもの）。
-#   - 既にリンクがあり、正しいリンク先を指していれば何もしない。
-#   - 別の実体（別リンク先のリンクを含む）が既に存在すればエラーで停止する。
-#   - リンクが無ければ新規作成する。
-# グローバル変数 CREATED / SKIPPED、および resolve_path()（bin/lib/resolve_path.sh）
-# に依存する。
-# 引数: $1=ソースディレクトリ, $2=配置先の .claude/skills ディレクトリ,
-#       $3以降=配置するスキル名のリスト
+# `.claude/skills/<name>` へのシンボリックリンクを冪等に配置する（単一リポジトリ経路と
+# --workspace 経路の両方から呼ぶ）。正しいリンク先を指していれば何もせず、別の実体が
+# あればエラーで停止し、無ければ新規作成する。
+# グローバル変数 CREATED / SKIPPED と resolve_path() に依存する。
+# 引数: $1=ソースディレクトリ, $2=配置先の .claude/skills, $3以降=スキル名のリスト
 place_skill_symlinks() {
   local source_dir="$1"
   local target_skills_dir="$2"
@@ -420,9 +371,8 @@ place_skill_symlinks() {
     fi
 
     if [ -L "$dest" ]; then
-      # 既にシンボリックリンクがある。リンク先の実体を比較して正しいか確認する。
-      # リンク切れ（リンク先が存在しない）の場合 resolve_path（realpath）が
-      # 非ゼロで終了しうる。set -e で落とさず「別のリンク先」として扱う。
+      # リンク切れの場合 resolve_path が非ゼロ終了しうる。set -e で落とさず
+      # 「別のリンク先」として扱う。
       resolved_existing="$(resolve_path "$dest" 2>/dev/null)" || resolved_existing=""
       resolved_src="$(resolve_path "$src")"
       if [ "$resolved_existing" = "$resolved_src" ]; then
@@ -446,10 +396,8 @@ place_skill_symlinks() {
   done
 }
 
-# append_git_exclude_lines: 対象リポジトリの .git/info/exclude に、固定の
-# 見出しコメント "# improvement-loop" と指定された行群を冪等に追記する共有関数
-# （従来の手順6のロジックを、単一リポジトリ経路と --workspace 経路の両方から
-# 呼べる形に切り出したもの）。同じ行が既にあれば追記しない。
+# 対象リポジトリの .git/info/exclude に、見出しコメント "# improvement-loop" と
+# 指定された行群を冪等に追記する。同じ行が既にあれば追記しない。
 # グローバル変数 CREATED / SKIPPED に依存する。
 # 引数: $1=対象リポジトリのルート（git リポジトリであること）, $2以降=追記する行
 append_git_exclude_lines() {
@@ -467,9 +415,8 @@ append_git_exclude_lines() {
   mkdir -p "$git_dir/info"
   touch "$exclude_file"
 
-  # 追記する行群の由来を示す見出しコメント。既存の `# interview-dev-loop plan docs`
-  # や `# claude-code-runtime` と同じ書式（対象行の直前に置く1行コメント）に倣う。
-  # grep -Fxq で完全一致を見るため、lines の重複検知には影響しない。
+  # 追記する行群の由来を示す見出しコメント。既存の他ツールの行と同じ書式
+  # （対象行の直前に置く1行コメント）に倣う。
   local exclude_header="# improvement-loop"
   if grep -Fxq "$exclude_header" "$exclude_file" 2>/dev/null; then
     log "[skip] .git/info/exclude には既に見出しコメント '$exclude_header' がある。"
@@ -493,13 +440,10 @@ append_git_exclude_lines() {
   done
 }
 
-# setup_workspace: `--workspace` 経路のセットアップ本体。対象ディレクトリ
-# （git リポジトリである必要はない）に claude-code/workspace-skills/ 配下の
-# スキル一式（個数・名前は固定ではなく実行時に動的列挙される）を
-# `.claude/skills/` へシンボリックリンクとして冪等に配置する。
-# backlog init やバックログ関連ファイル（.backlog/*）の配置は一切行わない。
-# 対象ディレクトリが git リポジトリでもある場合（レアケース）だけ、
-# 配置したスキルパスを .git/info/exclude に追記する。
+# `--workspace` 経路のセットアップ本体。対象ディレクトリ（git リポジトリでなくてよい）に
+# claude-code/workspace-skills/ 配下のスキル一式（実行時に動的列挙）を `.claude/skills/`
+# へ冪等に配置する。backlog init や .backlog/ 配下の配置は一切行わない。
+# 対象が git リポジトリでもある場合だけ、配置したパスを .git/info/exclude に追記する。
 setup_workspace() {
   local target_dir="$1"
 
@@ -514,8 +458,8 @@ setup_workspace() {
     exit 1
   fi
 
-  # claude-code/workspace-skills/ ディレクトリの実体を単一の情報源として動的に列挙する。
-  # 単一リポジトリ経路の SKILL_NAMES（claude-code/skills/ 配下の動的列挙）と同じ方式。
+  # ディレクトリの実体を単一の情報源として動的に列挙する（単一リポジトリ経路の
+  # SKILL_NAMES と同じ方式）。
   shopt -s nullglob
   local workspace_skill_names=()
   local skill_dir
@@ -558,9 +502,8 @@ setup_workspace() {
       log "  - $item"
     done
   fi
-  # 実際に配置したスキル名（workspace_skill_names）から、次の案内ログで
-  # 使う一覧文字列を組み立てる。ハードコードした名前ではなく実体の動的
-  # 列挙結果をそのまま使うことで、将来スキルが増減しても案内が自動追従する。
+  # 案内ログの一覧文字列は実体の動的列挙結果から組み立てる（ハードコードしないので、
+  # スキルが増減しても案内が自動追従する）。
   local placed_skill_list=""
   local placed_skill_name
   for placed_skill_name in "${workspace_skill_names[@]}"; do
@@ -577,24 +520,20 @@ setup_workspace() {
   log "  2. $placed_skill_list スキルを、このワークスペースディレクトリで使う（opt-in 済みのリポジトリだけを対象に横断処理する）"
 }
 
-# config.my.yml の improvement_loop: 配下にある「有効なキー」（コメントアウト
-# されていないキー行）の名前を、ファイル中の出現順に1行1件で標準出力に書く。
-# ensure_config_my_yml_keys と warn_config_my_yml_comment_drift が同じキーの
-# 見つけ方を共有するための共通ヘルパー（両者で正規表現を二重に持つと、片方だけ
-# 直したときに「補完はするが差異検出はしない」といった食い違いが生じる）。
+# config.my.yml の improvement_loop: 配下の「有効なキー」（コメントアウトされていない
+# キー行）の名前を、出現順に1行1件で標準出力に書く。ensure_config_my_yml_keys と
+# warn_config_my_yml_comment_drift でキーの見つけ方を共有するための共通ヘルパー
+# （正規表現を二重に持つと、片方だけ直したときに食い違う）。
 list_config_my_yml_keys() {
   grep -E '^  [A-Za-z0-9_]+:' "$1" | sed -E 's/^  ([A-Za-z0-9_]+):.*/\1/'
 }
 
-# config.my.yml（配布元テンプレート・導入先のどちらでも）から、指定したキーの
-# 「ブロック」を抽出して標準出力に書く。ブロックとは、そのキー行の直前にある
-# 連続する2スペースインデントのコメント行（キーの説明・既定値の記述）である。
-# 空行または別のキー行に当たった時点で、それ以前に溜めたコメント行は「別のキーに
-# 属するもの」として捨てる。
+# config.my.yml（テンプレート・導入先のどちらでも）から、指定したキーの「ブロック」を
+# 抽出して標準出力に書く。ブロックとは、そのキー行の直前にある連続する2スペース
+# インデントのコメント行（キーの説明・既定値の記述）である。空行または別のキー行に
+# 当たった時点で、それ以前に溜めたコメント行は別のキーのものとして捨てる。
 # 第3引数が "with-key"（既定）ならキー行自体も末尾に含め、"comments-only" なら
-# コメント行だけを出す。該当キーが有効なキー行として存在しなければ何も出力しない。
-# ensure_config_my_yml_keys（不足キーの追記）と warn_config_my_yml_comment_drift
-# （説明コメントの陳腐化検出）の共通ヘルパー。
+# コメント行だけを出す。該当キーが無ければ何も出力しない。
 extract_config_my_yml_block() {
   local file="$1"
   local key="$2"
@@ -617,17 +556,12 @@ extract_config_my_yml_block() {
   ' "$file"
 }
 
-# .backlog/config.my.yml の improvement_loop: 配下のキーのうち、配布元テンプレート
-# （backlog-md/config.my.yml）にあって導入先の既存ファイルに無いキー
-# だけを、テンプレート側のコメント・既定値付きで補う。ensure_backlog_statuses() と
-# 同じ「不足分だけ安全に追加する」パターンを踏襲する。
-# 対応するのはキーの新規追加の検出・追記のみ。キーの rename・削除・意味変更には
-# 対応しない。導入先に既にあるキーの値・コメントは一切変更せず、テンプレートに
-# 無いユーザー独自のキーもそのまま保持する。
+# 配布元テンプレート（backlog-md/config.my.yml）にあって導入先の .backlog/config.my.yml
+# に無いキーだけを、テンプレート側のコメント・既定値付きで補う。
+# 対応するのはキーの新規追加のみで、rename・削除・意味変更には対応しない。導入先に
+# 既にあるキーの値・コメントは変更せず、テンプレートに無いユーザー独自のキーも残す。
 # 導入先で当該キーがコメントアウトされている場合（例: "  # max_in_review: 3"）は
-# 「未設定」ではなく「ユーザーが意図的に無効化した」状態として扱い、有効な重複
-# キーとして再追記しない（TASK-37）。
-# python3 等の追加依存を避け、grep/sed/awk のみで実装する。
+# 「未設定」ではなく「ユーザーが意図的に無効化した」状態として扱い、再追記しない。
 ensure_config_my_yml_keys() {
   local target_file="$1"
   local source_file="$2"
@@ -649,10 +583,9 @@ ensure_config_my_yml_keys() {
     if array_contains "$key" ${target_keys[@]+"${target_keys[@]}"}; then
       continue
     fi
-    # 有効なキーとしては見つからなかったが、同名キーがコメントアウトされた形で
-    # 既に存在するなら、ユーザーが意図的に無効化した状態とみなし「不足」扱いに
-    # しない。インデント・"#" と値の間の空白は問わず、キー名の完全一致のみを見る
-    # ため、テンプレートの説明文コメント（例: "# 既定値: 3"）には誤爆しない。
+    # 同名キーがコメントアウトされた形で存在するなら、ユーザーが意図的に無効化した
+    # ものとみなし「不足」扱いにしない。キー名の完全一致だけを見るので、説明文の
+    # コメント（例: "# 既定値: 3"）には誤爆しない。
     if grep -Eq "^[[:space:]]*#[[:space:]]*${key}:" "$target_file"; then
       commented_keys+=("$key")
       continue
@@ -674,8 +607,6 @@ ensure_config_my_yml_keys() {
   fi
 
   for key in "${missing_keys[@]}"; do
-    # そのキーの直前にある連続するコメント行（キーの説明・既定値の記述）と、
-    # キー行自体をひとまとまりのブロックとして source から抽出する。
     local block
     block="$(extract_config_my_yml_block "$source_file" "$key" with-key)"
 
@@ -691,38 +622,26 @@ ensure_config_my_yml_keys() {
   CREATED+=(".backlog/config.my.yml (不足していたキーを追加: ${missing_keys[*]})")
 }
 
-# 導入先の .backlog/config.my.yml に既にあるキーについて、その説明コメントが配布元
-# テンプレートと異なっていないかを確認し、異なるものを警告として報告する（TASK-74）。
-# ファイルは一切書き換えない（読み取りのみ）。
+# 導入先の .backlog/config.my.yml に既にあるキーの説明コメントが、配布元テンプレートと
+# 異なっていないかを確認し、異なるものを警告として報告する。ファイルは書き換えない。
 #
-# 解こうとしている問題: ensure_config_my_yml_keys が補うのは「不足しているキー」
-# だけなので、既にあるキーの説明コメントは永久に更新されない。テンプレート側の
-# コメントに重要な訂正（誤解を招く記述の訂正、新しい制限の明記）が入っても、
-# 既に導入済みのリポジトリには再実行しても届かない。実例として TASK-69 は
-# forbidden_paths/allowed_paths のコメントに「git 管理外のパスは機械的には
-# 止まらない」という限界の説明を足したが、既存の導入先には旧説明
-# （「機械的に拒否・検知する仕組みではない」）が残り続ける。
+# 解こうとしている問題: ensure_config_my_yml_keys が補うのは不足しているキーだけなので、
+# 既にあるキーの説明コメントは永久に更新されない。テンプレート側に重要な訂正が入っても、
+# 既に導入済みのリポジトリには再実行しても届かない。
 #
-# なぜ書き換えず警告にとどめるか: 導入先の config.my.yml には「どのテンプレート版
-# から導入されたか」の記録が無い。そのため、あるコメント行が「古いテンプレート由来
-# （＝差し替えてよい）」なのか「ユーザーが自分で書き足した・書き換えた（＝壊しては
-# いけない）」なのかを、このスクリプトが区別できる情報が原理的に無い。ユーザー所有
-# ファイルを壊さないことを優先し、機械的な差し替えは行わず、「テンプレート側の説明が
-# 更新されているので読み比べること」を人間に伝えるにとどめる。
+# なぜ書き換えず警告にとどめるか: 導入先の config.my.yml には「どのテンプレート版から
+# 導入されたか」の記録が無い。あるコメント行が古いテンプレート由来なのか、ユーザーが
+# 自分で書き足したものなのかを区別できる情報が原理的に無い。ユーザー所有ファイルを
+# 壊さないことを優先し、読み比べを人間に促すにとどめる。
 #
-# 検出対象は、テンプレートと導入先の双方に「有効なキー行」として存在するキーだけで
-# ある。導入先に無いキーは ensure_config_my_yml_keys がテンプレートのコメントごと
-# 追記するので定義上ズレない。導入先でコメントアウトされたキー（TASK-37）は
-# ユーザーが意図的に無効化した状態として ensure_config_my_yml_keys が別途 [skip] で
-# 報告済みであり、ブロック抽出が "^  <キー名>:" を起点にしている以上ここでは検出
-# できない。
-# 比較はコメント行の完全一致で行い、キー行そのもの（＝ユーザーが決めた値）は比較
-# しない。したがってユーザーが説明コメントに自分でメモを書き足している場合や、
-# 逆にコメントを全部削って値だけの最小構成にしている場合も差異として報告され、
-# その状態のままなら実行のたびに同じ報告が出る。これは上と同じ理由（どちらが新しい
-# かを区別できない）による意図的な振る舞いであり、報告されるだけでファイルは変わら
-# ない。うるさければ、テンプレート側の説明を取り込むか、その差異を承知の上で報告を
-# 読み流すかのどちらかを人間が選ぶ。
+# 検出対象は、テンプレートと導入先の双方に有効なキー行として存在するキーだけである。
+# 導入先に無いキーは ensure_config_my_yml_keys がコメントごと追記するので定義上ズレず、
+# コメントアウトされたキーはブロック抽出の起点が "^  <キー名>:" である以上検出できない。
+#
+# 比較はコメント行の完全一致で行い、キー行（＝ユーザーが決めた値）は比較しない。
+# そのためユーザーが説明にメモを書き足した場合も、逆に説明を全部削って値だけにした
+# 場合も差異として報告され、その状態のままなら毎回同じ報告が出る。これも上と同じ理由
+# （どちらが新しいかを区別できない）による意図的な振る舞いである。
 warn_config_my_yml_comment_drift() {
   local target_file="$1"
   local source_file="$2"
@@ -772,23 +691,16 @@ warn_config_my_yml_comment_drift() {
 }
 
 # ---- 0. このスクリプト自身の場所から、配布元リポジトリのルートを解決する ----
-# install.zsh が $HOME/.local/bin にシンボリックリンクを張る運用のため、
-# BASH_SOURCE をそのまま使うとリンク先ではなくリンク自身の場所（~/.local/bin）を
-# 基準にしてしまう。シンボリックリンクを解決してから使う必要がある。
+# install.zsh が $HOME/.local/bin にシンボリックリンクを張るため、BASH_SOURCE を
+# そのまま使うとリンク自身の場所を基準にしてしまう。先に解決する必要がある。
 #
-# 注意（TASK-18）: resolve_path() の唯一の定義は bin/lib/resolve_path.sh に
-# あり、本来はそれを source して使う（後述）。しかしこのブートストラップの
-# 1回だけは、その bin/lib/resolve_path.sh を source できない。symlink 経由
-# で実行された場合、この時点ではまだ自分の実体の場所（例: ~/.local/bin。
-# 単一ファイルの symlink のみが置かれ、隣に lib/ は無い）しか分かっておらず、
-# bin/lib/resolve_path.sh を source するための正しいパス（配布元リポジトリの
-# ルート）はまだ求まっていない。つまり「symlink を解決してリポジトリの場所を
-# 知る」ためにこそこのロジックが要るのに、それを外部ファイルの source に
-# 頼ると、その外部ファイルの場所自体が symlink 解決前には分からないという
-# 循環になる。そのためこの1箇所だけ、同じフォールバック判定のコピーを
-# ブートストラップ専用の別名関数として残す。以降の呼び出し（本体側の
-# resolve_path、シンボリックリンク解決の再検証で使用）は、ここでリポジトリの
-# ルートが判明した後に bin/lib/resolve_path.sh を source した単一の定義を使う。
+# このブートストラップの1回だけは resolve_path() の唯一の定義（bin/lib/resolve_path.sh）
+# を source できない。symlink 経由で実行された場合、この時点で分かっているのは自分の
+# 実体の場所（例: ~/.local/bin。隣に lib/ は無い）だけで、source すべきパスはまだ
+# 求まっていないからである。つまり symlink を解決するためのロジックを外部ファイルの
+# source に頼ると、その外部ファイルの場所自体が解決前には分からないという循環になる。
+# そのためここ1箇所だけ同じ判定のコピーを別名関数として残す。以降の呼び出しは、
+# ルートが判明した後に source した単一の定義を使う。
 _bootstrap_resolve_own_path() {
   if command -v realpath >/dev/null 2>&1; then
     realpath "$1"
@@ -806,19 +718,15 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 SOURCE_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_SKILLS_DIR="$SOURCE_REPO_ROOT/claude-code/skills"
 SOURCE_CONFIG_FILE="$SOURCE_REPO_ROOT/backlog-md/config.my.yml"
-# claude-code/workspace-skills/ は --workspace 経路専用のスキル配布元。既存の
-# claude-code/skills/（SOURCE_SKILLS_DIR、下の動的列挙で SKILL_NAMES を作る単一の
-# 情報源）とは意図的に別ディレクトリにしてある。ここに新スキルを混在させると、
-# 単一リポジトリ経路の動的列挙に自動的に混入してしまうため（Decision 6）。
+# --workspace 経路専用のスキル配布元。claude-code/skills/（SOURCE_SKILLS_DIR）とは
+# 意図的に別ディレクトリにしてある。混在させると単一リポジトリ経路の動的列挙に
+# 自動的に混入してしまうためである。
 SOURCE_WORKSPACE_SKILLS_DIR="$SOURCE_REPO_ROOT/claude-code/workspace-skills"
 
-# resolve_path() の唯一の定義を source する。以降（シンボリックリンクの
-# 既存リンク先が期待通りか検証する箇所）はここから供給される定義を使う。
 # shellcheck source=lib/resolve_path.sh
 source "$SCRIPT_DIR/lib/resolve_path.sh"
 
-# trim_and_unquote() の唯一の定義を source する。parse_statuses_block が使う
-# （TASK-62）。
+# parse_statuses_block が使う。
 # shellcheck source=lib/yaml_unquote.sh
 source "$SCRIPT_DIR/lib/yaml_unquote.sh"
 
@@ -831,9 +739,8 @@ if [ ! -f "$SOURCE_CONFIG_FILE" ]; then
   exit 1
 fi
 
-# SKILL_NAMES は claude-code/skills/ ディレクトリの実体を単一の情報源として動的に
-# 列挙する。ここをハードコードすると、claude-code/skills/ に新しいスキルディレクトリ
-# を追加したときに配置漏れが起き、しかもエラーにならない（過去の不具合の原因）。
+# claude-code/skills/ の実体を単一の情報源として動的に列挙する。ハードコードすると、
+# 新しいスキルディレクトリを追加したときに配置漏れが起き、しかもエラーにならない。
 shopt -s nullglob
 SKILL_NAMES=()
 for skill_dir in "$SOURCE_SKILLS_DIR"/*/; do
@@ -846,14 +753,10 @@ if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
 fi
 
 # ---- 1. 引数解析（--workspace フラグと位置引数） ----
-# --workspace はどの位置に来てもよいフラグとして扱う。位置引数（対象パス、
-# 省略時はcwd）の扱いは既存仕様（"${1:-$(pwd)}"）と同じにするため、フラグを
-# 取り除いた残りの引数列の先頭を使う。
-# この段階ではフラグの切り分けのみ行い、対象パスの存在確認等のファイル
-# システムを触る処理は一切行わない（次節の前提コマンド確認より前に、対象
-# ディレクトリの解決を先に済ませてしまわないようにするため。元の実装では
-# 前提コマンドの確認が対象パスの解決より先に行われており、その順序を
-# --workspace 対応後も変えない）。
+# --workspace はどの位置に来てもよいフラグとして扱い、それを取り除いた残りの先頭を
+# 対象パスとする。ここではフラグの切り分けだけを行い、対象パスの存在確認のような
+# ファイルシステムを触る処理はしない（前提コマンドの確認を対象パスの解決より先に
+# 行う順序を保つため）。
 WORKSPACE_MODE=false
 POSITIONAL_ARGS=()
 for arg in "$@"; do
@@ -868,18 +771,12 @@ for arg in "$@"; do
 done
 
 # ---- 2. 前提コマンドの確認 ----
-# backlog: Backlog.md CLI（https://backlog.md/）。ここではコマンドの存在確認のみ
-# 行い、バージョンまでは確認しない。動作確認済みの最小バージョンは 1.48.0
-# （README.md「前提: backlog CLI」参照）。それより古いバージョンでは
-# --add-label 等の一部フラグが使えず、improvement-dispatch/improvement-work
+# 存在確認のみでバージョンは見ない。backlog CLI の動作確認済み最小バージョンは
+# 1.48.0（README.md 参照）で、それより古いと --add-label 等が使えず、スキルの
 # 実行中に初めてエラーになることがある。
-# git は --workspace 経路でも対象ディレクトリが git リポジトリかどうかの判定
-# （.git/info/exclude への追記要否）に使うため常に必須とする。backlog init や
-# .backlog/config.my.yml の配置は --workspace 経路では一切行わないため、
-# backlog コマンドの必須化は --workspace 無しのときだけに限定する。
-# 元の実装（--workspace 対応前）ではここが対象パスの解決より先に行われていた。
-# その順序を維持する（前提コマンドが揃っているかどうかの確認を、対象パスが
-# 存在するかどうかの確認より優先する）。
+# git は --workspace 経路でも git リポジトリかどうかの判定に使うので常に必須。
+# backlog は --workspace 経路では使わないので、そのときだけ必須から外す。
+# この確認は対象パスの解決より先に行う（順序を変えないこと）。
 REQUIRED_CMDS=(git)
 if [ "$WORKSPACE_MODE" != true ]; then
   REQUIRED_CMDS+=(backlog)
@@ -899,9 +796,8 @@ if [ ! -d "$TARGET_DIR_ARG" ]; then
 fi
 TARGET_REPO_ROOT="$(cd "$TARGET_DIR_ARG" && pwd)"
 
-# --workspace が指定された場合は、ここで別経路（setup_workspace）に分岐して
-# 終了する。以降（git リポジトリ判定、backlog init、.backlog/ 配下の配置等）は
-# --workspace 無しの既定動作専用であり、一切変更しない。
+# 以降（git リポジトリ判定、backlog init、.backlog/ 配下の配置等）は --workspace 無しの
+# 既定動作専用である。
 if [ "$WORKSPACE_MODE" = true ]; then
   setup_workspace "$TARGET_REPO_ROOT"
   exit 0
@@ -918,8 +814,7 @@ log ""
 
 CREATED=()
 SKIPPED=()
-# 書き換えはしなかったが人間に読んでほしい事項（TASK-74 の説明コメントの
-# 陳腐化など）。該当が無ければサマリーにこの節自体を出さない。
+# 書き換えはしなかったが人間に読んでほしい事項。該当が無ければサマリーに節自体を出さない。
 WARNED=()
 
 # ---- 3. backlog init ----
@@ -928,28 +823,21 @@ if [ -f "$BACKLOG_CONFIG_YML" ]; then
   log "[skip] .backlog/config.yml は既に存在する。backlog init を実行しない。"
   SKIPPED+=("backlog init (.backlog/config.yml が既に存在)")
 else
-  # projectName を明示的に渡す。--defaults は既存プロンプトの多くを埋めるが、
-  # プロジェクト名だけは省略すると非対話環境（stdin が閉じている等）で
-  # 入力待ちのまま失敗する。backlog 自身のドキュメント通り、対象ディレクトリ名を
-  # 既定値として渡す。
+  # projectName は明示的に渡す。--defaults でも名前だけは省略すると非対話環境で
+  # 入力待ちのまま失敗する。対象ディレクトリ名を既定値として渡す。
   project_name="$(basename "$TARGET_REPO_ROOT")"
   log "[run]  backlog init \"$project_name\" --defaults --backlog-dir .backlog --agent-instructions none"
   (cd "$TARGET_REPO_ROOT" && backlog init "$project_name" --defaults --backlog-dir .backlog --agent-instructions none < /dev/null)
   CREATED+=(".backlog/ (backlog init)")
 fi
 
-# backlog init の既定 statuses（To Do, In Progress, Done）には、improvement
-# ループの4スキルが前提とする Proposed / In Review / Approved が無い。
+# backlog init の既定 statuses には Proposed / In Review / Approved が無い。
 # 新規作成・既存スキップのどちらの場合も、欠けていれば補う。
 ensure_backlog_statuses "$BACKLOG_CONFIG_YML"
 
-# ---- 3b. 旧ステータス名 "Reviewed" が残る既存タスク・statuses の移行（TASK-48） ----
-# TASK-8 で "Reviewed" は "Approved" にリネームされたが、この移行は本リポジトリ
-# 自身にしか反映されておらず、それ以前にこのツールをセットアップした既存
-# consumer リポジトリでは "Reviewed" が statuses に残り、status: Reviewed の
-# 既存タスクも残ったままになりうる。タスクの移行を、config.yml の statuses から
-# "Reviewed" を外すより先に行う（順序の理由は migrate_reviewed_status_in_config
-# のコメントを参照）。
+# ---- 3b. 旧ステータス名 "Reviewed" が残る既存タスク・statuses の移行 ----
+# タスクの移行を、config.yml の statuses から "Reviewed" を外すより先に行うこと
+# （順序の理由は migrate_reviewed_status_in_config のコメント）。
 migrate_reviewed_tasks "$TARGET_REPO_ROOT"
 migrate_reviewed_status_in_config "$BACKLOG_CONFIG_YML"
 
@@ -967,9 +855,7 @@ mkdir -p "$TARGET_REPO_ROOT/.backlog"
 if [ -f "$TARGET_CONFIG_FILE" ]; then
   log "[skip] .backlog/config.my.yml は既に存在する。既存のキーは上書きしない（ユーザー所有ファイル）。"
   ensure_config_my_yml_keys "$TARGET_CONFIG_FILE" "$SOURCE_CONFIG_FILE"
-  # 既存キーの説明コメントがテンプレートから取り残されていないかを確認する。
-  # 書き換えはせず、差異があることだけを人間に伝える（TASK-74）。新規配置
-  # （下の else）はテンプレートの丸ごとコピーなので定義上ズレず、呼ばない。
+  # 新規配置（下の else）はテンプレートの丸ごとコピーなので定義上ズレず、呼ばない。
   warn_config_my_yml_comment_drift "$TARGET_CONFIG_FILE" "$SOURCE_CONFIG_FILE"
 else
   cp "$SOURCE_CONFIG_FILE" "$TARGET_CONFIG_FILE"
@@ -1003,7 +889,7 @@ else
     log "  - $item"
   done
 fi
-# 該当が無ければ節ごと出さない（従来の出力を変えないため）。
+# 該当が無ければ節ごと出さない。
 if [ "${#WARNED[@]}" -gt 0 ]; then
   log "人手での確認が要る項目 (${#WARNED[@]} 件):"
   for item in "${WARNED[@]}"; do

@@ -1,41 +1,24 @@
-# bin/lib/list_opted_in_repos.sh
+# list_opted_in_repos() の唯一の定義。実行されず、必ず source される前提のため
+# シバンは付けない。
 #
-# list_opted_in_repos() の唯一の定義。ワークスペースディレクトリ（複数の git
-# リポジトリを直下（深さ1）にクローンしたディレクトリ）配下から、指定した
-# スキルに opt-in 済みのリポジトリを列挙する共有ロジック。
-# bin/lib/resolve_path.sh と同じ配置パターン（このファイル自体は実行されず、
-# 必ず source される前提。関数を1つ提供するだけの薄いファイル）を踏襲する。
+# opt-in 判定に専用のマーカーファイルは持たない。対象リポジトリ直下の
+# `.claude/skills/<skill_marker_name>`（bin/setup-improvement-loop が配置する
+# シンボリックリンク）が実在解決することだけを見る。
 #
-# opt-in 判定は「新規マーカーファイルを持たない」設計（Decision 4）のため、
-# 対象リポジトリ直下の `.claude/skills/<skill_marker_name>` が実在解決する
-# シンボリックリンクであることだけを見る。これは `bin/setup-improvement-loop`
-# （--workspace 無し）が各リポジトリに配置するシンボリックリンクと同じもので、
-# 例えば workspace-dispatch は "improvement-dispatch" を、workspace-scout は
-# "improvement-scout" を渡す。
-#
-# シンボリックリンクの解決には bin/lib/resolve_path.sh の resolve_path() を
-# 再利用する（同じ解決ロジックを重複実装しない）。このファイルは常に
-# bin/lib/resolve_path.sh と同じディレクトリに置かれている前提で、自分自身の
-# 場所からそれを source する。
+# resolve_path.sh とは常に同じディレクトリに置かれている前提で、自分の場所から source する。
 LIST_OPTED_IN_REPOS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=resolve_path.sh
 source "$LIST_OPTED_IN_REPOS_LIB_DIR/resolve_path.sh"
 
-# list_opted_in_repos: ワークスペースディレクトリ配下の直下（深さ1）の
-# サブディレクトリのうち、次の3条件すべてを満たすものの絶対パスを、
-# 1行1件・ソート済みで標準出力に書く。
-#   (a) ディレクトリであること
-#   (b) git リポジトリであること（`git -C "$dir" rev-parse --is-inside-work-tree` が成功する）
-#   (c) `.claude/skills/<skill_marker_name>` が実在解決するシンボリックリンクとして存在すること
-# 該当が0件でも正常終了する（何も出力しない）。
+# ワークスペースディレクトリの直下（深さ1）のサブディレクトリのうち、
+# (a) ディレクトリで (b) git リポジトリで (c) `.claude/skills/<skill_marker_name>` が
+# 実在解決するシンボリックリンクとして存在する、の3条件を満たすものの絶対パスを、
+# 1行1件・ソート済みで標準出力に書く。0件でも正常終了する。
 #
-# 引数:
-#   $1 = workspace_dir      ワークスペースディレクトリの絶対または相対パス
-#   $2 = skill_marker_name  opt-in 判定に使うスキル名（例: "improvement-dispatch"）
+# $1 = ワークスペースディレクトリ、$2 = スキル名（例: "improvement-dispatch"）。
 list_opted_in_repos() {
-  # set -u 下で source される呼び出し元（list-target-repos 等）から引数無しで
-  # 呼ばれても「unbound variable」でシェルごと落とさず、後続の空チェックで
-  # 通常のエラー終了（return 1）に倒すため、${1:-}/${2:-} で防御的に受ける。
+  # set -u の呼び出し元から引数無しで呼ばれても unbound variable でシェルごと
+  # 落とさず、下の空チェックで return 1 に倒すため ${1:-}/${2:-} で受ける。
   local workspace_dir="${1:-}"
   local skill_marker_name="${2:-}"
 
@@ -46,9 +29,8 @@ list_opted_in_repos() {
     return 0
   fi
 
-  # nullglob を一時的に有効化し、直下のサブディレクトリが1つも無い場合に
-  # グロブパターン文字列そのものが1件として展開されるのを防ぐ。呼び出し元の
-  # シェルオプションを変えないよう、元の状態を保存してから復元する。
+  # サブディレクトリが1つも無いときにグロブパターン文字列そのものが1件として
+  # 展開されるのを防ぐ。呼び出し元のシェルオプションは変えずに戻す。
   local had_nullglob=0
   case "$(shopt -p nullglob 2>/dev/null)" in
     *"-s nullglob"*) had_nullglob=1 ;;
@@ -75,8 +57,7 @@ list_opted_in_repos() {
     if [ ! -L "$marker_path" ]; then
       continue
     fi
-    # resolve_path（realpath 相当）はリンク切れ（リンク先が存在しない）の
-    # 場合に非ゼロで終了する。set -e で呼び出し元を落とさないよう if で受ける。
+    # resolve_path はリンク切れで非ゼロ終了する。set -e の呼び出し元を落とさないよう if で受ける。
     if ! resolve_path "$marker_path" >/dev/null 2>&1; then
       continue
     fi

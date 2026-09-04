@@ -1,18 +1,12 @@
 #!/usr/bin/env zsh
 # shellcheck shell=bash
-# install.zsh
+# improvement-loop の `bin/setup-improvement-loop` を $HOME/.local/bin へ
+# シンボリックリンクし、パスから使えるようにする。
+# 既に正しいリンク先を指していれば何もしない。別の実体があればエラーで停止する。
 #
-# 注意: これは zsh 専用スクリプトである。shellcheck は zsh を直接サポート
-# しないため（SC1071）、上の shell=bash ディレクティブで bash として解析
-# させている。zsh 固有の構文（${0:A:h} や print 組み込みなど）による
-# 誤検知が出る可能性がある点に留意すること。
-#
-# improvement-loop リポジトリの `bin/setup-improvement-loop` を
-# $HOME/.local/bin にシンボリックリンクし、パスから使えるようにする。
-#
-# 冪等性の方針:
-#   - 既に正しいリンク先を指していれば何もしない。
-#   - 別の実体（別リンク先のリンクを含む）が既に存在すればエラーで停止する。
+# 注意: これは zsh 専用である。shellcheck は zsh を直接サポートしない（SC1071）ため
+# 上の shell=bash ディレクティブで bash として解析させている。zsh 固有の構文
+# （${0:A:h}、print 組み込み等）による誤検知が出うる点に留意すること。
 
 set -euo pipefail
 
@@ -25,16 +19,14 @@ err() {
 }
 
 # ---- リポジトリのルートを、このファイル自身の場所から解決する ----
-# zsh 組み込みの ${0:A:h} が symlink 解決込みの絶対パスを返すため、
-# bin/setup-improvement-loop のようなブートストラップ用の自己完結ロジックは
-# 不要（この時点で REPO_ROOT が確定する）。
+# zsh 組み込みの ${0:A:h} が symlink 解決込みの絶対パスを返すので、
+# bin/setup-improvement-loop のようなブートストラップ処理は要らない。
 SCRIPT_DIR="${0:A:h}"
 REPO_ROOT="${SCRIPT_DIR}"
 SOURCE_BIN="$REPO_ROOT/bin/setup-improvement-loop"
 
-# resolve_path() の唯一の定義（TASK-18）を source する。bin/setup-improvement-loop
-# と異なりここでは REPO_ROOT が既に確定しているため、循環参照の制約が無く
-# そのまま source できる。
+# ここでは REPO_ROOT が既に確定しているため、bin/setup-improvement-loop と違って
+# 循環参照の制約が無く、resolve_path() の唯一の定義をそのまま source できる。
 # shellcheck source=bin/lib/resolve_path.sh
 source "$REPO_ROOT/bin/lib/resolve_path.sh"
 
@@ -53,8 +45,8 @@ DEST="$LOCAL_BIN/setup-improvement-loop"
 mkdir -p "$LOCAL_BIN"
 
 if [ -L "$DEST" ]; then
-  # リンク切れ（リンク先が存在しない）の場合 resolve_path（realpath）が
-  # 非ゼロで終了しうる。set -e で落とさず「別のリンク先」として扱う。
+  # リンク切れの場合 resolve_path が非ゼロ終了しうる。set -e で落とさず
+  # 「別のリンク先」として扱う。
   resolved_existing="$(resolve_path "$DEST" 2>/dev/null)" || resolved_existing=""
   resolved_src="$(resolve_path "$SOURCE_BIN")"
   if [ "$resolved_existing" = "$resolved_src" ]; then

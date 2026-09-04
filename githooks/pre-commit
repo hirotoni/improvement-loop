@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# githooks/pre-commit
+# improvement-loop 自身の開発用 pre-commit フック。コミット前に tests/run.sh を
+# 実行し、FAIL があればコミットをブロックする。
 #
-# improvement-loop 自身の開発用 pre-commit フック。
-# コミット前に tests/run.sh を実行し、FAIL があればコミットをブロックする。
-#
-# 有効化手順は README.md を参照（core.hooksPath をこのディレクトリに向ける
-# 一回限りの設定が必要。デフォルトの .git/hooks は git 管理外のため、
-# このスクリプト自体を配置するだけでは有効にならない）。
-#
-# GitHub Actions 等の CI は対象外（このリポジトリは個人ローカル運用が前提）。
+# 有効化には core.hooksPath をこのディレクトリに向ける一回限りの設定が要る
+# （手順は README.md）。配置するだけでは有効にならない。
 
 set -uo pipefail
 
@@ -20,6 +15,5 @@ if [ ! -f "$TESTS_SCRIPT" ]; then
   exit 0
 fi
 
-# 実行ビットの有無に関わらず bash 経由で起動する（tests/run.sh 自体は実行
-# ビット付きで管理されている想定だが、フック側は依存しない）。
+# 実行ビットの有無に依存しないよう bash 経由で起動する。
 exec bash "$TESTS_SCRIPT"
