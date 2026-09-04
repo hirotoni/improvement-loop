@@ -20,12 +20,18 @@ check_test_dependencies
 echo "=== 1. 構文チェック ==="
 
 # CHECK_SCRIPTS: bash -n / shellcheck の対象スクリプトを列挙する単一の情報源。
-# 新しいスクリプトを構文チェック対象に加えるには、ここに1エントリ追加するだけでよい
-# （変数宣言は tests/lib/common.sh で別途行う。パスと変数を1対1にしたのは、対象スクリプトの
-# 実体パスが REPO_ROOT からの導出であり、かつ他ファイル（setup実行や
-# select-next-task の直接呼び出し等）でも同じ変数を使い回すため）。
+# 次の2部で構成する。
+# - この配列リテラル: tests/ 配下**以外**のスクリプト。新しいスクリプトを構文チェック
+#   対象に加えるには、ここに1エントリ追加するだけでよい（変数宣言は tests/lib/common.sh で
+#   別途行う。パスと変数を1対1にしたのは、対象スクリプトの実体パスが REPO_ROOT からの
+#   導出であり、かつ他ファイル（setup実行や select-next-task の直接呼び出し等）でも
+#   同じ変数を使い回すため）。
+# - この配列の直後のブロック: tests/ 配下のスクリプト。こちらは列挙を書かず、実体を
+#   単一の情報源として動的に追記する（理由はそのブロックのコメントを参照。TASK-83）。
 #
-# 各要素はパイプ区切りの1行で「<パス変数>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
+# 各要素はパイプ区切りの1行で「<スクリプトの絶対パス>|<表示ラベル>|<shellcheckへの追加フラグ>|<shellcheck指摘をhard failureにしないか(true/false)>」。
+# 上の配列リテラルが1フィールド目を $VAR で書いているのは値の書き方に過ぎず、格納
+# されるのは展開後のパス文字列である（下のループはパスとしてしか読まない）。
 # - `-x -P SCRIPTDIR` が必要なのは、他のスクリプト/ライブラリを source する
 #   スクリプト（bin/setup-improvement-loop・install.zsh・
 #   bin/lib/list_opted_in_repos.sh・claude-code/workspace-skills/workspace-dispatch・
@@ -67,6 +73,113 @@ CHECK_SCRIPTS=(
   "$CHECK_RECOVERY_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-progress-recovery||false"
   "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
 )
+
+# ---- tests/ 配下のスクリプトを実体から動的に追記する（TASK-83） ----
+#
+# tests/ 配下だけは列挙を書かず、実体を単一の情報源として動的に CHECK_SCRIPTS へ
+# 追記する。理由は2つある。
+# - tests/ はテストを増やすたびにファイルが増える場所であり、ここを列挙で持つと
+#   登録漏れがそのまま「静的検査を一度も通らないテストコード」になる。実際、この
+#   ブロックを入れるまで tests/ 配下は1件も bash -n / shellcheck にかかっておらず、
+#   新しいテストを書くたびに人手で shellcheck を実行する習慣で埋め合わせていた。
+#   同じ「ハードコードの列挙が実体から乖離する」事故は TASK-3（SKILL_NAMES）・
+#   TASK-60（CHECK_SCRIPTS）・TASK-78（TEST_FILES）で既に3度起きている。
+# - 上の静的な列挙が tests/lib/common.sh のパス変数と1対1なのは、それらのパスを
+#   他のテストファイルでも使い回すためである。tests/ 配下のファイルは構文チェック
+#   以外に参照されないので、common.sh に変数を増やす理由が無い。
+#
+# CHECK_SCRIPTS の1フィールド目は「パス変数」ではなく展開済みのパス文字列である
+# （下の2つのループは IFS='|' read でパスとして受け取るだけで、変数名としては
+# 解決しない）。したがって $REPO_ROOT からパスを組み立ててそのまま追記できる。
+#
+# 実体の列挙は shopt -s nullglob 方式で、tests/run.sh の TEST_FILES 網羅性検査
+# （TASK-78）および bin/setup-improvement-loop の SKILL_NAMES と同じ作法である。
+#
+# 追加フラグ（第3フィールド）はファイルの種類で決める。
+# - tests/lib/*.sh: 実行されず source される共通基盤で、シバンを持たない
+#   （tests/lib/common.sh 冒頭コメント参照）。bin/lib/*.sh とまったく同じ事情なので
+#   --shell=bash を渡す（渡さないと SC2148 (error) で必ず失敗する）。加えて
+#   -e SC2034 を渡す。ここが定義する共有変数の消費者は source する側のファイルに
+#   あり、単体で解析する shellcheck からは見えないため、共有変数がすべて「未使用」
+#   として報告されるからである（TASK-83 時点で19件）。対象ファイル自身に disable
+#   ディレクティブを書き足さずフラグ側で解決するのは、bin/lib/*.sh に --shell=bash を
+#   渡しているのと同じ判断である（上のコメント参照）。
+# - tests/test_*.sh: tests/lib/common.sh を source するので -x -P SCRIPTDIR。
+# - それ以外の tests/*.sh（現状は tests/run.sh のみ）: 他を source しないランナー
+#   なので追加フラグは要らない。将来ここに source するファイルが増えると SC1091 で
+#   FAIL するが、そのときは分類を足すかどうかを明示的に決めればよい（無音で
+#   検査から漏れるより、失敗して気づける方を選ぶ）。
+# allow_fail はいずれも false とし、指摘はそのまま hard failure にする。
+#
+# このファイル自身も対象に入るため、以降のコメントの語順には制約がある。字下げを
+# 含めてハッシュ記号の直後が shellcheck という語で始まる行は、ディレクティブとして
+# 解釈されようとして SC1072/SC1073 (error) になる。書くときは語順を変えて避ける。
+#
+# TESTS_SC_EXTRA_FLAGS: 上の分類だけでは shellcheck がクリーンに通らないファイルへの
+# 追加フラグ。「<tests/ からの相対パス>|<追加フラグ>」の1行1エントリ。本来は対象
+# ファイル自身に `# shellcheck disable=...` を書くのが解であるものの、それができない
+# 場合の逃げ道である。実体が消えたエントリが残らないよう、下で陳腐化を検査する
+# （tests/run.sh の EXCLUDED_TEST_FILES に対する同じ向きの検査と同じ形）。
+TESTS_SC_EXTRA_FLAGS=(
+  # tests/test_setup_improvement_loop.sh の sed 置換に含まれる後方参照に対する SC2016
+  # (info)。後方参照はシングルクォートのままでなければ壊れるので、「シングルクォート
+  # では展開されない」という指摘自体が誤検知である。当該ファイルに disable ディレク
+  # ティブを書き足すのが本来の解だが、それは対象スクリプトへの変更になるため、
+  # bin/lib/*.sh と同じくフラグ側で解決する。
+  "test_setup_improvement_loop.sh|-e SC2016"
+)
+
+TESTS_SCRIPT_RELPATHS=()
+shopt -s nullglob
+for tests_path in "$REPO_ROOT"/tests/*.sh "$REPO_ROOT"/tests/lib/*.sh; do
+  [ -f "$tests_path" ] || continue
+  TESTS_SCRIPT_RELPATHS+=("${tests_path#"$REPO_ROOT"/}")
+done
+shopt -u nullglob
+
+for tests_rel in "${TESTS_SCRIPT_RELPATHS[@]}"; do
+  case "$tests_rel" in
+    tests/lib/*) tests_sc_flags="--shell=bash -e SC2034" ;;
+    tests/test_*) tests_sc_flags="-x -P SCRIPTDIR" ;;
+    *) tests_sc_flags="" ;;
+  esac
+
+  # ファイル単位の追加フラグを後ろに連結する。要素数で場合分けするのは、macOS 既定の
+  # bash 3.2 では set -u 下で空配列を "${arr[@]}" と展開すると unbound variable に
+  # なるためである（tests/lib/common.sh の cleanup_registered_tmp_paths と同じ書き方）。
+  if [ "${#TESTS_SC_EXTRA_FLAGS[@]}" -gt 0 ]; then
+    for tests_extra_entry in "${TESTS_SC_EXTRA_FLAGS[@]}"; do
+      IFS='|' read -r tests_extra_name tests_extra_flags <<<"$tests_extra_entry"
+      if [ "$tests_rel" = "tests/$tests_extra_name" ]; then
+        tests_sc_flags="${tests_sc_flags:+$tests_sc_flags }$tests_extra_flags"
+      fi
+    done
+  fi
+
+  CHECK_SCRIPTS+=("$REPO_ROOT/$tests_rel|$tests_rel|$tests_sc_flags|false")
+done
+
+# 列挙そのものが壊れていないかを検査する。0件のまま静かに通ると、tests/ 配下が
+# 対象外だった状態へ無音で戻ってしまう。
+tests_enum_problems=""
+if [ "${#TESTS_SCRIPT_RELPATHS[@]}" -eq 0 ]; then
+  tests_enum_problems+="  tests/ 配下にシェルスクリプトが1件も見つからない（列挙条件の不具合の可能性がある）"$'\n'
+fi
+if [ "${#TESTS_SC_EXTRA_FLAGS[@]}" -gt 0 ]; then
+  for tests_extra_entry in "${TESTS_SC_EXTRA_FLAGS[@]}"; do
+    IFS='|' read -r tests_extra_name _tests_extra_flags <<<"$tests_extra_entry"
+    if [ ! -f "$REPO_ROOT/tests/$tests_extra_name" ]; then
+      tests_enum_problems+="  TESTS_SC_EXTRA_FLAGS の $tests_extra_name に対応する実体が tests/ に無い（追加フラグの記述が実体から取り残されている）"$'\n'
+    fi
+  done
+fi
+
+if [ -z "$tests_enum_problems" ]; then
+  pass "tests/ 配下のシェルスクリプト ${#TESTS_SCRIPT_RELPATHS[@]}件を実体から列挙して CHECK_SCRIPTS に取り込んだ"
+else
+  fail "tests/ 配下の CHECK_SCRIPTS への取り込みに問題がある:
+${tests_enum_problems%$'\n'}"
+fi
 
 # bash -n の診断出力は一時ファイルではなくコマンド置換で変数に取る。以前は
 # `/tmp/tests-run-sh-syntax-err.$$` を直接組み立てて 2> でそこへ捨て、正常経路の
