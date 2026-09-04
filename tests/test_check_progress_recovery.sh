@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test_check_progress_recovery.sh
 #
-# claude-skills/improvement-dispatch/scripts/check-progress-recovery に対する
+# claude-code/skills/improvement-dispatch/scripts/check-progress-recovery に対する
 # テスト。単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
 # 全体実行の一部としても呼ばれる。
 #
@@ -16,9 +16,9 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 13. claude-skills/improvement-dispatch/scripts/check-progress-recovery の動作確認 ==="
+echo "=== 13. claude-code/skills/improvement-dispatch/scripts/check-progress-recovery の動作確認 ==="
 # improvement-dispatch 手順2-3（In Progress タスクの引き渡し先が失われたと
-# 確定した後の復旧診断）を切り出した claude-skills/improvement-dispatch/scripts/check-progress-recovery を、
+# 確定した後の復旧診断）を切り出した claude-code/skills/improvement-dispatch/scripts/check-progress-recovery を、
 # 一時 git リポジトリに対して実際に実行して検証する（TASK-21 受入基準 #1-#3 に対応）。
 #   13a. ワークツリー有り・ブランチ有り・新しいコミット有り -> REUSE_WORKTREE_REDISPATCH（AC#1）
 #   13b. ワークツリー無し・ブランチ有り・新しいコミット有り -> RECREATE_WORKTREE_REDISPATCH（AC#2）
@@ -37,7 +37,7 @@ echo "=== 13. claude-skills/improvement-dispatch/scripts/check-progress-recovery
 
 TMP_CR_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
-# claude-skills/improvement-dispatch/scripts/check-progress-recovery 内部の pwd -P による正規化後
+# claude-code/skills/improvement-dispatch/scripts/check-progress-recovery 内部の pwd -P による正規化後
 # （/private/var/...）と文字列比較が一致しない。ここでも同じ正規化をしておく。
 TMP_CR_REPO="$(cd "$TMP_CR_REPO" && pwd -P)"
 CR_WORKTREE_DIR="${TMP_CR_REPO}-wt"
@@ -125,9 +125,9 @@ fi
 echo ""
 echo "--- 13e. 引数の妥当性検証 ---"
 if (cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a >/dev/null 2>&1); then
-  fail "13e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行してもエラーにならない"
+  fail "13e: 引数不足で claude-code/skills/improvement-dispatch/scripts/check-progress-recovery を実行してもエラーにならない"
 else
-  pass "13e: 引数不足で claude-skills/improvement-dispatch/scripts/check-progress-recovery を実行するとエラーになる"
+  pass "13e: 引数不足で claude-code/skills/improvement-dispatch/scripts/check-progress-recovery を実行するとエラーになる"
 fi
 
 cr_out_badbase="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR" feature-recovery-a no-such-base 2>&1)"

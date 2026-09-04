@@ -23,8 +23,8 @@ npm install -g backlog.md
 2. 対象リポジトリで `setup-improvement-loop [対象リポジトリのパス]` を実行する。以下を冪等に行う。
    - `backlog init`（`.backlog/config.yml` が未導入の場合のみ）
    - `.backlog/config.yml` の `statuses` に improvement ループが前提とする6状態（`Proposed` / `To Do` / `In Progress` / `In Review` / `Approved` / `Done`）のうち欠けているものを補う
-   - `claude-skills/` 配下の5スキル（improvement-add / improvement-scout / improvement-scout-major / improvement-dispatch / improvement-work）を `.claude/skills/` にシンボリックリンクとして配置する
-   - `backlogmd-custom-config/config.my.yml`（improvement ループ独自の調整値）を `.backlog/config.my.yml` として配置する
+   - `claude-code/skills/` 配下の5スキル（improvement-add / improvement-scout / improvement-scout-major / improvement-dispatch / improvement-work）を `.claude/skills/` にシンボリックリンクとして配置する
+   - `backlog-md/config.my.yml`（improvement ループ独自の調整値）を `.backlog/config.my.yml` として配置する
    - `.backlog/` と配置したスキル群を `.git/info/exclude` に追記し、対象リポジトリを汚染しないようにする
 
 ```
@@ -44,7 +44,7 @@ npm install -g backlog.md
 
 ## 使い方
 
-improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の5スキルが分担して動かす。状態遷移の正本は `claude-skills/status-table.md` にある。各スキルの詳細（引数、手順、入出力例）はこの README には書かず、対応する `claude-skills/<name>/SKILL.md` を参照すること。
+improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の5スキルが分担して動かす。状態遷移の正本は `claude-code/skills/status-table.md` にある。各スキルの詳細（引数、手順、入出力例）はこの README には書かず、対応する `claude-code/skills/<name>/SKILL.md` を参照すること。
 
 - **improvement-add**: 人間が伝えた改善要望を、そのまま `Proposed` として起票する。
 - **improvement-scout**: コードベースを探索し、改善候補を選別して `Proposed` として起票する（1回の実行で最大3件）。

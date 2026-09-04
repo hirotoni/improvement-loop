@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test_check_handoff.sh
 #
-# claude-skills/improvement-work/scripts/check-handoff に対するテスト。
+# claude-code/skills/improvement-work/scripts/check-handoff に対するテスト。
 # 単体で実行すると、このファイルの検証だけが走る。tests/run.sh から
 # 全体実行の一部としても呼ばれる。
 #
@@ -16,10 +16,10 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 12. claude-skills/improvement-work/scripts/check-handoff の動作確認 ==="
+echo "=== 12. claude-code/skills/improvement-work/scripts/check-handoff の動作確認 ==="
 # improvement-work 手順1（引き渡し内容の確認）の3条件（作業ディレクトリ一致・
 # ブランチ一致・.backlog シンボリックリンクの健全性）を切り出した
-# claude-skills/improvement-work/scripts/check-handoff を、一時 git リポジトリに対して
+# claude-code/skills/improvement-work/scripts/check-handoff を、一時 git リポジトリに対して
 # 実際に実行して検証する（TASK-24 受入基準 #1-#4 に対応）。
 
 TMP_HANDOFF_REPO="$(mktemp -d)"

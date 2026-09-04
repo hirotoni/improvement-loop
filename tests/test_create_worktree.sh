@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test_create_worktree.sh
 #
-# claude-skills/improvement-dispatch/scripts/create-worktree に対するテスト
+# claude-code/skills/improvement-dispatch/scripts/create-worktree に対するテスト
 # （既定の worktree_base_dir・カスタム worktree_base_dir の両方）。単体で
 # 実行すると、このファイルの検証だけが走る。tests/run.sh から全体実行の
 # 一部としても呼ばれる。
@@ -17,16 +17,16 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 9. claude-skills/improvement-dispatch/scripts/create-worktree の動作確認 ==="
-# claude-skills/improvement-dispatch/SKILL.md 手順5から切り出したワークツリー
+echo "=== 9. claude-code/skills/improvement-dispatch/scripts/create-worktree の動作確認 ==="
+# claude-code/skills/improvement-dispatch/SKILL.md 手順5から切り出したワークツリー
 # 作成スクリプトを、実際に一時 git リポジトリに対して実行して検証する。
 # git init の既定ブランチ名は環境（init.defaultBranch）によって異なりうるため、
-# main を明示して作成し、claude-skills/improvement-dispatch/scripts/create-worktree 内のデフォルトブランチ判定
+# main を明示して作成し、claude-code/skills/improvement-dispatch/scripts/create-worktree 内のデフォルトブランチ判定
 # （フェッチ不可時に main へフォールバック）と整合させる。
 
 TMP_CW_REPO="$(mktemp -d)"
 # macOS では mktemp -d が返すパス（/var/...）がシンボリックリンクであり、
-# claude-skills/improvement-dispatch/scripts/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
+# claude-code/skills/improvement-dispatch/scripts/create-worktree 内部の pwd -P による正規化後（/private/var/...）と
 # 文字列比較が一致しない。ここでも同じ正規化をしておく。
 TMP_CW_REPO="$(cd "$TMP_CW_REPO" && pwd -P)"
 register_tmp_cleanup "$TMP_CW_REPO"
@@ -40,9 +40,9 @@ CW_EXPECTED_BRANCH="improvement/$CW_TASK_ID"
 cw_output1="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
 cw_exit1=$?
 if [ "$cw_exit1" -eq 0 ]; then
-  pass "1回目の claude-skills/improvement-dispatch/scripts/create-worktree 実行が成功する（exit 0）"
+  pass "1回目の claude-code/skills/improvement-dispatch/scripts/create-worktree 実行が成功する（exit 0）"
 else
-  fail "1回目の claude-skills/improvement-dispatch/scripts/create-worktree 実行が失敗した（exit ${cw_exit1}）:
+  fail "1回目の claude-code/skills/improvement-dispatch/scripts/create-worktree 実行が失敗した（exit ${cw_exit1}）:
 $cw_output1"
 fi
 
@@ -137,9 +137,9 @@ sleep 1
 cw_output2="$(cd "$TMP_CW_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_TASK_ID" 2>&1)"
 cw_exit2=$?
 if [ "$cw_exit2" -eq 0 ]; then
-  pass "2回目の claude-skills/improvement-dispatch/scripts/create-worktree 実行（同じ task-id）が成功する（exit 0、冪等性）"
+  pass "2回目の claude-code/skills/improvement-dispatch/scripts/create-worktree 実行（同じ task-id）が成功する（exit 0、冪等性）"
 else
-  fail "2回目の claude-skills/improvement-dispatch/scripts/create-worktree 実行が失敗した（exit ${cw_exit2}）:
+  fail "2回目の claude-code/skills/improvement-dispatch/scripts/create-worktree 実行が失敗した（exit ${cw_exit2}）:
 $cw_output2"
 fi
 
@@ -205,7 +205,7 @@ CW_SPACE_EXPECTED_BRANCH="improvement/$CW_SPACE_TASK_ID"
 cw_space_output1="$(cd "$TMP_CW_SPACE_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_SPACE_TASK_ID" 2>&1)"
 cw_space_exit1=$?
 if [ "$cw_space_exit1" -eq 0 ]; then
-  pass "パスに半角スペースを含むリポジトリでの1回目の claude-skills/improvement-dispatch/scripts/create-worktree 実行が成功する（exit 0）（TASK-55 回帰）"
+  pass "パスに半角スペースを含むリポジトリでの1回目の claude-code/skills/improvement-dispatch/scripts/create-worktree 実行が成功する（exit 0）（TASK-55 回帰）"
 else
   fail "パスに半角スペースを含むリポジトリでの1回目の実行が失敗した（exit ${cw_space_exit1}）（TASK-55 回帰）:
 $cw_space_output1"
@@ -269,9 +269,9 @@ fi
 
 # ---- 引数の妥当性検証 ----
 if "$CREATE_WORKTREE_SCRIPT" >/dev/null 2>&1; then
-  fail "引数無しで claude-skills/improvement-dispatch/scripts/create-worktree を実行してもエラーにならない"
+  fail "引数無しで claude-code/skills/improvement-dispatch/scripts/create-worktree を実行してもエラーにならない"
 else
-  pass "引数無しで claude-skills/improvement-dispatch/scripts/create-worktree を実行するとエラーになる"
+  pass "引数無しで claude-code/skills/improvement-dispatch/scripts/create-worktree を実行するとエラーになる"
 fi
 
 if "$CREATE_WORKTREE_SCRIPT" "Invalid_Task_ID!" >/dev/null 2>&1; then
@@ -330,7 +330,7 @@ fi
 
 echo ""
 echo "=== 9c. git コマンドが PATH に無い環境での動作確認（TASK-58） ==="
-# claude-skills/improvement-dispatch/scripts/create-worktree:80 の
+# claude-code/skills/improvement-dispatch/scripts/create-worktree:80 の
 # REPO_ROOT="$(git rev-parse --show-toplevel)" は、git が PATH に無い環境では
 # 保護されていないと生の "command not found" で exit 127 になり、他の兄弟
 # スクリプト（merge-reviewed-branch 等）と異なり err() 経由の診断メッセージも
@@ -387,10 +387,10 @@ else
 fi
 
 echo ""
-echo "=== 10. claude-skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
+echo "=== 10. claude-code/skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # TASK-13 で導入された improvement_loop.worktree_base_dir の判定ロジック
 # （リポジトリ内相対パスの解決・.git/info/exclude への追記）が、
-# claude-skills/improvement-dispatch/scripts/create-worktree へ切り出した後も維持されていることを確認する。
+# claude-code/skills/improvement-dispatch/scripts/create-worktree へ切り出した後も維持されていることを確認する。
 
 TMP_CW_BASEDIR_REPO="$(mktemp -d)"
 register_tmp_cleanup "$TMP_CW_BASEDIR_REPO"

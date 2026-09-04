@@ -4,9 +4,9 @@
 #
 # `git worktree list --porcelain` の出力から worktree/branch の対応を復元する
 # 処理が、次の2箇所に独立した awk 実装として存在していた。
-#   - claude-skills/improvement-dispatch/scripts/create-worktree
+#   - claude-code/skills/improvement-dispatch/scripts/create-worktree
 #     （WORKTREE_DIR → 割り当てブランチを求める）
-#   - claude-skills/improvement-dispatch/scripts/merge-reviewed-branch
+#   - claude-code/skills/improvement-dispatch/scripts/merge-reviewed-branch
 #     （branch → 対応する worktree のパスを求める）
 # どちらも porcelain の "worktree " 行はパスに半角スペースを含みうるため
 # awk のデフォルトフィールド分割（$2）ではスペース以降が切り捨てられる

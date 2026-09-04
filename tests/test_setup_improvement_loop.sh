@@ -16,7 +16,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-# SKILL_NAMES は claude-skills/ ディレクトリの実体を単一の情報源として動的に
+# SKILL_NAMES は claude-code/skills/ ディレクトリの実体を単一の情報源として動的に
 # 列挙する。bin/setup-improvement-loop 側と同じ方式で導出することで、片方だけ
 # 更新して他方が追随しないという実装依存の同期漏れを構造的に無くす。
 shopt -s nullglob
@@ -26,7 +26,7 @@ for skill_dir in "$SOURCE_SKILLS_DIR"/*/; do
 done
 shopt -u nullglob
 if [ "${#SKILL_NAMES[@]}" -eq 0 ]; then
-  printf 'FAIL: claude-skills 配下にスキルディレクトリが1つも無い: %s\n' "$SOURCE_SKILLS_DIR"
+  printf 'FAIL: claude-code/skills 配下にスキルディレクトリが1つも無い: %s\n' "$SOURCE_SKILLS_DIR"
   exit 1
 fi
 
@@ -71,13 +71,13 @@ assert_statuses_present() {
 
 echo "=== 1d. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
 # REQUIRED_STATUSES（上で導出済み）と、TASK-30 で新設された状態遷移表の正本
-# （claude-skills/status-table.md）の「## 状態遷移表」節に列挙されたステータス名の
+# （claude-code/skills/status-table.md）の「## 状態遷移表」節に列挙されたステータス名の
 # 集合が一致することを検証する。ステータス名の情報源が2箇所に分かれている以上、
 # 将来どちらか一方だけが更新されて食い違う可能性が残るため、その食い違いを
 # 検知する回帰テスト（TASK-32）。
-STATUS_TABLE_FILE="$REPO_ROOT/claude-skills/status-table.md"
+STATUS_TABLE_FILE="$REPO_ROOT/claude-code/skills/status-table.md"
 if [ ! -f "$STATUS_TABLE_FILE" ]; then
-  fail "claude-skills/status-table.md が存在しない"
+  fail "claude-code/skills/status-table.md が存在しない"
 else
   table_statuses_raw="$(awk '
     /^## 状態遷移表/ { flag=1; next }
@@ -86,7 +86,7 @@ else
   ' "$STATUS_TABLE_FILE" | grep -E '^\| `' | sed -E 's/^\| `([^`]*)`.*/\1/')"
 
   if [ -z "$table_statuses_raw" ]; then
-    fail "claude-skills/status-table.md の「## 状態遷移表」節からステータス名を1件も抽出できなかった（見出しや表の書式が変わった可能性がある）"
+    fail "claude-code/skills/status-table.md の「## 状態遷移表」節からステータス名を1件も抽出できなかった（見出しや表の書式が変わった可能性がある）"
   else
     TABLE_STATUSES=()
     while IFS= read -r line; do
@@ -97,10 +97,10 @@ else
     table_sorted="$(printf '%s\n' "${TABLE_STATUSES[@]}" | sort)"
 
     if [ "$required_sorted" = "$table_sorted" ]; then
-      pass "REQUIRED_STATUSES と claude-skills/status-table.md の状態遷移表のステータス名一覧が一致する"
+      pass "REQUIRED_STATUSES と claude-code/skills/status-table.md の状態遷移表のステータス名一覧が一致する"
     else
       diff_out="$(diff <(printf '%s\n' "$required_sorted") <(printf '%s\n' "$table_sorted"))"
-      fail "REQUIRED_STATUSES（bin/setup-improvement-loop）と claude-skills/status-table.md の状態遷移表のステータス名一覧が一致しない:
+      fail "REQUIRED_STATUSES（bin/setup-improvement-loop）と claude-code/skills/status-table.md の状態遷移表のステータス名一覧が一致しない:
 $diff_out"
     fi
   fi
@@ -133,7 +133,7 @@ for name in "${SKILL_NAMES[@]}"; do
     resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
     expected_resolved="$(cd "$expected_target" && pwd -P)"
     if [ "$resolved" = "$expected_resolved" ]; then
-      pass ".claude/skills/$name はリポジトリの claude-skills/$name への正しいシンボリックリンクである"
+      pass ".claude/skills/$name はリポジトリの claude-code/skills/$name への正しいシンボリックリンクである"
     else
       fail ".claude/skills/$name のリンク先が誤っている（${resolved} != ${expected_resolved}）"
     fi
@@ -195,7 +195,7 @@ echo "=== 2b. install.zsh 経由でシンボリックリンクされた状態で
 # install.zsh は bin/setup-improvement-loop を $HOME/.local/bin にシンボリック
 # リンクする。実際にインストールされた環境では、このスクリプトは常にリンク
 # 経由で起動される。BASH_SOURCE をシンボリックリンク解決せずに使うと、配布元
-# ルートの算出を誤り「配布元の claude-skills ディレクトリが見つからない」で
+# ルートの算出を誤り「配布元の claude-code/skills ディレクトリが見つからない」で
 # 落ちる（過去の不具合）。一時 $HOME に対して install.zsh を実行し、出来た
 # シンボリックリンク経由で setup-improvement-loop を起動して検証する。
 
@@ -241,7 +241,7 @@ $symlink_output"
       fi
     done
     if [ "$symlink_links_ok" = true ]; then
-      pass "シンボリックリンク経由実行でも、本物のリポジトリの claude-skills/ を配布元として正しく使えている"
+      pass "シンボリックリンク経由実行でも、本物のリポジトリの claude-code/skills/ を配布元として正しく使えている"
     fi
   else
     fail "install.zsh がシンボリックリンクを作成しなかった: $INSTALLED_SYMLINK"
@@ -449,7 +449,7 @@ assert_statuses_present "$multiline_result_config" "複数行リスト形式か�
 echo ""
 echo "=== 5b. statuses のシングルクォート形式に対する回帰テスト（TASK-62） ==="
 # parse_statuses_block はダブルクォートしか剥がさない不具合があった
-# （claude-skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
+# （claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の
 # trim_and_unquote はシングル/ダブル両方を対称に剥がすのに、
 # parse_statuses_block 側は非対称だった）。有効な YAML であるシングルクォートで
 # statuses を書いた場合に、既存要素が空扱いになったり、引用符付きのまま
@@ -562,7 +562,7 @@ fi
 
 echo ""
 echo "=== 6. config.my.yml の不足キー補完（マイグレーション）の回帰テスト ==="
-# 配布元テンプレート（backlogmd-custom-config/config.my.yml）に新しいキーが
+# 配布元テンプレート（backlog-md/config.my.yml）に新しいキーが
 # 追加された状況を、「導入先の config.my.yml に一部キーが欠けている」状態として
 # 再現する。setup-improvement-loop を実行すると、欠けているキーだけがテンプレート
 # 側のコメント・既定値付きで補われ、既存のキーの値・コメント、テンプレートに
@@ -1100,11 +1100,11 @@ fi
 echo ""
 echo "=== 9. --workspace フラグの検証 ==="
 # --workspace は既定動作（フラグ無し）とは完全に別の経路である。git 判定を
-# スキップし、claude-skills-workspace/ 配下のスキルだけを .claude/skills/ に
+# スキップし、claude-code/workspace-skills/ 配下のスキルだけを .claude/skills/ に
 # シンボリックリンクとして配置する。backlog init や .backlog/ 配下の配置は
 # 一切行わない（Scope参照）。
 
-# WORKSPACE_SKILL_NAMES は claude-skills-workspace/ ディレクトリの実体を単一の
+# WORKSPACE_SKILL_NAMES は claude-code/workspace-skills/ ディレクトリの実体を単一の
 # 情報源として動的に列挙する。bin/setup-improvement-loop 側の
 # SOURCE_WORKSPACE_SKILLS_DIR 動的列挙と同じ方式で導出する。
 shopt -s nullglob
@@ -1114,7 +1114,7 @@ for skill_dir in "$SOURCE_WORKSPACE_SKILLS_DIR"/*/; do
 done
 shopt -u nullglob
 if [ "${#WORKSPACE_SKILL_NAMES[@]}" -eq 0 ]; then
-  fail "claude-skills-workspace 配下にスキルディレクトリが1つも無い: $SOURCE_WORKSPACE_SKILLS_DIR"
+  fail "claude-code/workspace-skills 配下にスキルディレクトリが1つも無い: $SOURCE_WORKSPACE_SKILLS_DIR"
 fi
 
 # ---- 9a. 対象が git リポジトリでなくても成功する ----
@@ -1130,7 +1130,7 @@ else
 $workspace_plain_output"
 fi
 
-# ---- claude-skills-workspace/ の2スキルだけが配置される ----
+# ---- claude-code/workspace-skills/ の2スキルだけが配置される ----
 workspace_plain_links_ok=true
 for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
   link_path="$TMP_WORKSPACE_PLAIN/.claude/skills/$name"
@@ -1148,7 +1148,7 @@ for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
   fi
 done
 if [ "$workspace_plain_links_ok" = true ]; then
-  pass "9a: claude-skills-workspace/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる"
+  pass "9a: claude-code/workspace-skills/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる"
 fi
 
 # 単一リポジトリ用の5スキルが誤って混入していないことも確認する（Decision 6）。
@@ -1163,11 +1163,11 @@ if [ "$workspace_plain_no_repo_skills" = true ]; then
   pass "9a: --workspace 経路では単一リポジトリ用の5スキルが混入しない"
 fi
 
-# 配置される .claude/skills/ の件数が、claude-skills-workspace/ の件数と厳密に一致することも確認する
+# 配置される .claude/skills/ の件数が、claude-code/workspace-skills/ の件数と厳密に一致することも確認する
 # （想定外の余分なエントリが無いことの直接検証）。
 workspace_plain_actual_count="$(find "$TMP_WORKSPACE_PLAIN/.claude/skills" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 if [ "$workspace_plain_actual_count" = "${#WORKSPACE_SKILL_NAMES[@]}" ]; then
-  pass "9a: .claude/skills/ 配下のエントリ数が claude-skills-workspace/ の件数（${#WORKSPACE_SKILL_NAMES[@]}）と一致する"
+  pass "9a: .claude/skills/ 配下のエントリ数が claude-code/workspace-skills/ の件数（${#WORKSPACE_SKILL_NAMES[@]}）と一致する"
 else
   fail "9a: .claude/skills/ 配下のエントリ数が想定と異なる（実際: ${workspace_plain_actual_count}、期待: ${#WORKSPACE_SKILL_NAMES[@]}）"
 fi
