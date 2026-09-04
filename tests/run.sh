@@ -35,6 +35,7 @@ TEST_FILES=(
   "test_check_handoff.sh"
   "test_check_progress_recovery.sh"
   "test_check_forbidden_allowed_paths.sh"
+  "test_backlog_plain_single_source.sh"
 )
 
 TOTAL_PASS=0
