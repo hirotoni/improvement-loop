@@ -33,6 +33,7 @@ TEST_FILES=(
   "test_create_worktree.sh"
   "test_pre_commit_hook.sh"
   "test_check_handoff.sh"
+  "test_skill_script_lookup.sh"
   "test_check_progress_recovery.sh"
   "test_check_forbidden_allowed_paths.sh"
 )
