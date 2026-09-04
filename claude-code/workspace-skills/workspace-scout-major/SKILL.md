@@ -178,6 +178,10 @@ git -C <リポジトリのパス> ls-files
 これから初めて起票を行うリポジトリでは、`claude-code/skills/improvement-scout-major/SKILL.md` の
 「1. 前提を確認する」と同じ内容を、そのリポジトリのディレクトリで行う。
 
+次の各コマンドに `--plain` を付けるかどうかは、
+[`claude-code/skills/backlog-plain.md`](../../skills/backlog-plain.md) の正本に従う。
+ここに複製せず、実行する前にまず読む。
+
 ```bash
 backlog instructions overview
 backlog instructions task-creation
@@ -189,13 +193,7 @@ backlog task create --help
 ```
 
 `Proposed` が `statuses` に無ければ `.backlog/config.yml`（または `backlog/config.yml`）の
-`statuses` に先頭で追加する（`backlog config set` では変更できない）。上のブロックの
-`backlog config get` と `backlog instructions` は、`backlog config list` と同様に `--plain` を
-受け付けない。渡すと `error: unknown option '--plain'` を出して終了コード1で終わるため、
-`--plain` 無しで実行する（対話 UI にはならない）。`--plain` が必要なのは `backlog task list` /
-`backlog task view` / `backlog search` / `backlog milestone list` の側であり、こちらは付けないと
-対話 UI が起動してセッションが止まる。判断に迷うコマンドは `backlog <サブコマンド> --help` の
-Input schema に `--plain` があるかで確かめる。
+`statuses` に先頭で追加する（`backlog config set` では変更できない）。
 
 ### 6.3 各リポジトリで milestone を起票する
 

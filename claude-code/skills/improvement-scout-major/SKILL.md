@@ -47,11 +47,11 @@ description: コードベースを探索し、アーキテクチャ級の大き�
 
 ## 1. 前提を確認する
 
+- backlog CLI のどのコマンドに `--plain` を付けるかの正本は [`claude-code/skills/backlog-plain.md`](../backlog-plain.md) にある。ここに複製せず、以下の backlog コマンドを実行する前にまず読む。
 - `backlog instructions overview` と `backlog instructions task-creation` を読む。プロジェクトの規約が優先される。
 - `backlog config get statuses` を実行し、`Proposed` があるか確認する。ない場合は `.backlog/config.yml`（または `backlog/config.yml`）の `statuses` に `Proposed` を先頭で追加する。`statuses` は `backlog config set` では変更できず、backlog 自身が config ファイルの直接編集を案内する。設定にない status を渡すと作成が失敗する。
 - `backlog config get types` と `backlog config get priorities` で使える値を確認し、以降その値だけを渡す。
 - `backlog milestone add --help` と `backlog task create --help` で `-m/--milestone`・`--dep/--depends-on` が使えることを確認する。
-- `--plain` を付けるコマンドと、付けると失敗するコマンドを取り違えない。`backlog task list` / `backlog task view` / `backlog search` / `backlog milestone list` には必ず `--plain` を付ける。付けないと対話 UI が起動してセッションが止まる。一方 `backlog config get` / `backlog config list` / `backlog instructions` は `--plain` を受け付けない。渡すと `error: unknown option '--plain'` を出して終了コード1で終わる。これらは `--plain` 無しで実行する（対話 UI にはならず、値をそのまま出力して終了コード0で終わる）。ここに挙がっていないコマンドは、`backlog <サブコマンド> --help` の Input schema に `--plain` があるかで判断する。
 - `backlog task create`・`backlog milestone add` はタイトル・名前を引数で渡す（省略すると対話プロンプトになる）。
 
 ## 2. 観点に目を通す
