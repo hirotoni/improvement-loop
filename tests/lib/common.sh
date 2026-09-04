@@ -9,7 +9,7 @@
 # 提供するもの:
 # - REPO_ROOT および各対象スクリプト・設定ファイルへのパス変数
 # - PASS_COUNT/FAIL_COUNT/SKIP_COUNT と pass()/fail()/skip()
-# - check_test_dependencies(): git/backlog/bash-or-zsh が無い環境での
+# - check_test_dependencies(): git/backlog/bash が無い環境での
 #   スキップ判定（各テストファイルの冒頭で呼ぶ）
 # - register_tmp_cleanup()/cleanup_registered_tmp_paths(): 一時ディレクトリの
 #   後片付けをレジストリ方式でまとめる。新しい一時ディレクトリを使うテストを
@@ -63,20 +63,40 @@ skip() {
   printf 'SKIP: %s\n' "$1"
 }
 
-# check_test_dependencies: 必須依存（git/backlog、bashまたはzsh）が
-# 無ければその旨を報告して exit 0 する（テスト対象の不具合として
-# 扱わずスキップする）。各テストファイルの冒頭で呼ぶ。
+# check_test_dependencies: 必須依存（git・backlog・bash）が無ければ
+# その旨を報告して exit 0 する（テスト対象の不具合として扱わず
+# スキップする）。各テストファイルの冒頭で呼ぶ。
+#
+# bash は「zsh でも代替できる依存」ではなく単独の必須依存である。
+# tests/run.sh は各テストファイルを bash "$test_path" として起動し、
+# githooks/pre-commit も exec bash で run.sh を起動する。テスト本体も
+# BASH_SOURCE・BASH_REMATCH・shopt など zsh では同じ意味にならない
+# bash 固有の機能に依存している。
+#
+# このリポジトリは macOS での実行を前提としており（README「前提条件」）、
+# macOS では /bin/bash が OS 同梱で削除できないため、bash が欠けて
+# ここに引っかかることは通常は起こらない。それでも bash を単独の必須依存
+# として見ているのは、PATH を絞った実行など例外的な状況で判定が素通り
+# しないようにするためである。以前はここで bash と zsh を or 条件で見て
+# いたため、zsh さえあれば依存を満たすと判定され、そのあとテスト本体が
+# command not found で落ちても失敗の原因が依存不足だとは伝わらなかった
+# （TASK-81）。
+#
+# zsh はここでは見ない。zsh が要るのは install.zsh（シバンが
+# #!/usr/bin/env zsh の zsh 専用スクリプト）を実行するときだけであり、
+# bash の代わりに使えるものではない。その依存は install.zsh を実際に
+# 実行する tests/test_setup_improvement_loop.sh が、使用箇所で
+# command -v zsh を見て skip する形で局所的に扱う。ここで zsh を共通の
+# 必須依存にすると、install.zsh に触れないテストまで zsh が無いだけで
+# 丸ごと止まってしまう。
 check_test_dependencies() {
   local missing=()
   local cmd
-  for cmd in git backlog; do
+  for cmd in git backlog bash; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
   done
-  if ! command -v bash >/dev/null 2>&1 && ! command -v zsh >/dev/null 2>&1; then
-    missing+=("bash または zsh")
-  fi
 
   if [ "${#missing[@]}" -gt 0 ]; then
     printf 'このテストの必須依存が無いためスキップする: %s\n' "${missing[*]}"
