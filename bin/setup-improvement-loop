@@ -23,6 +23,10 @@
 #   - backlog init は .backlog/config.yml が無いときだけ実行する。
 #   - .backlog/config.yml の statuses は、欠けている improvement ループ既定の
 #     ステータスだけを補う（既存の要素・順序・ユーザー独自のステータスは変更しない）。
+#   - .backlog/config.yml の default_assignee は、値が improvement ループの既定値
+#     （@improvement-loop-bot）である場合に限り、backlog CLI の再シリアライズに耐える
+#     形へ収束させる。ユーザーが設定した別のアサイニー名には触れない（理由は
+#     ensure_default_assignee のコメント）。
 
 set -euo pipefail
 
@@ -323,31 +327,130 @@ ensure_remote_operations_disabled() {
   CREATED+=("backlog config remoteOperations (false に設定)")
 }
 
+# タスクの起票者を improvement-loop-bot に統一する既定アサイニー名。config.yml に
+# 書き込む値であると同時に、収束の対象を「improvement-loop 自身が書いた既定値」だけに
+# 絞るための判定材料でもある。ユーザーが自分で決めた別のアサイニー名は対象外である。
+DEFAULT_ASSIGNEE_BOT='@improvement-loop-bot'
+
+# config.yml の default_assignee 行から、囲みの引用符とインライン配列の角括弧を
+# 取り除いた「アサイニー名そのもの」を標準出力に書く。
+#
+# 剥がすのは次の3形だけである。
+#   "@x"    → @x   正準形。backlog CLI の再シリアライズを往復しても変わらない
+#   ["@x"]  → @x   以前の improvement-loop が直接追記していた形
+#   "[@x]"  → @x   上の形を backlog CLI が再シリアライズして壊した形
+#
+# 行末コメントが付いている行では角括弧の対応が取れず、結果はアサイニー名に一致しない。
+# これは意図した振る舞いである。setup-improvement-loop も backlog CLI もその形を書かない
+# ので、書いたのは人間である。判定を凝らして人の書いたコメントを落とす危険を取るより、
+# 収束対象外として無変更で残す方に倒す。
+default_assignee_core_value() {
+  local raw="$1"
+
+  local value="${raw#default_assignee:}"
+  value="$(trim_and_unquote "$value")"
+  if [ "${#value}" -ge 2 ] && [ "${value:0:1}" = "[" ] && [ "${value:${#value}-1}" = "]" ]; then
+    value="$(trim_and_unquote "${value:1:${#value}-2}")"
+  fi
+  printf '%s' "$value"
+}
+
+# config.yml の最初の default_assignee 行を、渡した1行で置き換える。
+# 書き戻しを mv ではなく元ファイルへの上書きで行う理由は write_statuses_block と同じ
+# （mktemp が作った 0600 と inode ごと差し替わり、パーミッション・所有者が黙って変わる）。
+replace_default_assignee_line() {
+  local config_file="$1"
+  local new_line="$2"
+
+  local line_num
+  line_num="$(grep -n -m1 '^default_assignee:' "$config_file" | cut -d: -f1 || true)"
+  if [ -z "$line_num" ]; then
+    err "config.yml に default_assignee 行が見つからない。手動で確認すること: $config_file"
+    exit 1
+  fi
+
+  local tmp_file
+  tmp_file="$(mktemp "${config_file}.XXXXXX")"
+  awk -v newline="$new_line" -v target="$line_num" '
+    NR == target { print newline; next }
+    { print }
+  ' "$config_file" > "$tmp_file"
+  cat "$tmp_file" > "$config_file"
+  rm -f "$tmp_file"
+}
+
 # タスクの起票者を improvement-loop-bot に統一する既定アサイニー設定。
 # backlog CLI 1.48.0（README.md 記載の動作確認済み最小バージョン）にはこのキーが
 # 無く `backlog config set defaultAssignee` は "Unknown config key" で失敗するため、
 # CLI が対応していれば正規の手段で設定し、対応していなければ config.yml へ直接
 # 追記する（将来 CLI が読めるようになった時点で有効になる）。
-# 既に default_assignee があればユーザーの値を優先し、上書きしない。
+#
+# 書き込む形はダブルクォート付きスカラー（default_assignee: "@improvement-loop-bot"）
+# でなければならない。backlog CLI はこのキーを知らないまま、"backlog config set <他の
+# キー>" のたびに config.yml を丸ごと再シリアライズし、値をスカラー文字列として読み直す。
+# インライン配列（["@improvement-loop-bot"]）で書いてあると角括弧ごと値に取り込まれ、
+# "[@improvement-loop-bot]" という別のアサイニー名に変わってしまう。スカラー形式は
+# この往復で変化しないことを実機（1.48.0）で確認している（TASK-90）。
+#
+# 既に default_assignee がある場合の扱いは値で分かれる。
+# - 値が @improvement-loop-bot 以外なら、ユーザーが決めた値なので一切触らない。
+# - 値が @improvement-loop-bot で正準形なら、何もしない。
+# - 値が @improvement-loop-bot だが正準形でない（旧いインライン配列、または CLI が
+#   壊した "[@improvement-loop-bot]"）なら、improvement-loop 自身が書いた既定値が
+#   機械的に壊れた状態だと判別できるので、警告を出したうえで正準形へ収束させる。
+#   config.my.yml の説明コメントのズレ（warn_config_my_yml_comment_drift）を書き換えず
+#   警告にとどめるのは「テンプレート由来かユーザー加筆か原理的に区別できない」ためだが、
+#   ここにその曖昧さは無い。値そのものが improvement-loop の既定値だと名乗っている。
 ensure_default_assignee() {
   local target_repo_root="$1"
   local config_file="$2"
-  local bot_assignee='@improvement-loop-bot'
+  local canonical_line="default_assignee: \"$DEFAULT_ASSIGNEE_BOT\""
 
-  if grep -Eq '^default_assignee:' "$config_file"; then
-    log "[skip] .backlog/config.yml に default_assignee は既に設定されている。"
-    SKIPPED+=(".backlog/config.yml default_assignee (既に設定済み)")
+  local existing_line
+  existing_line="$(grep -m1 '^default_assignee:' "$config_file" || true)"
+
+  if [ -n "$existing_line" ]; then
+    local core
+    core="$(default_assignee_core_value "$existing_line")"
+
+    if [ "$core" != "$DEFAULT_ASSIGNEE_BOT" ]; then
+      log "[skip] .backlog/config.yml の default_assignee はユーザーが設定した値なので変更しない: $existing_line"
+      SKIPPED+=(".backlog/config.yml default_assignee (ユーザー設定値のため収束対象外)")
+      return 0
+    fi
+
+    if [ "$existing_line" = "$canonical_line" ]; then
+      log "[skip] .backlog/config.yml に default_assignee は既に設定されている。"
+      SKIPPED+=(".backlog/config.yml default_assignee (既に設定済み)")
+      return 0
+    fi
+
+    # 角括弧が引用符の外にあるか（まだ配列＝これから壊れる）、内側に取り込まれているか
+    # （既に壊れた後）で、人間に伝えるべき事実が違う。
+    if [[ "$existing_line" =~ ^default_assignee:[[:space:]]*\[ ]]; then
+      log "[warn] .backlog/config.yml の default_assignee が、backlog CLI の再シリアライズに耐えない形（インライン配列）で書かれている: $existing_line"
+      log "       backlog CLI はこのキーを知らないまま config.yml を書き戻すので、次に backlog config set を実行した時点で"
+      log "       角括弧ごと文字列に取り込まれ、[$DEFAULT_ASSIGNEE_BOT] という別のアサイニー名に変わる。"
+    else
+      log "[warn] .backlog/config.yml の default_assignee が、backlog CLI の再シリアライズで既に壊れている: $existing_line"
+      log "       角括弧が値の一部として文字列に取り込まれており、このままでは $DEFAULT_ASSIGNEE_BOT ではなく"
+      log "       [$DEFAULT_ASSIGNEE_BOT] という別のアサイニー名として読まれる。"
+    fi
+    log "       この値は improvement-loop 自身が書いた既定値なので、往復に耐える形へ収束させる。"
+    replace_default_assignee_line "$config_file" "$canonical_line"
+    log "[fix]  .backlog/config.yml の default_assignee を書き換えた: $canonical_line"
+    CREATED+=(".backlog/config.yml default_assignee (backlog CLI の再シリアライズで壊れる形だったため正準形へ収束)")
     return 0
   fi
 
-  if (cd "$target_repo_root" && backlog config set defaultAssignee "$bot_assignee") >/dev/null 2>&1; then
-    log "[fix]  backlog config set defaultAssignee \"$bot_assignee\" を実行した。"
+  if (cd "$target_repo_root" && backlog config set defaultAssignee "$DEFAULT_ASSIGNEE_BOT") >/dev/null 2>&1; then
+    log "[fix]  backlog config set defaultAssignee \"$DEFAULT_ASSIGNEE_BOT\" を実行した。"
     CREATED+=(".backlog/config.yml default_assignee (backlog config set)")
     return 0
   fi
 
-  printf '%s\n' "default_assignee: [\"$bot_assignee\"]" >> "$config_file"
-  log "[fix]  backlog CLI が defaultAssignee 未対応のため、.backlog/config.yml に直接追記した: default_assignee: [\"$bot_assignee\"]"
+  printf '%s\n' "$canonical_line" >> "$config_file"
+  log "[fix]  backlog CLI が defaultAssignee 未対応のため、.backlog/config.yml に直接追記した: $canonical_line"
   CREATED+=(".backlog/config.yml default_assignee (CLI未対応のため直接追記)")
 }
 

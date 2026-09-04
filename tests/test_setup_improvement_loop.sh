@@ -89,7 +89,7 @@ write_settled_backlog_config() {
   mkdir -p "$(dirname "$config_file")"
   cat > "$config_file" <<YAML
 project_name: "$project_name"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
 labels: []
@@ -394,7 +394,7 @@ register_tmp_cleanup "$TMP_REPO_EMPTY_STATUSES"
 mkdir -p "$TMP_REPO_EMPTY_STATUSES/.backlog"
 cat > "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" <<'YAML'
 project_name: "empty-statuses-test"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses: []
 labels: []
@@ -435,7 +435,7 @@ register_tmp_cleanup "$TMP_REPO_MULTILINE_STATUSES"
 mkdir -p "$TMP_REPO_MULTILINE_STATUSES/.backlog"
 cat > "$TMP_REPO_MULTILINE_STATUSES/.backlog/config.yml" <<'YAML'
 project_name: "multiline-statuses-test"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses:
   - "To Do"
@@ -535,7 +535,7 @@ register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_INLINE"
 mkdir -p "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog"
 cat > "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog/config.yml" <<'YAML'
 project_name: "singlequote-inline-test"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses: ['Proposed', 'To Do', 'Done']
 labels: []
@@ -574,7 +574,7 @@ register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_MULTILINE"
 mkdir -p "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog"
 cat > "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog/config.yml" <<'YAML'
 project_name: "singlequote-multiline-test"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses:
   - 'Proposed'
@@ -650,7 +650,7 @@ make_perm_test_repo() {
   mkdir -p "$repo_dir/.backlog"
   cat > "$repo_dir/.backlog/config.yml" <<YAML
 project_name: "$project_name"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses: ["To Do", "In Progress", "Done"]  # 末尾コメント
 labels: []
@@ -753,7 +753,7 @@ else
 fi
 
 perm_content_ok=true
-for perm_expected_line in 'project_name: "perm-644-test"' 'default_assignee: ["@improvement-loop-bot"]' 'labels: []' 'remote_operations: false' 'task_prefix: "task"'; do
+for perm_expected_line in 'project_name: "perm-644-test"' 'default_assignee: "@improvement-loop-bot"' 'labels: []' 'remote_operations: false' 'task_prefix: "task"'; do
   if ! grep -Fxq "$perm_expected_line" "$perm_644_config"; then
     fail "5c-4(AC#3): 書き換え後の config.yml から既存の行が失われた: $perm_expected_line"
     perm_content_ok=false
@@ -1180,7 +1180,7 @@ mkdir -p "$TMP_REPO_REVIEWED_MIGRATION/.backlog"
 # 実機で確認された statuses の並びをそのまま模擬する。
 cat > "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml" <<'YAML'
 project_name: "reviewed-migration-test"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
 labels: []
@@ -1339,7 +1339,7 @@ register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX"
 mkdir -p "$TMP_REPO_CUSTOM_PREFIX/.backlog"
 cat > "$TMP_REPO_CUSTOM_PREFIX/.backlog/config.yml" <<'YAML'
 project_name: "custom-prefix-test"
-default_assignee: ["@improvement-loop-bot"]
+default_assignee: "@improvement-loop-bot"
 default_status: "To Do"
 statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
 labels: []
@@ -1523,6 +1523,184 @@ if [ "$custom_assignee_count" = "1" ]; then
   pass "8d: default_assignee が重複追記されない"
 else
   fail "8d: default_assignee が重複している（${custom_assignee_count} 件）"
+fi
+
+# ---- 8e. 新規セットアップが書いた default_assignee が backlog config set の往復に耐える（TASK-90 AC#1）----
+# backlog CLI は default_assignee というキーを知らないまま、backlog config set のたびに
+# config.yml を丸ごと再シリアライズする。インライン配列で書いてあると角括弧ごと値に
+# 取り込まれて "[@improvement-loop-bot]" という別のアサイニー名に変わる。
+# ここでは setup が実際に書いた値に対して、その再シリアライズを1回起こして確かめる。
+# FIXTURE_FRESH は書き換えないという契約なので、複製に対して実行する。
+TMP_REPO_ROUNDTRIP="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_ROUNDTRIP"
+cp -a "$FIXTURE_FRESH_REPO/." "$TMP_REPO_ROUNDTRIP/"
+roundtrip_config="$TMP_REPO_ROUNDTRIP/.backlog/config.yml"
+roundtrip_before="$(grep -m1 '^default_assignee:' "$roundtrip_config" || true)"
+(cd "$TMP_REPO_ROUNDTRIP" && backlog config set autoCommit false) >/dev/null 2>&1
+roundtrip_after="$(grep -m1 '^default_assignee:' "$roundtrip_config" || true)"
+
+if [ "$roundtrip_after" = "$roundtrip_before" ]; then
+  pass "8e(AC#1): 新規セットアップが書いた default_assignee が backlog config set の再シリアライズで変化しない（${roundtrip_after}）"
+else
+  fail "8e(AC#1): 新規セットアップが書いた default_assignee が backlog config set で変化した（${roundtrip_before} → ${roundtrip_after}）"
+fi
+
+# 「変化しない」だけでなく、値そのものが壊れた形になっていないことも直接見る。
+# 上のアサーションは、前後がどちらも壊れた形であれば通ってしまう。
+if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$roundtrip_config"; then
+  pass "8e(AC#1): 往復後の default_assignee が正準形のまま残っている"
+else
+  fail "8e(AC#1): 往復後の default_assignee が正準形でない: $roundtrip_after"
+fi
+
+# ---- 8f. backlog CLI に壊された値が再実行で収束し、無音のスキップにならない（TASK-90 AC#2）----
+# 以前の setup-improvement-loop が書いたインライン配列を backlog CLI が再シリアライズした
+# 後の形をそのまま前状態として与える。従来はキーの有無しか見ていなかったため
+# 「既に設定されている」とだけ出して壊れたまま素通りしていた。
+TMP_REPO_BROKEN_ASSIGNEE="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_BROKEN_ASSIGNEE"
+(cd "$TMP_REPO_BROKEN_ASSIGNEE" && git init -q)
+write_settled_backlog_config "$TMP_REPO_BROKEN_ASSIGNEE/.backlog/config.yml" "broken-assignee-test"
+broken_assignee_config="$TMP_REPO_BROKEN_ASSIGNEE/.backlog/config.yml"
+broken_tmp="$(mktemp)"
+register_tmp_cleanup "$broken_tmp"
+sed 's/^default_assignee:.*$/default_assignee: "[@improvement-loop-bot]"/' "$broken_assignee_config" > "$broken_tmp"
+cat "$broken_tmp" > "$broken_assignee_config"
+chmod 640 "$broken_assignee_config"
+broken_mode_before="$(file_mode "$broken_assignee_config")"
+
+broken_assignee_output="$("$SETUP_SCRIPT" "$TMP_REPO_BROKEN_ASSIGNEE" 2>&1)"
+broken_assignee_exit=$?
+
+if [ "$broken_assignee_exit" -eq 0 ]; then
+  pass "8f: 壊れた default_assignee を持つ config.yml に対する実行が成功する（exit 0）"
+else
+  fail "8f: 壊れた default_assignee を持つ config.yml に対する実行が失敗した（exit ${broken_assignee_exit}）:
+$broken_assignee_output"
+fi
+
+if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$broken_assignee_config"; then
+  pass "8f(AC#2): 壊れた \"[@improvement-loop-bot]\" が再実行で正準形へ収束する"
+else
+  fail "8f(AC#2): 壊れた default_assignee が収束しなかった: $(grep -m1 '^default_assignee:' "$broken_assignee_config")"
+fi
+
+# 無音のスキップにならないこと。従来のスキップ文言が出ていないことも併せて見る
+# （収束したのに「既に設定されている」と報告するのは矛盾である）。
+# config.my.yml の説明コメントのズレも [warn] を出しうるので、同じ行に
+# default_assignee が載っていることまで確かめる。
+if grep -F '[warn]' <<<"$broken_assignee_output" | grep -Fq 'default_assignee'; then
+  pass "8f(AC#2): 破損が [warn] として人間に読める形で報告される"
+else
+  fail "8f(AC#2): 破損が [warn] として報告されなかった:
+$broken_assignee_output"
+fi
+if grep -Fq 'default_assignee は既に設定されている' <<<"$broken_assignee_output"; then
+  fail "8f(AC#2): 壊れた値なのに「既に設定されている」とスキップ報告された:
+$broken_assignee_output"
+else
+  pass "8f(AC#2): 壊れた値が「既に設定されている」として無音でスキップされない"
+fi
+
+broken_assignee_count="$(grep -Ec '^default_assignee:' "$broken_assignee_config" || true)"
+if [ "$broken_assignee_count" = "1" ]; then
+  pass "8f: 収束後も default_assignee が重複追記されない"
+else
+  fail "8f: 収束後、default_assignee が重複している（${broken_assignee_count} 件）"
+fi
+
+# 収束は config.yml の書き換えを伴うので、TASK-85 で入れたパーミッション保持の方針
+# （mv で inode ごと差し替えない）がこの経路でも守られていることを確認する。
+broken_mode_after="$(file_mode "$broken_assignee_config")"
+if [ "$broken_mode_after" = "$broken_mode_before" ]; then
+  pass "8f: default_assignee の収束で config.yml のパーミッションが変わらない（${broken_mode_before}）"
+else
+  fail "8f: default_assignee の収束で config.yml のパーミッションが変わった（${broken_mode_before} → ${broken_mode_after}）"
+fi
+broken_leftover="$(find "$TMP_REPO_BROKEN_ASSIGNEE/.backlog" -maxdepth 1 -name 'config.yml.*' 2>/dev/null || true)"
+if [ -z "$broken_leftover" ]; then
+  pass "8f: 収束の書き戻しに使った一時ファイルが .backlog/ に残っていない"
+else
+  fail "8f: 収束の書き戻しに使った一時ファイルが残っている: $broken_leftover"
+fi
+
+# 収束後にもう一度実行したら、今度は通常のスキップに落ち着くこと（冪等性）。
+broken_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_BROKEN_ASSIGNEE" 2>&1)"
+if grep -Fq 'default_assignee は既に設定されている' <<<"$broken_rerun_output" \
+  && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$broken_assignee_config"; then
+  pass "8f: 収束後の再実行はスキップになり、値も変わらない（冪等）"
+else
+  fail "8f: 収束後の再実行が冪等でない（値: $(grep -m1 '^default_assignee:' "$broken_assignee_config")）:
+$broken_rerun_output"
+fi
+
+# ---- 8g. 以前の setup が書いたインライン配列形式も収束対象である（TASK-90 AC#2）----
+# 8f の "[@improvement-loop-bot]" は既に壊れた後の形だが、まだ backlog config set を
+# 一度も通っていない導入済みリポジトリは ["@improvement-loop-bot"] のまま残っている。
+# これは次の backlog config set で壊れる予約済みの状態なので、同じく収束させる。
+TMP_REPO_LEGACY_ASSIGNEE="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_LEGACY_ASSIGNEE"
+(cd "$TMP_REPO_LEGACY_ASSIGNEE" && git init -q)
+write_settled_backlog_config "$TMP_REPO_LEGACY_ASSIGNEE/.backlog/config.yml" "legacy-assignee-test"
+legacy_assignee_config="$TMP_REPO_LEGACY_ASSIGNEE/.backlog/config.yml"
+legacy_tmp="$(mktemp)"
+register_tmp_cleanup "$legacy_tmp"
+sed 's/^default_assignee:.*$/default_assignee: ["@improvement-loop-bot"]/' "$legacy_assignee_config" > "$legacy_tmp"
+cat "$legacy_tmp" > "$legacy_assignee_config"
+
+legacy_assignee_output="$("$SETUP_SCRIPT" "$TMP_REPO_LEGACY_ASSIGNEE" 2>&1)"
+legacy_assignee_exit=$?
+
+if [ "$legacy_assignee_exit" -eq 0 ]; then
+  pass "8g: 旧インライン配列形式の config.yml に対する実行が成功する（exit 0）"
+else
+  fail "8g: 旧インライン配列形式の config.yml に対する実行が失敗した（exit ${legacy_assignee_exit}）:
+$legacy_assignee_output"
+fi
+if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$legacy_assignee_config"; then
+  pass "8g(AC#2): 旧インライン配列形式 [\"@improvement-loop-bot\"] が正準形へ収束する"
+else
+  fail "8g(AC#2): 旧インライン配列形式が収束しなかった: $(grep -m1 '^default_assignee:' "$legacy_assignee_config")"
+fi
+if grep -F '[warn]' <<<"$legacy_assignee_output" | grep -Fq 'default_assignee'; then
+  pass "8g(AC#2): 旧インライン配列形式も [warn] として人間に読める形で報告される"
+else
+  fail "8g(AC#2): 旧インライン配列形式が [warn] として報告されなかった:
+$legacy_assignee_output"
+fi
+
+# ---- 8h. ユーザー独自の値は壊れた形であっても収束対象にしない（TASK-90 AC#3）----
+# 8d はユーザー独自値がインライン配列で書かれている場合を見ている。ここでは、値の形が
+# 収束対象と同じ "[...]" であっても、中身が improvement-loop の既定値でなければ触らない
+# ことを確かめる。形だけで判定する実装だと、ユーザーのアサイニー名を勝手に書き換えてしまう。
+TMP_REPO_CUSTOM_BROKEN="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_CUSTOM_BROKEN"
+(cd "$TMP_REPO_CUSTOM_BROKEN" && git init -q)
+write_settled_backlog_config "$TMP_REPO_CUSTOM_BROKEN/.backlog/config.yml" "custom-broken-test"
+custom_broken_config="$TMP_REPO_CUSTOM_BROKEN/.backlog/config.yml"
+custom_broken_tmp="$(mktemp)"
+register_tmp_cleanup "$custom_broken_tmp"
+sed 's/^default_assignee:.*$/default_assignee: "[@someone-else]"/' "$custom_broken_config" > "$custom_broken_tmp"
+cat "$custom_broken_tmp" > "$custom_broken_config"
+
+custom_broken_output="$("$SETUP_SCRIPT" "$TMP_REPO_CUSTOM_BROKEN" 2>&1)"
+custom_broken_exit=$?
+
+if [ "$custom_broken_exit" -eq 0 ]; then
+  pass "8h: ユーザー独自値が \"[...]\" 形式の config.yml に対する実行が成功する（exit 0）"
+else
+  fail "8h: ユーザー独自値が \"[...]\" 形式の config.yml に対する実行が失敗した（exit ${custom_broken_exit}）:
+$custom_broken_output"
+fi
+if grep -Fxq 'default_assignee: "[@someone-else]"' "$custom_broken_config"; then
+  pass "8h(AC#3): 形が収束対象と同じでも、中身がユーザー独自値なら書き換えない"
+else
+  fail "8h(AC#3): ユーザー独自値が書き換えられた: $(grep -m1 '^default_assignee:' "$custom_broken_config")"
+fi
+if grep -Fq '@improvement-loop-bot' "$custom_broken_config"; then
+  fail "8h(AC#3): ユーザー独自値の config.yml に @improvement-loop-bot が書き込まれた: $(grep -m1 '^default_assignee:' "$custom_broken_config")"
+else
+  pass "8h(AC#3): ユーザー独自値の config.yml に既定アサイニーが追記されない"
 fi
 
 echo ""
