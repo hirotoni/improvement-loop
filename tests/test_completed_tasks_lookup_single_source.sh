@@ -165,6 +165,7 @@ if [ "$blocks_ok" -eq 1 ]; then
   cat > "$FIXTURE_DIR/.claude/skills/improvement-scout/viewpoints.md" <<'FIXTURE_EOF'
 ## alpha-viewpoint
 ## beta-viewpoint
+## gamma-viewpoint
 FIXTURE_EOF
 
   # tasks/ 配下（CLI からも見える）に1件。
@@ -207,6 +208,17 @@ id: TASK-4
 labels: []
 ---
 検証: bash src/target.txt を実行した。viewpoint:alpha-viewpoint の話ではない。
+FIXTURE_EOF
+
+  # task_prefix をカスタマイズしたリポジトリの1件。ファイル名も ID も task/TASK- にならない。
+  # この観点はこのファイルにしか付いていないので、集計がタスク ID の接頭辞に依存していれば
+  # gamma-viewpoint が 0 になって落ちる（TASK-54 と同型の退行の検知）。
+  cat > "$FIXTURE_DIR/.backlog/completed/issue-5 - custom prefix.md" <<'FIXTURE_EOF'
+---
+id: ISSUE-5
+labels:
+  - 'viewpoint:gamma-viewpoint'
+---
 FIXTURE_EOF
 
   run_recipe() {
@@ -252,6 +264,12 @@ FIXTURE_EOF
     pass "起票実績の無い観点は 0 を返す"
   else
     fail "起票実績の無い観点が 0 にならない（beta-viewpoint に 0 を期待したが '$beta_count'。出力: $tally_out）"
+  fi
+  gamma_count="$(printf '%s\n' "$tally_out" | awk -F'\t' '$1 == "gamma-viewpoint" { print $2 }')"
+  if [ "$gamma_count" = "1" ]; then
+    pass "観点集計がタスク ID の接頭辞に依存しない（ID が ISSUE-5 のタスクも数える）"
+  else
+    fail "観点集計がタスク ID の接頭辞に依存している（gamma-viewpoint に 1 を期待したが '$gamma_count'。出力: $tally_out）"
   fi
 fi
 
