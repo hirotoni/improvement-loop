@@ -72,6 +72,7 @@ backlog search "<キーワード>" --plain
 backlog search --modified-file <対象パス> --plain
 ```
 
+- 上の backlog コマンドは `.backlog/tasks/` しか見ない。完了・アーカイブ済みのタスクとの照合手順の正本は [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) にある。ここに複製せず、上のコマンドと併せて必ず実行する。
 - 同じ趣旨の milestone・タスクが既にあれば起票しない。`Proposed` のまま残っている候補も対象に含めて数える。
 - 既存の milestone・タスクに足すべき情報があるときは `backlog task edit TASK-<n> --comment '<追記>' --comment-author @<name>` にとどめる。説明や受入基準の書き換えはユーザーに確認してから行う。
 - `Proposed` が溜まりすぎている（目安 10 件超）なら、新規起票の前にその事実を報告する。積み増しより承認待ちの解消が先である。
@@ -181,7 +182,7 @@ backlog task create '<何をどうするかが分かる動詞句>' \
 - `--labels 'audit,viewpoint:<slug>'` を必ず付ける。`audit` で監査由来のタスクを、`viewpoint:` で観点の消化状況を追える。
 - `-m` は milestone 配下の全タスクに必ず付ける。同じ milestone 名・ID を使い、途中で表記を揺らさない。
 - 依存があるタスクだけ `--dep TASK-<n>` を付ける。複数の前提があるときは `--dep TASK-<a> --dep TASK-<b>`（または `--depends-on TASK-<a>,TASK-<b>`）のように複数渡せる。
-- `--modified-file` に根拠のファイルを入れる。次回以降 `backlog search --modified-file <path> --plain` で重複を検出できる。
+- `--modified-file` に根拠のファイルを入れる。次回以降 `backlog search --modified-file <path> --plain` と、完了・アーカイブ済みを対象にした [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) の手順 2 で重複を検出できる。
 - 受入基準は振る舞いで書く。「関数を追加する」ではなく「〜のとき〜になる」。実装手順を受入基準にしない。
 - `--plan` は書かない。着手時に improvement-work が調べ直して記録する。
 - `## 確認したこと` には実際に見た根拠だけを書く。ここが書けない候補は起票の条件を満たしていない。

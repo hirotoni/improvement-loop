@@ -273,6 +273,8 @@ check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-dispatch/SKILL.md" "impr
 check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-work/SKILL.md" "improvement-work/SKILL.md"
 check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-dispatch/SKILL.md" "workspace-dispatch/SKILL.md"
 check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-scout/SKILL.md" "workspace-scout/SKILL.md"
+# SKILL.md ではないが、起票系3スキルが実行する bash を持つ正本なので同じ検査に乗せる。
+check_skill_bash_blocks "$SOURCE_SKILLS_DIR/completed-tasks-lookup.md" "completed-tasks-lookup.md"
 
 echo ""
 echo "=== 1d. tests/ 配下の一時パスの後片付け作法 ==="
