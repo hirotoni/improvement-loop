@@ -31,13 +31,31 @@ echo "=== 7. claude-code/skills/improvement-dispatch/scripts/select-next-task �
 TMP_REPO_SELECT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SELECT"
 
+# 一時リポジトリの準備に bin/setup-improvement-loop は使わない。select-next-task が
+# 必要とするのは improvement ループの6ステータスが揃った .backlog/config.yml だけで
+# あり（max_in_progress/max_in_review は引数で受け取るので config.my.yml は読まない）、
+# setup-improvement-loop を通すと backlog CLI が5回起動して約900ms かかるためである
+# （TASK-82 で計測）。下の8節が既に採っている、config.yml を直接書く方式に揃える。
 (cd "$TMP_REPO_SELECT" && git init -q)
-select_setup_output="$("$SETUP_SCRIPT" "$TMP_REPO_SELECT" 2>&1)"
-select_setup_exit=$?
-if [ "$select_setup_exit" -ne 0 ]; then
-  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task 検証用の一時リポジトリの準備（setup-improvement-loop）が失敗した（exit ${select_setup_exit}）:
-$select_setup_output"
-fi
+mkdir -p "$TMP_REPO_SELECT/.backlog"
+cat > "$TMP_REPO_SELECT/.backlog/config.yml" <<'YAML'
+project_name: "select-next-task-test"
+default_assignee: ["@improvement-loop-bot"]
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
 
 # --- 7a. NO_CANDIDATE: To Do タスクが1件も無い ---
 select_out="$(cd "$TMP_REPO_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"

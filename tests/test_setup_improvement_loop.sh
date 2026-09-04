@@ -69,6 +69,103 @@ assert_statuses_present() {
   fi
 }
 
+# .git/info/exclude に期待する行と見出しコメントは、セクション2（新規導入）と
+# セクション3（再実行）の両方が参照する定数である。どちらかのセクションの中で
+# 組み立てると、そのセクションを実行しないと他方が壊れる（＝実行順序に依存する）
+# ため、セクションの外で一度だけ導出する。
+EXCLUDE_HEADER="# improvement-loop"
+EXPECTED_EXCLUDE_LINES=(".backlog")
+for name in "${SKILL_NAMES[@]}"; do
+  EXPECTED_EXCLUDE_LINES+=(".claude/skills/$name")
+done
+
+# write_settled_backlog_config: 「improvement-loop の導入が既に済んでいる
+# リポジトリ」の .backlog/config.yml を書き出す。statuses に6ステータスが揃い、
+# remote_operations が false、default_assignee も設定済みという、
+# setup-improvement-loop が既に一度収束させた後の状態である。
+#
+# .backlog/config.yml そのものを検証対象にしていないセクション（config.my.yml の
+# マイグレーションを見る 6・6b・6c 系）がこれを使う。前状態を「git init しただけの
+# 空リポジトリ」にすると、setup-improvement-loop が backlog init と
+# backlog config set を追加で起動する。backlog CLI は1回の起動だけで平均 170ms
+# かかり、それがセクションの所要時間の大半を占めていた（TASK-82 で計測）。
+# 検証対象でない収束処理を毎セクション走らせる必要はないので、収束済みの状態から
+# 始める。アサーションは一切変えていない。
+#
+# .backlog/config.yml を自前の heredoc で書き出しているセクション（4・5・5b・7・7d）も
+# 同じ理由で default_assignee と remote_operations: false を与えてある。statuses の
+# 書式や旧ステータス名の残存はそれぞれの検証対象なので heredoc のまま残し、検証対象で
+# ないこの2キーだけを収束済みにしている。8c だけは remote_operations: true から false へ
+# 収束することそのものが検証対象なので、収束前の値を保っている。
+# 引数: 書き出す config.yml のパス, project_name
+write_settled_backlog_config() {
+  local config_file="$1"
+  local project_name="$2"
+  mkdir -p "$(dirname "$config_file")"
+  cat > "$config_file" <<YAML
+project_name: "$project_name"
+default_assignee: ["@improvement-loop-bot"]
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+}
+
+echo "=== 共有フィクスチャの構築 ==="
+# 一時リポジトリを作って $SETUP_SCRIPT を流し直す処理が、このファイルの所要時間の
+# ほぼ全部を占める。同じ前状態に対して同じ実行をしているセクションが複数あるため、
+# その分をここで1回だけ作り、各セクションは「読む」か「cp -a で複製する」かの
+# どちらかだけを行う。
+#
+# ここで作るフィクスチャは、構築が終わったあと誰も書き換えない。書き換えが要る
+# セクションは必ず自分用の複製を作る。フィクスチャの構築をこの1ブロックに集約し、
+# 各セクションが他のセクションの副作用に依存しないようにすることで、セクションの
+# 実行順序を入れ替えても、あるセクションだけを抜き出して実行しても結果が変わらない
+# 状態を保つ（TASK-82 受入基準#3）。フィクスチャの実行結果（終了コード・出力）に
+# 対するアサーションは、従来どおり各セクションの側に置いてある。
+
+# FIXTURE_FRESH: git リポジトリに setup-improvement-loop を初めて実行した直後の状態。
+# 「新規導入」を前提に検証するセクション 2・6c-4・8a が読み取り専用で共有する。
+FIXTURE_FRESH_REPO="$(mktemp -d)"
+register_tmp_cleanup "$FIXTURE_FRESH_REPO"
+(cd "$FIXTURE_FRESH_REPO" && git init -q)
+FIXTURE_FRESH_OUTPUT="$("$SETUP_SCRIPT" "$FIXTURE_FRESH_REPO" 2>&1)"
+FIXTURE_FRESH_EXIT=$?
+
+# FIXTURE_RERUN: FIXTURE_FRESH の複製に、ユーザーによる次の2つの変更
+#   - .backlog/config.my.yml への $FIXTURE_RERUN_MARKER の追記
+#   - .backlog/config.yml の statuses への $FIXTURE_RERUN_CUSTOM_STATUS の追加
+# を加えたうえで setup-improvement-loop を2回目に実行した状態。「導入済みリポジトリ
+# への再実行」を前提に検証するセクション 3・7c・8b が読み取り専用で共有する。
+# この2つのユーザー変更はフィクスチャの契約の一部であり、消費側はこれを前提にしてよい。
+FIXTURE_RERUN_REPO="$(mktemp -d)"
+register_tmp_cleanup "$FIXTURE_RERUN_REPO"
+FIXTURE_RERUN_MARKER="# TEST-MARKER-$$-$(date +%s)"
+FIXTURE_RERUN_CUSTOM_STATUS="CustomStatus-$$"
+cp -a "$FIXTURE_FRESH_REPO/." "$FIXTURE_RERUN_REPO/"
+printf '\n%s\n' "$FIXTURE_RERUN_MARKER" >> "$FIXTURE_RERUN_REPO/.backlog/config.my.yml"
+fixture_rerun_config_tmp="$(mktemp)"
+register_tmp_cleanup "$fixture_rerun_config_tmp"
+sed "s/^statuses: \[\(.*\)\]\$/statuses: [\1, \"$FIXTURE_RERUN_CUSTOM_STATUS\"]/" \
+  "$FIXTURE_RERUN_REPO/.backlog/config.yml" > "$fixture_rerun_config_tmp"
+mv "$fixture_rerun_config_tmp" "$FIXTURE_RERUN_REPO/.backlog/config.yml"
+FIXTURE_RERUN_OUTPUT="$("$SETUP_SCRIPT" "$FIXTURE_RERUN_REPO" 2>&1)"
+FIXTURE_RERUN_EXIT=$?
+
+echo "FIXTURE_FRESH / FIXTURE_RERUN を構築した（それぞれ setup-improvement-loop 1回分）"
+
+echo ""
 echo "=== 1d. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
 # REQUIRED_STATUSES（上で導出済み）と、TASK-30 で新設された状態遷移表の正本
 # （claude-code/skills/status-table.md）の「## 状態遷移表」節に列挙されたステータス名の
@@ -109,25 +206,19 @@ fi
 echo ""
 echo "=== 2. 一時リポジトリへのセットアップ ==="
 
-TMP_REPO="$(mktemp -d)"
-TMP_HOME="$(mktemp -d)"
-TMP_REPO_SYMLINK="$(mktemp -d)"
-register_tmp_cleanup "$TMP_REPO" "$TMP_HOME" "$TMP_REPO_SYMLINK"
+# 検証対象は共有フィクスチャ FIXTURE_FRESH（新規導入直後の状態）である。
+# このセクションはフィクスチャを読むだけで、書き換えない。
 
-(cd "$TMP_REPO" && git init -q)
-
-setup_output="$("$SETUP_SCRIPT" "$TMP_REPO" 2>&1)"
-setup_exit=$?
-if [ "$setup_exit" -eq 0 ]; then
+if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
   pass "1回目の setup-improvement-loop 実行が成功する（exit 0）"
 else
-  fail "1回目の setup-improvement-loop 実行が失敗した（exit ${setup_exit}）:
-$setup_output"
+  fail "1回目の setup-improvement-loop 実行が失敗した（exit ${FIXTURE_FRESH_EXIT}）:
+$FIXTURE_FRESH_OUTPUT"
 fi
 
 # ---- シンボリックリンクの検証 ----
 for name in "${SKILL_NAMES[@]}"; do
-  link_path="$TMP_REPO/.claude/skills/$name"
+  link_path="$FIXTURE_FRESH_REPO/.claude/skills/$name"
   expected_target="$SOURCE_SKILLS_DIR/$name"
   if [ -L "$link_path" ]; then
     resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
@@ -146,10 +237,10 @@ done
 # backlog init --defaults の既定 statuses は To Do / In Progress / Done の3種のみで、
 # improvement ループの4スキルが前提とする Proposed / In Review / Approved が無いと
 # improvement-work が最初に In Review へ上げようとした時点で Invalid status で失敗する。
-assert_statuses_present "$TMP_REPO/.backlog/config.yml" "1回目実行後"
+assert_statuses_present "$FIXTURE_FRESH_REPO/.backlog/config.yml" "1回目実行後"
 
 # ---- config.my.yml の検証 ----
-target_config="$TMP_REPO/.backlog/config.my.yml"
+target_config="$FIXTURE_FRESH_REPO/.backlog/config.my.yml"
 if [ -f "$target_config" ]; then
   if diff -q "$SOURCE_CONFIG" "$target_config" >/dev/null 2>&1; then
     pass ".backlog/config.my.yml がソースと一致する"
@@ -161,29 +252,24 @@ else
 fi
 
 # ---- .git/info/exclude の検証 ----
-exclude_file="$TMP_REPO/.git/info/exclude"
-expected_lines=(".backlog")
-for name in "${SKILL_NAMES[@]}"; do
-  expected_lines+=(".claude/skills/$name")
-done
+exclude_file="$FIXTURE_FRESH_REPO/.git/info/exclude"
 
 if [ -f "$exclude_file" ]; then
   all_present=true
-  for line in "${expected_lines[@]}"; do
+  for line in "${EXPECTED_EXCLUDE_LINES[@]}"; do
     if ! grep -Fxq "$line" "$exclude_file"; then
       all_present=false
       fail ".git/info/exclude に '$line' が無い"
     fi
   done
   if [ "$all_present" = true ]; then
-    pass ".git/info/exclude に期待する ${#expected_lines[@]} 行がすべて含まれる"
+    pass ".git/info/exclude に期待する ${#EXPECTED_EXCLUDE_LINES[@]} 行がすべて含まれる"
   fi
 else
   fail ".git/info/exclude が存在しない"
 fi
 
 # ---- .git/info/exclude の見出しコメントの検証 ----
-EXCLUDE_HEADER="# improvement-loop"
 if grep -Fxq "$EXCLUDE_HEADER" "$exclude_file" 2>/dev/null; then
   pass ".git/info/exclude に見出しコメント '$EXCLUDE_HEADER' がある"
 else
@@ -198,6 +284,12 @@ echo "=== 2b. install.zsh 経由でシンボリックリンクされた状態で
 # ルートの算出を誤り「配布元の claude-code/skills ディレクトリが見つからない」で
 # 落ちる（過去の不具合）。一時 $HOME に対して install.zsh を実行し、出来た
 # シンボリックリンク経由で setup-improvement-loop を起動して検証する。
+#
+# 一時パスはこのセクションだけが使う（他のセクションと共有しない）ので、
+# ここで作る。
+TMP_HOME="$(mktemp -d)"
+TMP_REPO_SYMLINK="$(mktemp -d)"
+register_tmp_cleanup "$TMP_HOME" "$TMP_REPO_SYMLINK"
 
 if command -v zsh >/dev/null 2>&1; then
   install_output="$(HOME="$TMP_HOME" zsh "$INSTALL_SCRIPT" 2>&1)"
@@ -252,47 +344,41 @@ fi
 
 echo ""
 echo "=== 3. 冪等性・ユーザー所有ファイル保護の検証 ==="
+# 検証対象は共有フィクスチャ FIXTURE_RERUN である。導入済みリポジトリに
+# .backlog/config.my.yml へのユーザー追記と .backlog/config.yml の statuses への
+# ユーザー独自ステータス追加を加えたうえで2回目を実行した状態なので、変更が
+# 再実行で消えないこと（既存設定の保持）と、6ステータスが揃った状態が維持される
+# こと（欠けている分だけ補う冪等性）を同時に検証できる。
+# このセクションはフィクスチャを読むだけで、書き換えない。
+rerun_config="$FIXTURE_RERUN_REPO/.backlog/config.my.yml"
+rerun_backlog_config="$FIXTURE_RERUN_REPO/.backlog/config.yml"
+rerun_exclude_file="$FIXTURE_RERUN_REPO/.git/info/exclude"
 
-MARKER="# TEST-MARKER-$$-$(date +%s)"
-printf '\n%s\n' "$MARKER" >> "$target_config"
-
-# .backlog/config.yml の statuses にユーザー独自のステータスを追加しておき、
-# 再実行で消えないこと（既存設定の保持）と、6ステータスが揃った状態が
-# 維持されること（欠けている分だけ補う冪等性）を同時に検証する。
-target_backlog_config="$TMP_REPO/.backlog/config.yml"
-CUSTOM_STATUS="CustomStatus-$$"
-cp "$target_backlog_config" "$target_backlog_config.pre-idempotency-check"
-sed "s/^statuses: \[\(.*\)\]\$/statuses: [\1, \"$CUSTOM_STATUS\"]/" \
-  "$target_backlog_config.pre-idempotency-check" > "$target_backlog_config"
-rm -f "$target_backlog_config.pre-idempotency-check"
-
-setup_output2="$("$SETUP_SCRIPT" "$TMP_REPO" 2>&1)"
-setup_exit2=$?
-if [ "$setup_exit2" -eq 0 ]; then
+if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
   pass "2回目の setup-improvement-loop 実行が成功する（exit 0）"
 else
-  fail "2回目の setup-improvement-loop 実行が失敗した（exit ${setup_exit2}）:
-$setup_output2"
+  fail "2回目の setup-improvement-loop 実行が失敗した（exit ${FIXTURE_RERUN_EXIT}）:
+$FIXTURE_RERUN_OUTPUT"
 fi
 
-if grep -Fxq "$MARKER" "$target_config" 2>/dev/null; then
+if grep -Fxq "$FIXTURE_RERUN_MARKER" "$rerun_config" 2>/dev/null; then
   pass "再実行後も .backlog/config.my.yml へのユーザー変更が保持されている（上書きされない）"
 else
   fail "再実行で .backlog/config.my.yml のユーザー変更が失われた"
 fi
 
 # ---- .backlog/config.yml の statuses の冪等性・既存設定保持の検証 ----
-assert_statuses_present "$target_backlog_config" "2回目実行後"
-if grep -m1 '^statuses:' "$target_backlog_config" | grep -Fq "\"$CUSTOM_STATUS\""; then
-  pass "再実行後もユーザー独自の statuses（${CUSTOM_STATUS}）が保持されている"
+assert_statuses_present "$rerun_backlog_config" "2回目実行後"
+if grep -m1 '^statuses:' "$rerun_backlog_config" | grep -Fq "\"$FIXTURE_RERUN_CUSTOM_STATUS\""; then
+  pass "再実行後もユーザー独自の statuses（${FIXTURE_RERUN_CUSTOM_STATUS}）が保持されている"
 else
-  fail "再実行でユーザー独自の statuses（${CUSTOM_STATUS}）が失われた"
+  fail "再実行でユーザー独自の statuses（${FIXTURE_RERUN_CUSTOM_STATUS}）が失われた"
 fi
 
 # シンボリックリンクが再実行後も壊れていないことも確認する。
 links_ok=true
 for name in "${SKILL_NAMES[@]}"; do
-  link_path="$TMP_REPO/.claude/skills/$name"
+  link_path="$FIXTURE_RERUN_REPO/.claude/skills/$name"
   if [ -L "$link_path" ] && [ -d "$link_path" ]; then
     : # ok
   else
@@ -306,8 +392,8 @@ fi
 
 # .git/info/exclude に重複行が増えていないことも確認する。
 no_dup=true
-for line in "${expected_lines[@]}"; do
-  count="$(grep -Fxc "$line" "$exclude_file" 2>/dev/null || true)"
+for line in "${EXPECTED_EXCLUDE_LINES[@]}"; do
+  count="$(grep -Fxc "$line" "$rerun_exclude_file" 2>/dev/null || true)"
   if [ "$count" != "1" ]; then
     no_dup=false
     fail "再実行後、.git/info/exclude の '$line' が重複している（$count 行）"
@@ -318,7 +404,7 @@ if [ "$no_dup" = true ]; then
 fi
 
 # 見出しコメントも再実行で重複して増えないことを確認する。
-header_count="$(grep -Fxc "$EXCLUDE_HEADER" "$exclude_file" 2>/dev/null || true)"
+header_count="$(grep -Fxc "$EXCLUDE_HEADER" "$rerun_exclude_file" 2>/dev/null || true)"
 if [ "$header_count" = "1" ]; then
   pass "再実行後も .git/info/exclude の見出しコメント '$EXCLUDE_HEADER' が重複していない"
 else
@@ -340,6 +426,7 @@ register_tmp_cleanup "$TMP_REPO_EMPTY_STATUSES"
 mkdir -p "$TMP_REPO_EMPTY_STATUSES/.backlog"
 cat > "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" <<'YAML'
 project_name: "empty-statuses-test"
+default_assignee: ["@improvement-loop-bot"]
 default_status: "To Do"
 statuses: []
 labels: []
@@ -347,7 +434,7 @@ date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
 default_port: 6420
-remote_operations: true
+remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
@@ -382,6 +469,7 @@ register_tmp_cleanup "$TMP_REPO_MULTILINE_STATUSES"
 mkdir -p "$TMP_REPO_MULTILINE_STATUSES/.backlog"
 cat > "$TMP_REPO_MULTILINE_STATUSES/.backlog/config.yml" <<'YAML'
 project_name: "multiline-statuses-test"
+default_assignee: ["@improvement-loop-bot"]
 default_status: "To Do"
 statuses:
   - "To Do"
@@ -392,7 +480,7 @@ date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
 default_port: 6420
-remote_operations: true
+remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
@@ -484,6 +572,7 @@ register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_INLINE"
 mkdir -p "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog"
 cat > "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog/config.yml" <<'YAML'
 project_name: "singlequote-inline-test"
+default_assignee: ["@improvement-loop-bot"]
 default_status: "To Do"
 statuses: ['Proposed', 'To Do', 'Done']
 labels: []
@@ -491,7 +580,7 @@ date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
 default_port: 6420
-remote_operations: true
+remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
@@ -522,6 +611,7 @@ register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_MULTILINE"
 mkdir -p "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog"
 cat > "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog/config.yml" <<'YAML'
 project_name: "singlequote-multiline-test"
+default_assignee: ["@improvement-loop-bot"]
 default_status: "To Do"
 statuses:
   - 'Proposed'
@@ -532,7 +622,7 @@ date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
 default_port: 6420
-remote_operations: true
+remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
@@ -573,6 +663,10 @@ register_tmp_cleanup "$TMP_REPO_MIGRATION"
 
 (cd "$TMP_REPO_MIGRATION" && git init -q)
 mkdir -p "$TMP_REPO_MIGRATION/.backlog"
+# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
+# だけである）。収束済みの config.yml を先に置き、backlog init と
+# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+write_settled_backlog_config "$TMP_REPO_MIGRATION/.backlog/config.yml" "migration-test"
 
 # テンプレートの最後のキー（auto_merge_reviewed、コメント込み）が丸ごと欠けた
 # 「旧バージョンの config.my.yml」を、テンプレートの先頭から max_redispatch の
@@ -662,6 +756,10 @@ register_tmp_cleanup "$TMP_REPO_COMMENTED"
 
 (cd "$TMP_REPO_COMMENTED" && git init -q)
 mkdir -p "$TMP_REPO_COMMENTED/.backlog"
+# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
+# だけである）。収束済みの config.yml を先に置き、backlog init と
+# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+write_settled_backlog_config "$TMP_REPO_COMMENTED/.backlog/config.yml" "commented-key-test"
 
 commented_config="$TMP_REPO_COMMENTED/.backlog/config.my.yml"
 cp "$SOURCE_CONFIG" "$commented_config"
@@ -736,6 +834,10 @@ register_tmp_cleanup "$TMP_REPO_COMMENT_DRIFT"
 
 (cd "$TMP_REPO_COMMENT_DRIFT" && git init -q)
 mkdir -p "$TMP_REPO_COMMENT_DRIFT/.backlog"
+# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
+# だけである）。収束済みの config.yml を先に置き、backlog init と
+# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+write_settled_backlog_config "$TMP_REPO_COMMENT_DRIFT/.backlog/config.yml" "comment-drift-test"
 
 drift_config="$TMP_REPO_COMMENT_DRIFT/.backlog/config.my.yml"
 cp "$SOURCE_CONFIG" "$drift_config"
@@ -849,6 +951,10 @@ register_tmp_cleanup "$TMP_REPO_DRIFT_USEREDIT"
 
 (cd "$TMP_REPO_DRIFT_USEREDIT" && git init -q)
 mkdir -p "$TMP_REPO_DRIFT_USEREDIT/.backlog"
+# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
+# だけである）。収束済みの config.yml を先に置き、backlog init と
+# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+write_settled_backlog_config "$TMP_REPO_DRIFT_USEREDIT/.backlog/config.yml" "drift-useredit-test"
 
 useredit_config="$TMP_REPO_DRIFT_USEREDIT/.backlog/config.my.yml"
 cp "$drift_config" "$useredit_config"
@@ -907,6 +1013,10 @@ register_tmp_cleanup "$TMP_REPO_NO_DRIFT"
 
 (cd "$TMP_REPO_NO_DRIFT" && git init -q)
 mkdir -p "$TMP_REPO_NO_DRIFT/.backlog"
+# .backlog/config.yml はこのセクションの検証対象ではない（見るのは config.my.yml
+# だけである）。収束済みの config.yml を先に置き、backlog init と
+# backlog config set が走らないようにする（write_settled_backlog_config の説明を参照）。
+write_settled_backlog_config "$TMP_REPO_NO_DRIFT/.backlog/config.yml" "no-drift-test"
 cp "$SOURCE_CONFIG" "$TMP_REPO_NO_DRIFT/.backlog/config.my.yml"
 
 no_drift_output="$("$SETUP_SCRIPT" "$TMP_REPO_NO_DRIFT" 2>&1)"
@@ -932,27 +1042,23 @@ fi
 
 echo ""
 echo "--- 6c-4. 新規導入（config.my.yml が無い状態）は従来どおりテンプレートのコピー（TASK-74 AC#3） ---"
-TMP_REPO_FRESH_CONFIG="$(mktemp -d)"
-register_tmp_cleanup "$TMP_REPO_FRESH_CONFIG"
-
-(cd "$TMP_REPO_FRESH_CONFIG" && git init -q)
-
-fresh_output="$("$SETUP_SCRIPT" "$TMP_REPO_FRESH_CONFIG" 2>&1)"
-fresh_exit=$?
-if [ "$fresh_exit" -eq 0 ]; then
+# 「config.my.yml が無い git リポジトリへの1回目の実行」は共有フィクスチャ
+# FIXTURE_FRESH がまさにその状態なので、専用の一時リポジトリを作らず読み取りで
+# 共有する。このセクションはフィクスチャを書き換えない。
+if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
   pass "config.my.yml が無い新規導入の実行が成功する（exit 0）"
 else
-  fail "config.my.yml が無い新規導入の実行が失敗した（exit ${fresh_exit}）:
-$fresh_output"
+  fail "config.my.yml が無い新規導入の実行が失敗した（exit ${FIXTURE_FRESH_EXIT}）:
+$FIXTURE_FRESH_OUTPUT"
 fi
-if cmp -s "$SOURCE_CONFIG" "$TMP_REPO_FRESH_CONFIG/.backlog/config.my.yml"; then
+if cmp -s "$SOURCE_CONFIG" "$FIXTURE_FRESH_REPO/.backlog/config.my.yml"; then
   pass "新規導入の config.my.yml はテンプレートと完全に一致する"
 else
   fail "新規導入の config.my.yml がテンプレートと一致しない"
 fi
-if printf '%s\n' "$fresh_output" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
+if printf '%s\n' "$FIXTURE_FRESH_OUTPUT" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
   fail "新規導入で説明コメントの差異が報告された（差異検出は既存ファイルがある場合だけ動くべき）:
-$fresh_output"
+$FIXTURE_FRESH_OUTPUT"
 else
   pass "新規導入では説明コメントの差異検出が動かない"
 fi
@@ -977,6 +1083,7 @@ mkdir -p "$TMP_REPO_REVIEWED_MIGRATION/.backlog"
 # TASK-48 の起票時に実機（~/dotfiles）で確認された statuses の並びをそのまま模擬する。
 cat > "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml" <<'YAML'
 project_name: "reviewed-migration-test"
+default_assignee: ["@improvement-loop-bot"]
 default_status: "To Do"
 statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
 labels: []
@@ -984,7 +1091,7 @@ date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
 default_port: 6420
-remote_operations: true
+remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
@@ -1110,24 +1217,23 @@ fi
 
 echo ""
 echo "=== 7c. Reviewed が元から存在しないリポジトリでは何も変化しない（AC#3） ==="
-# セクション2で通常セットアップ済みの $TMP_REPO（Reviewed を一度も含んだことが
-# 無い）に対して setup-improvement-loop を再実行し、Reviewed 関連の移行処理が
+# 共有フィクスチャ FIXTURE_RERUN（通常セットアップ済みで、Reviewed を一度も
+# 含んだことが無いリポジトリへの再実行）の出力を読み、Reviewed 関連の移行処理が
 # 両方ともスキップと報告されることを確認する（AC#3 の前半）。
+# このセクションはフィクスチャを書き換えない。
 
-no_reviewed_output="$("$SETUP_SCRIPT" "$TMP_REPO" 2>&1)"
-no_reviewed_exit=$?
-if [ "$no_reviewed_exit" -eq 0 ]; then
+if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
   pass "Reviewed が元から無いリポジトリへの実行が成功する（exit 0）"
 else
-  fail "Reviewed が元から無いリポジトリへの実行が失敗した（exit ${no_reviewed_exit}）:
-$no_reviewed_output"
+  fail "Reviewed が元から無いリポジトリへの実行が失敗した（exit ${FIXTURE_RERUN_EXIT}）:
+$FIXTURE_RERUN_OUTPUT"
 fi
-if grep -Fq "status: Reviewed の既存タスクは見つからなかった" <<<"$no_reviewed_output" \
-  && grep -Fq "旧名 'Reviewed' は残っていない" <<<"$no_reviewed_output"; then
+if grep -Fq "status: Reviewed の既存タスクは見つからなかった" <<<"$FIXTURE_RERUN_OUTPUT" \
+  && grep -Fq "旧名 'Reviewed' は残っていない" <<<"$FIXTURE_RERUN_OUTPUT"; then
   pass "AC#3: Reviewed が元から無い場合も、両方の移行処理がスキップと報告される"
 else
   fail "AC#3: Reviewed が元から無い場合に期待するスキップ報告が出力されなかった:
-$no_reviewed_output"
+$FIXTURE_RERUN_OUTPUT"
 fi
 
 echo ""
@@ -1146,6 +1252,7 @@ register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX"
 mkdir -p "$TMP_REPO_CUSTOM_PREFIX/.backlog"
 cat > "$TMP_REPO_CUSTOM_PREFIX/.backlog/config.yml" <<'YAML'
 project_name: "custom-prefix-test"
+default_assignee: ["@improvement-loop-bot"]
 default_status: "To Do"
 statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
 labels: []
@@ -1153,7 +1260,7 @@ date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
 default_port: 6420
-remote_operations: true
+remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
@@ -1202,55 +1309,53 @@ echo "=== 8. remoteOperations / defaultAssignee の既定値収束の検証 ==="
 # 既にユーザーが設定した値は上書きしない」パターンに従う（TASK番号未採番、
 # ユーザー指示による追加）。
 
-TMP_REPO_DEFAULTS="$(mktemp -d)"
-register_tmp_cleanup "$TMP_REPO_DEFAULTS"
-(cd "$TMP_REPO_DEFAULTS" && git init -q)
-
-defaults_output="$("$SETUP_SCRIPT" "$TMP_REPO_DEFAULTS" 2>&1)"
-defaults_exit=$?
-if [ "$defaults_exit" -eq 0 ]; then
+# 8a の前状態「git init しただけのリポジトリへの新規セットアップ」は共有フィクスチャ
+# FIXTURE_FRESH と同一なので、読み取りで共有する（書き換えない）。
+# backlog config get は読み取り専用のコマンドであり、フィクスチャを変更しない。
+if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
   pass "8a: 新規セットアップの実行が成功する（exit 0）"
 else
-  fail "8a: 新規セットアップの実行が失敗した（exit ${defaults_exit}）:
-$defaults_output"
+  fail "8a: 新規セットアップの実行が失敗した（exit ${FIXTURE_FRESH_EXIT}）:
+$FIXTURE_FRESH_OUTPUT"
 fi
 
-remote_ops_after_setup="$(cd "$TMP_REPO_DEFAULTS" && backlog config get remoteOperations 2>/dev/null)"
+remote_ops_after_setup="$(cd "$FIXTURE_FRESH_REPO" && backlog config get remoteOperations 2>/dev/null)"
 if [ "$remote_ops_after_setup" = "false" ]; then
   pass "8a: 新規セットアップ後、remoteOperations が false に収束する"
 else
   fail "8a: 新規セットアップ後の remoteOperations が false になっていない: '$remote_ops_after_setup'"
 fi
 
-defaults_config="$TMP_REPO_DEFAULTS/.backlog/config.yml"
-if grep -m1 '^default_assignee:' "$defaults_config" | grep -Fq '@improvement-loop-bot'; then
+fresh_defaults_config="$FIXTURE_FRESH_REPO/.backlog/config.yml"
+if grep -m1 '^default_assignee:' "$fresh_defaults_config" | grep -Fq '@improvement-loop-bot'; then
   pass "8a: 新規セットアップ後、default_assignee が @improvement-loop-bot に収束する"
 else
-  fail "8a: 新規セットアップ後の default_assignee が @improvement-loop-bot になっていない: $(grep -m1 '^default_assignee:' "$defaults_config")"
+  fail "8a: 新規セットアップ後の default_assignee が @improvement-loop-bot になっていない: $(grep -m1 '^default_assignee:' "$fresh_defaults_config")"
 fi
 
 # ---- 8b. 冪等性: 再実行しても壊れず、両方とも [skip] と報告される ----
-defaults_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_DEFAULTS" 2>&1)"
-defaults_rerun_exit=$?
-if [ "$defaults_rerun_exit" -eq 0 ]; then
+# 8b の前状態「remoteOperations/defaultAssignee が収束済みのリポジトリへの再実行」も
+# 共有フィクスチャ FIXTURE_RERUN と同一なので、読み取りで共有する（書き換えない）。
+rerun_defaults_config="$FIXTURE_RERUN_REPO/.backlog/config.yml"
+if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
   pass "8b: remoteOperations/defaultAssignee が既に収束済みの状態への再実行が成功する（exit 0）"
 else
-  fail "8b: 再実行が失敗した（exit ${defaults_rerun_exit}）:
-$defaults_rerun_output"
+  fail "8b: 再実行が失敗した（exit ${FIXTURE_RERUN_EXIT}）:
+$FIXTURE_RERUN_OUTPUT"
 fi
-if grep -Fq "remoteOperations は既に false" <<<"$defaults_rerun_output"; then
+if grep -Fq "remoteOperations は既に false" <<<"$FIXTURE_RERUN_OUTPUT"; then
   pass "8b: 再実行時、remoteOperations の収束処理がスキップと報告される"
 else
   fail "8b: 再実行時に remoteOperations のスキップ報告が出力されなかった:
-$defaults_rerun_output"
+$FIXTURE_RERUN_OUTPUT"
 fi
-if grep -Fq "default_assignee は既に設定されている" <<<"$defaults_rerun_output"; then
+if grep -Fq "default_assignee は既に設定されている" <<<"$FIXTURE_RERUN_OUTPUT"; then
   pass "8b: 再実行時、default_assignee の収束処理がスキップと報告される"
 else
   fail "8b: 再実行時に default_assignee のスキップ報告が出力されなかった:
-$defaults_rerun_output"
+$FIXTURE_RERUN_OUTPUT"
 fi
-assignee_dup_count="$(grep -Ec '^default_assignee:' "$defaults_config" || true)"
+assignee_dup_count="$(grep -Ec '^default_assignee:' "$rerun_defaults_config" || true)"
 if [ "$assignee_dup_count" = "1" ]; then
   pass "8b: 再実行後も default_assignee が重複追記されない"
 else
