@@ -18,7 +18,10 @@
 #      （未設定なら既定でリポジトリルート配下の .worktree/）。
 #      この配下にさらにリポジトリ名で名前空間分けする。
 #   2. ベースディレクトリがリポジトリ内を指す場合だけ、.git/info/exclude に
-#      除外パターンを追記する（リポジトリ外を指す場合は追記しない）。
+#      除外パターンを追記する（リポジトリ外を指す場合は追記しない）。あわせて
+#      管理対象の除外行をマーカーコメント1行として記録し、以前の
+#      worktree_base_dir の除外行が失効したまま残っていないかを検査する
+#      （下記「失効した除外行の検知」を参照）。
 #   3. git worktree prune の後、デフォルトブランチを判定し（フェッチできれば
 #      origin/HEAD、できなければ main にフォールバック）、起点（BASE_REF）を
 #      決める（下記「起点の決め方」を参照）。
@@ -61,6 +64,19 @@
 #   止めるかどうかの判断は呼び出し側（dispatch）が行う（下記「責務外」）。
 #   終了ステータスは検査結果によって変えない（STALE_BASE でも 0 で終わる）。
 #
+# 失効した除外行の検知（TASK-79）:
+#   .git/info/exclude への追記は追記専用であり、worktree_base_dir を変更して
+#   再実行すると古い値の除外行が残り続ける。残った行は既に失効した理由で git の
+#   追跡を黙って止め続けるため、検知して報告する。管理対象の除外行は
+#   `# improvement-loop worktree_base_dir added=<yes|no> path=<相対パス>` という
+#   コメント行1行として .git/info/exclude 自身に記録する（`#` 始まりなので git の
+#   除外判定には影響しない）。この記録と現在の値が食い違い、かつ古い行が今も
+#   残っている場合に STALE_EXCLUDE 行を出す。
+#   既存の除外行の削除・書き換えは一切行わない。.git/info/exclude は利用者と
+#   他ツールの共有物であり、マーカー導入以前からある行を improvement-loop が
+#   書いたと証明する情報が無いためである（TASK-74 と同じ判断）。書き換えるのは
+#   固定接頭辞で一意に識別できる自分のマーカー行だけである。
+#
 # 冪等性: 同じ <task-id> で複数回実行しても、既存のブランチ・ワークツリー・
 # シンボリックリンク・.git/info/exclude の記述を再利用/スキップし、
 # エラーにならない。占有記録（.worktree-occupancy）は実行のたびに上書きされ、
@@ -101,6 +117,13 @@
 #     STALE_REASON=branch_behind_default_branch 起点以外の候補を含まない
 #     STALE_REASON=base_ref_unresolved         起点そのものを解決できない
 #     MISSING_COMMITS=<参照名>:<含まれていないコミット数>
+#   以前の worktree_base_dir の除外行が .git/info/exclude に残っている場合だけ、
+#   次の行を出す（RESULT: の値には影響しない。OK・STALE_BASE のどちらとも
+#   同時に出うる）。人間向けの詳しい警告は同時に標準エラーへ出す。
+#     STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexisting>
+#       added_by_improvement_loop  その行は improvement-loop が追記したもの
+#       preexisting                improvement-loop が追記しようとした時点で
+#                                  既に存在していた（所有者を特定できない）
 #   最後に次の2行を出力する（呼び出し側が後続手順で使う。この2行が最後で
 #   あることは従来からの契約であり、上の診断行は必ずこれより前に出る）。
 #     WORKTREE_DIR=<作成/再利用したワークツリーの絶対パス>
@@ -110,6 +133,13 @@ set -euo pipefail
 
 err() {
   printf 'エラー: %s\n' "$*" >&2
+}
+
+# 実行を止めない診断の報告先。標準出力は出力契約（RESULT: 行以降）専用なので
+# 標準エラーへ出す。err() と接頭辞を分けているのは、呼び出し側（dispatch）が
+# 「失敗した」と読み違えないようにするためである。
+warn() {
+  printf '警告: %s\n' "$*" >&2
 }
 
 if [ "$#" -ne 1 ]; then
@@ -260,10 +290,130 @@ case "$BASE_DIR" in
     ;;
 esac
 
+# EXCLUDE_FILE は以降（.backlog・.worktree-occupancy の追記、下のマーカー行の
+# 読み書き）でも同じものを使う。以前はここと .backlog の追記箇所で別々の変数
+# （BASE_DIR_EXCLUDE_FILE / EXCLUDE_FILE）に同じパスを二重に代入していた。
+EXCLUDE_FILE="$GIT_COMMON_DIR/info/exclude"
+mkdir -p "$(dirname "$EXCLUDE_FILE")"
+
+# ---- 失効した worktree_base_dir 除外行の検知（TASK-79） ----
+# .git/info/exclude への追記は追記専用であり、worktree_base_dir を変更して
+# 再実行すると新しい値の行が増える一方で、古い値の行はそのまま残る。残った
+# 行は「improvement ループがワークツリー置き場として使っていた」という既に
+# 失効した理由で git の追跡を黙って止め続ける（利用者が後からその名前の
+# ディレクトリを git 管理下に置こうとしても git status にも git add の警告にも
+# 現れない）。
+#
+# 検知の足がかりとして、improvement-loop が管理対象にした除外行を、次の書式の
+# コメント行1行として .git/info/exclude 自身に記録する。`#` で始まるコメント
+# 行なので git の除外判定には一切影響しない。
+#
+#   # improvement-loop worktree_base_dir added=<yes|no> path=<リポジトリ相対パス>
+#
+#   path=  improvement-loop が最後に管理対象とした除外行（＝そのときの
+#          REL_BASE_DIR）。設定値そのものではなく、除外行として書かれた形。
+#   added= その除外行を improvement-loop 自身が追記したか（yes）、追記しようと
+#          した時点で既に同じ行が存在していたか（no）。後者はユーザーや他ツール
+#          が先に書いた可能性があり、improvement-loop の所有物とは言えない。
+#
+# 検知したら報告するだけで、除外行の削除・書き換えは一切行わない。
+# .git/info/exclude は利用者と他ツール（`# interview-dev-loop plan docs`、
+# `# claude-code-runtime` 等）の共有物であり、マーカー導入以前から存在する行に
+# ついては「improvement-loop が書いた」と証明できる情報が原理的に無いためである
+# （bin/setup-improvement-loop の warn_config_my_yml_comment_drift が
+# config.my.yml に対して出したのと同じ結論。TASK-74）。書き換えるのは自分の
+# マーカー行だけで、それは固定の接頭辞で一意に識別できる。
+#
+# 既知の限界: マーカーが無い状態（このリポジトリでこのスクリプトの本版を一度も
+# 実行していない導入先）では、既に残っている失効行を検知できない。マーカーは
+# 本版の初回実行時に現在の値で書かれ、そこから先の変更を検知できるようになる。
+EXCLUDE_MARKER_PREFIX="# improvement-loop worktree_base_dir "
+# マーカー行を見つけるための正規表現。接頭辞は固定文字列で正規表現の
+# メタ文字を含まないため、そのまま連結してよい。grep と awk の両方で
+# 同じ判定を使うので、定義はここ1箇所に置く。
+EXCLUDE_MARKER_RE="^${EXCLUDE_MARKER_PREFIX}added=(yes|no) path="
+STALE_EXCLUDE_LINES=()
+
+# 既存のマーカー行（最初の1件）を読む。無ければ EXCLUDE_MARKER_FOUND が 0 のままになる。
+EXCLUDE_MARKER_FOUND=0
+PREV_EXCLUDE_ADDED=""
+PREV_EXCLUDE_PATH=""
+if [ -f "$EXCLUDE_FILE" ]; then
+  exclude_marker_line="$(grep -m1 -E "$EXCLUDE_MARKER_RE" "$EXCLUDE_FILE" || true)"
+  if [ -n "$exclude_marker_line" ]; then
+    EXCLUDE_MARKER_FOUND=1
+    # added= と path= の値を取り出す。書式が固定なのでシェルの文字列操作だけで
+    # 済み、sed の区切り文字と正規表現の | の衝突といった落とし穴も避けられる。
+    exclude_marker_rest="${exclude_marker_line#"${EXCLUDE_MARKER_PREFIX}added="}"
+    PREV_EXCLUDE_ADDED="${exclude_marker_rest%% *}"
+    # path= の値はパスなので半角スペースを含みうる。行末までを丸ごと値とする。
+    PREV_EXCLUDE_PATH="${exclude_marker_line#*" path="}"
+  fi
+fi
+
+# 記録されている管理対象が現在の値と違い、かつその行が今も残っているなら失効。
+# REL_BASE_DIR が空（worktree_base_dir をリポジトリ外へ移した）場合もここを通る。
+if [ -n "$PREV_EXCLUDE_PATH" ] && [ "$PREV_EXCLUDE_PATH" != "$REL_BASE_DIR" ] &&
+   grep -Fxq "$PREV_EXCLUDE_PATH" "$EXCLUDE_FILE" 2>/dev/null; then
+  if [ "$PREV_EXCLUDE_ADDED" = "yes" ]; then
+    stale_exclude_origin="added_by_improvement_loop"
+  else
+    stale_exclude_origin="preexisting"
+  fi
+  STALE_EXCLUDE_LINES+=("STALE_EXCLUDE=$PREV_EXCLUDE_PATH:$stale_exclude_origin")
+  warn "以前の worktree_base_dir に対応する除外行が .git/info/exclude に残っている: $PREV_EXCLUDE_PATH"
+  if [ -n "$REL_BASE_DIR" ]; then
+    warn "現在の worktree_base_dir から導かれる除外行は '$REL_BASE_DIR' であり、'$PREV_EXCLUDE_PATH' の除外理由は失効している。"
+  else
+    warn "現在の worktree_base_dir はリポジトリ外を指しており、'$PREV_EXCLUDE_PATH' の除外理由は失効している。"
+  fi
+  if [ "$PREV_EXCLUDE_ADDED" = "yes" ]; then
+    warn "この行は improvement-loop が追記したものである。不要なら手で削除してよい: $EXCLUDE_FILE"
+  else
+    warn "この行は improvement-loop が追記した時点で既に存在していた。ユーザーまたは他ツールが書いた可能性があるため、削除してよいかは内容を確認して判断すること: $EXCLUDE_FILE"
+  fi
+  warn "このスクリプトは共有物である .git/info/exclude の既存行を削除・書き換えしない（報告のみ）。"
+fi
+
+# 除外行の追記そのものは従来どおり「同じ行が無ければ追記する」だけである。
+EXCLUDE_ADDED="no"
 if [ -n "$REL_BASE_DIR" ]; then
-  BASE_DIR_EXCLUDE_FILE="$GIT_COMMON_DIR/info/exclude"
-  mkdir -p "$(dirname "$BASE_DIR_EXCLUDE_FILE")"
-  grep -Fxq "$REL_BASE_DIR" "$BASE_DIR_EXCLUDE_FILE" 2>/dev/null || echo "$REL_BASE_DIR" >> "$BASE_DIR_EXCLUDE_FILE"
+  if grep -Fxq "$REL_BASE_DIR" "$EXCLUDE_FILE" 2>/dev/null; then
+    if [ "$PREV_EXCLUDE_PATH" = "$REL_BASE_DIR" ] && [ -n "$PREV_EXCLUDE_ADDED" ]; then
+      EXCLUDE_ADDED="$PREV_EXCLUDE_ADDED"   # 記録済みの由来を保つ（再実行で no に倒れないように）
+    fi
+  else
+    echo "$REL_BASE_DIR" >> "$EXCLUDE_FILE"
+    EXCLUDE_ADDED="yes"
+  fi
+
+  # マーカー行を現在の管理対象に合わせる。既に一致していれば何も書かない
+  # （worktree_base_dir を変えていない再実行ではファイルが1バイトも変わらない）。
+  DESIRED_EXCLUDE_MARKER="${EXCLUDE_MARKER_PREFIX}added=$EXCLUDE_ADDED path=$REL_BASE_DIR"
+  if ! grep -Fxq "$DESIRED_EXCLUDE_MARKER" "$EXCLUDE_FILE" 2>/dev/null; then
+    if [ "$EXCLUDE_MARKER_FOUND" -eq 1 ]; then
+      # 自分のマーカー行だけを差し替える。他の行はそのまま出力する
+      # （書き換えのイディオムは bin/setup-improvement-loop の
+      # replace_statuses_line と同じ mktemp + awk）。
+      # 書き戻しは mv ではなく元ファイルへの上書きで行う。mv は mktemp が
+      # 作った 0600 のパーミッションと inode ごと差し替えてしまい、利用者と
+      # 他ツールの共有物である .git/info/exclude の属性を黙って変えることに
+      # なるためである。awk が最後まで成功してから上書きするので、途中で
+      # 失敗して元ファイルを壊すことはない（set -e）。
+      # 何らかの理由でマーカー行が複数ある場合は、最初の1行を差し替えて
+      # 残りを落とす（マーカー行は improvement-loop 自身が書いたものなので
+      # 削除してよい唯一の行である）。これで行が増え続けることはない。
+      exclude_tmp_file="$(mktemp "${EXCLUDE_FILE}.XXXXXX")"
+      awk -v marker="$DESIRED_EXCLUDE_MARKER" -v re="$EXCLUDE_MARKER_RE" '
+        $0 ~ re { if (!replaced) { print marker; replaced = 1 } ; next }
+        { print }
+      ' "$EXCLUDE_FILE" > "$exclude_tmp_file"
+      cat "$exclude_tmp_file" > "$EXCLUDE_FILE"
+      rm -f "$exclude_tmp_file"
+    else
+      printf '%s\n' "$DESIRED_EXCLUDE_MARKER" >> "$EXCLUDE_FILE"
+    fi
+  fi
 fi
 
 git worktree prune   # ディレクトリだけ消えて登録情報が残っているケースを掃除してから作る
@@ -369,8 +519,7 @@ fi
 # 古いインストール（.git/info/exclude が末尾スラッシュ付きの ".backlog/" のまま）だと、
 # 上のシンボリックリンクは除外パターンにマッチせず、ワークツリー内で git status が
 # 常に汚れて見える。スラッシュ無しの ".backlog" は両方にマッチするので、無ければ足す。
-EXCLUDE_FILE="$GIT_COMMON_DIR/info/exclude"
-mkdir -p "$(dirname "$EXCLUDE_FILE")"
+# EXCLUDE_FILE は worktree_base_dir の除外行を扱う箇所（上）で定義済みである。
 grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE_FILE"
 
 # ---- 占有記録（TASK-40） ----
@@ -452,6 +601,11 @@ if [ "${#STALE_REASONS[@]}" -gt 0 ]; then
 fi
 if [ "${#MISSING_LINES[@]}" -gt 0 ]; then
   printf '%s\n' "${MISSING_LINES[@]}"
+fi
+# 失効した除外行の検知結果（TASK-79）。RESULT: の値には載せない。引き渡しを
+# 止める理由にはならず、STALE_BASE と同時に成立しうるためである。
+if [ "${#STALE_EXCLUDE_LINES[@]}" -gt 0 ]; then
+  printf '%s\n' "${STALE_EXCLUDE_LINES[@]}"
 fi
 
 echo "WORKTREE_DIR=$WORKTREE_DIR"
