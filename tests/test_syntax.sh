@@ -175,7 +175,10 @@ if command -v shellcheck >/dev/null 2>&1; then
     fi
   done
 else
-  skip "shellcheck が PATH に無いため実行しなかった"
+  # 上の bash -n の層は shellcheck が無くても実行済みである（TASK-60）。ここで失われるのは
+  # 静的検査の層だけなので、その規模と導入方法を1行で伝える。tests/run.sh 経由の実行では
+  # 総合サマリーの「未導入の任意依存」にも再掲される（tests/run.sh の OPTIONAL_DEPENDENCIES）。
+  skip "shellcheck が PATH に無いため、CHECK_SCRIPTS ${#CHECK_SCRIPTS[@]}件に対する静的検査を実行しなかった（bash -n は実行済み。導入するには: brew install shellcheck）"
 fi
 
 echo ""

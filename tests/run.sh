@@ -4,6 +4,8 @@
 # （テスト対象の不具合として失敗にはしない）。スキップされたファイルも総合サマリーの
 # SKIP に計上される。ただし検証が1件も実行されなかった run 自体は FAIL とする
 # （後述の「検証が1件も実行されなかった場合の検査」を参照）。
+# これとは別に、無くてもテストは走るが担当する検査だけが失われる任意依存（shellcheck）が
+# ある。未導入なら総合サマリーの末尾にまとめて再掲する（後述の OPTIONAL_DEPENDENCIES）。
 #
 # tests/ 配下の対象スクリプトごとの test_*.sh を順にサブプロセスとして実行し、
 # 標準出力をそのまま表示しつつ、各ファイル末尾のサマリー行
@@ -41,6 +43,28 @@ TEST_FILES=(
 # tests/ 配下に実在するが意図的に実行しない test_*.sh。通常は空である。
 # 除外するときは、なぜ実行しないのかを1行コメントで添えてファイル名を追加する。
 EXCLUDED_TEST_FILES=()
+
+# ---- 任意依存 ----
+# 必須依存（bash・git・backlog、判定は tests/lib/common.sh の check_test_dependencies）は
+# 欠けるとそのテストファイルが丸ごとスキップされ、総合サマリーの SKIP に載る。一方ここに
+# 挙げるのは「無くてもテストは走るが、その依存が担う検査だけが失われる」コマンドである。
+# 失われ方が SKIP 1行なので、400行を超える出力の中では埋もれて気づけない。静的検査
+# ツールが未導入の環境では、実際に32件の検査が SKIP 1行に畳まれたまま緑で終わっていた
+# （TASK-92）。そこで実行の最後に、未導入のものだけを総合サマリーへまとめて再掲する。
+#
+# 注意: このファイルも静的検査の対象なので、字下げを含めてハッシュ記号の直後がその
+# ツールの名前で始まる行はディレクティブとして解釈され SC1072/SC1073 になる。
+# コメントを書くときは語順を変えて避けること。
+#
+# 未導入を FAIL にはしない。任意依存はそれが無くても検証の最低ライン（bash -n など）は
+# 成立する前提で選んでおり、未導入というだけで pre-commit がコミットをブロックするのは
+# 「知らせる」に対して過剰だからである。
+#
+# 「<コマンド名>|<欠けたときに失われる検査>|<導入方法>」の1行1エントリ。ここに足したら
+# README.md の「開発者向け情報」にも書くこと（tests/test_run.sh が両方を機械的に検査する）。
+OPTIONAL_DEPENDENCIES=(
+  "shellcheck|tests/test_syntax.sh の静的検査（CHECK_SCRIPTS に挙げた全スクリプトの shellcheck 実行。bash -n は shellcheck が無くても実行される）|brew install shellcheck"
+)
 
 TOTAL_PASS=0
 TOTAL_FAIL=0
@@ -214,6 +238,30 @@ fi
 printf 'PASS: %d, FAIL: %d, SKIP: %d\n' "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP"
 printf 'テストファイル: 実行 %d件 / 丸ごとスキップ %d件 / 集計不能 %d件（登録 %d件）\n' \
   "$FILES_EXECUTED" "$FILES_ALL_SKIPPED" "$FILES_UNCOUNTED" "${#TEST_FILES[@]}"
+
+# ---- 未導入の任意依存の再掲 ----
+# 上の OPTIONAL_DEPENDENCIES を参照。個々のテストファイルが出す SKIP 1行は出力に埋もれる
+# ので、実行者が必ず読む総合サマリーの位置で、失われた検査と導入方法をまとめて示す。
+# PASS/FAIL/SKIP の件数には一切加算しない（導入済み環境の集計値を動かさないため）。
+MISSING_OPTIONAL_LINES=""
+MISSING_OPTIONAL_COUNT=0
+if [ "${#OPTIONAL_DEPENDENCIES[@]}" -gt 0 ]; then
+  for optional_entry in "${OPTIONAL_DEPENDENCIES[@]}"; do
+    IFS='|' read -r optional_cmd optional_lost optional_install <<<"$optional_entry"
+    if command -v "$optional_cmd" >/dev/null 2>&1; then
+      continue
+    fi
+    MISSING_OPTIONAL_COUNT=$((MISSING_OPTIONAL_COUNT + 1))
+    MISSING_OPTIONAL_LINES="${MISSING_OPTIONAL_LINES}  - ${optional_cmd} が PATH に無いため、次の検査は実行されていない: ${optional_lost}"$'\n'
+    MISSING_OPTIONAL_LINES="${MISSING_OPTIONAL_LINES}    導入するには: ${optional_install}"$'\n'
+  done
+fi
+
+if [ "$MISSING_OPTIONAL_COUNT" -gt 0 ]; then
+  printf '未導入の任意依存: %d件（下記が担う検査は今回実行されておらず、上の PASS 件数にも含まれていない）\n' \
+    "$MISSING_OPTIONAL_COUNT"
+  printf '%s' "$MISSING_OPTIONAL_LINES"
+fi
 
 if [ "$TOTAL_FAIL" -gt 0 ]; then
   exit 1
