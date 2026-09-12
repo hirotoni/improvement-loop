@@ -150,6 +150,28 @@ backlog task edit TASK-<n> --plan '1. ...
 - 同じ根本原因が受入基準の範囲内に複数箇所あるなら、まとめて直す。
 - 関係のない既存の変更を戻さない。
 - 進捗は `backlog task edit TASK-<n> --append-notes '<実装したこと>'` に残す。
+- 各実装スライスが完了するたび（進捗を notes に残す前後など）、占有記録のハートビート更新（TASK-93 の軽量経路 `touch-occupancy`）を呼ぶ。1スライスの実装・その場での検証がコミットを伴わずに続くと、`claude-code/skills/improvement-dispatch/SKILL.md` に明記された残存リスク（30分を超えるコミット無し処理中に誤って `REVERT_TO_TODO` される）が現実になりうるためである。
+
+  ```bash
+  MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  TOUCH_SCRIPT=""
+  for candidate in \
+    "claude-code/skills/improvement-dispatch/scripts/touch-occupancy" \
+    "$MAIN_WORKTREE_ROOT/.claude/skills/improvement-dispatch/scripts/touch-occupancy"; do
+    if [ -x "$candidate" ]; then
+      TOUCH_SCRIPT="$candidate"
+      break
+    fi
+  done
+  if [ -n "$TOUCH_SCRIPT" ]; then
+    TASK_SLUG="$(git rev-parse --abbrev-ref HEAD | sed 's#^improvement/##')"
+    "$TOUCH_SCRIPT" "$(pwd)" "$TASK_SLUG" >/dev/null 2>&1 || true
+  fi
+  ```
+
+  - 参照パスの2候補探索は手順1・手順8と同じ理由（導入先リポジトリには `claude-code/skills/` が無く、`.claude/skills/<スキル名>` シンボリックリンク経由でしか実体に届かない）による。
+  - この呼び出しは**ベストエフォート**である。`touch-occupancy` の実体が見つからない場合（`TOUCH_SCRIPT` が空のまま）、または見つかっても失敗した場合（`|| true` で握り潰す）でも、実装・検証・コミット・`In Review` への遷移を一切止めない。占有記録の更新に失敗しても、既存のコミット履歴ベースのフォールバック判定（`claude-code/skills/improvement-dispatch/scripts/check-progress-recovery`）に委ねられる。
+  - `TOUCH_SCRIPT` を手順8の `CHECK_SCRIPT` と混同しない。別の Bash 呼び出しで変数は引き継がれないため、呼ぶたびにこのブロックをそのまま実行する。
 
 ## 6. レビューパスを回す
 
@@ -173,6 +195,28 @@ git diff <デフォルトブランチ>...HEAD
 - `.pre-commit-config.yaml`、CI 設定、`Makefile`、`package.json` の scripts を見て、該当するものを走らせる。
 - 対象が設定ファイル（シェル、エディタ、ツール設定）なら、実際に読み込ませて確認する。例：シェルスクリプトは `bash -n` / `shellcheck`、Neovim 設定は `nvim --headless '+qa'` の終了コードとエラー出力。
 - 受入基準ごとに、それを満たしたと言える証跡（コマンドと出力）を用意する。証跡が作れない基準はチェックしない。
+- テストスイートの実行など、コミットを伴わずに時間のかかる検証コマンドを走らせるときは、その直前・直後に占有記録のハートビート更新を呼ぶ。手順5と同じ呼び出しをそのまま使う。
+
+  ```bash
+  MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  TOUCH_SCRIPT=""
+  for candidate in \
+    "claude-code/skills/improvement-dispatch/scripts/touch-occupancy" \
+    "$MAIN_WORKTREE_ROOT/.claude/skills/improvement-dispatch/scripts/touch-occupancy"; do
+    if [ -x "$candidate" ]; then
+      TOUCH_SCRIPT="$candidate"
+      break
+    fi
+  done
+  if [ -n "$TOUCH_SCRIPT" ]; then
+    TASK_SLUG="$(git rev-parse --abbrev-ref HEAD | sed 's#^improvement/##')"
+    "$TOUCH_SCRIPT" "$(pwd)" "$TASK_SLUG" >/dev/null 2>&1 || true
+  fi
+  # ここで本来の検証コマンド（例: bash tests/run.sh）を実行する。
+  # 完了後、同じブロックをもう一度呼んで直後のタイムスタンプも更新する。
+  ```
+
+  - この呼び出しも**ベストエフォート**である。手順5と同じく、`touch-occupancy` が見つからない・失敗しても検証そのもの・その後の報告・コミットへの移行は止めない。
 
 ## 8. コミットする
 
