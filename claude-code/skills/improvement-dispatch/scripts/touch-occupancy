@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# 占有記録ファイル（.worktree-occupancy）の ASSIGNED_AT/ASSIGNED_AT_EPOCH だけを
+# 更新する軽量経路（TASK-93）。claude-code/skills/improvement-dispatch/scripts/create-worktree
+# が行う git worktree add/remove、起点（BASE_REF）の解決、.git/info/exclude への
+# 追記は一切行わない。
+#
+# 想定する呼び出し元は、作業中のサブエージェント（例: improvement-work）が
+# 「まだ生きている」ことを示すためだけに占有記録のタイムスタンプを更新したい場合。
+# 唯一の経路が create-worktree だと、ワークツリーが既に存在するにもかかわらず
+# 起点の再検証・.git/info/exclude の走査など本来不要な処理まで毎回実行することに
+# なり、意図と処理内容が一致しない。
+#
+# 使い方: touch-occupancy <worktree_path> <task_id>
+#   worktree_path  更新対象のワークツリーの絶対パス。
+#   task_id        占有記録に書き込む TASK_ID（task-<番号>-<英小文字のスラッグ> 形式）。
+#
+# 呼び出し元のカレントディレクトリが属する git リポジトリを基準に、次の2条件を
+# 両方満たす場合にのみ占有記録を上書きする。満たさない場合は書き込まずにエラーとする
+# （存在しないワークツリーの占有記録を作らない、他タスクの占有記録を誤って
+# 上書きしない）。
+#   1. worktree_path が `git worktree list --porcelain` に実在登録されている。
+#   2. そのワークツリーに checkout されているブランチが improvement/<task_id> と一致する
+#      （task_id が指す先と、実際に更新しようとしているワークツリーが一致するかの確認）。
+#
+# 占有記録の書き込み自体は bin/lib/occupancy.sh の occupancy_write_file() を
+# create-worktree と共有する（重複実装を持たない）。
+#
+# 出力する行（RESULT）の意味・exit code との対応、標準出力を出力契約専用にして
+# 診断メッセージを標準エラーへ出す方針は
+# claude-code/skills/improvement-dispatch/scripts/check-progress-recovery と
+# 同じ規約に揃える。RESULT は最終行に出す。
+#
+# 終了ステータス:
+#   0 = RESULT: OK（占有記録を更新した）
+#   1 = RESULT: ERROR（引数不正、対象リポジトリでない、ワークツリー未登録、
+#       ブランチ不一致など。詳細は標準エラー）
+#
+# 責務外: git worktree add/remove/prune のような実際のワークツリー操作、起点の解決、
+# .git/info/exclude への追記、backlog タスクのステータス変更。診断と占有記録の
+# 更新のみを行う。
+
+set -uo pipefail
+
+err() {
+  printf 'エラー: %s\n' "$*" >&2
+}
+
+emit_result() {
+  printf 'RESULT: %s\n' "$1"
+}
+
+if [ "$#" -ne 2 ]; then
+  err "使い方: $(basename "$0") <worktree_path> <task_id>"
+  emit_result "ERROR"
+  exit 1
+fi
+
+WORKTREE_PATH="$1"
+TASK_ID="$2"
+
+if [ -z "$WORKTREE_PATH" ] || [ -z "$TASK_ID" ]; then
+  err "worktree_path・task_id はいずれも空文字にできない"
+  emit_result "ERROR"
+  exit 1
+fi
+
+if ! [[ "$TASK_ID" =~ ^task-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+  err "task_id の形式が不正: $TASK_ID (期待する形式: task-<番号>-<英小文字のスラッグ>)"
+  emit_result "ERROR"
+  exit 1
+fi
+EXPECTED_BRANCH="improvement/$TASK_ID"
+
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
+  err "カレントディレクトリが git リポジトリの中ではない: $REPO_ROOT"
+  emit_result "ERROR"
+  exit 1
+fi
+
+# bin/lib/occupancy.sh・bin/lib/worktree_porcelain.sh を source するために、まず
+# 自分自身の実パスから配布元リポジトリのルートを解決する（`.claude/skills/
+# improvement-dispatch` シンボリックリンク経由で実行されうるため、BASH_SOURCE を
+# そのまま使えない）。ここで求める DIST_REPO_ROOT（配布元）は REPO_ROOT（判定対象）
+# とは別物である。create-worktree・merge-reviewed-branch・
+# check-forbidden-allowed-paths と同じ理由・同じ実装。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元>/claude-code/skills/improvement-dispatch/scripts。4階層上がルート。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+# shellcheck source=../../../../bin/lib/worktree_porcelain.sh
+source "$DIST_REPO_ROOT/bin/lib/worktree_porcelain.sh"
+# shellcheck source=../../../../bin/lib/occupancy.sh
+source "$DIST_REPO_ROOT/bin/lib/occupancy.sh"
+
+# ---- 1. worktree_path が git worktree list --porcelain に実在登録されているか ----
+if ! worktree_list_output="$(git -C "$REPO_ROOT" worktree list --porcelain 2>&1)"; then
+  err "git worktree list の実行に失敗した: $worktree_list_output"
+  emit_result "ERROR"
+  exit 1
+fi
+
+# 末尾スラッシュ・相対パス表記のゆれによる誤判定を避けるため正規化してから比較する。
+# 実在しないパスは正規化できないので元の文字列のまま比較する（＝「存在しない」判定）。
+normalized_worktree_path="$WORKTREE_PATH"
+if [ -d "$WORKTREE_PATH" ]; then
+  normalized_worktree_path="$(cd "$WORKTREE_PATH" && pwd -P)"
+fi
+
+if ! printf '%s\n' "$worktree_list_output" | grep -Fxq "worktree $normalized_worktree_path"; then
+  err "ワークツリーが git worktree list に登録されていない（実在しない、または不正なパス）: $WORKTREE_PATH"
+  emit_result "ERROR"
+  exit 1
+fi
+
+# ---- 2. そのワークツリーの checkout 中ブランチが improvement/<task_id> と一致するか ----
+# パスに半角スペースが含まれても壊れないよう、porcelain 出力の解析は
+# bin/lib/worktree_porcelain.sh の worktree_porcelain_pairs() に任せる。
+registered_branch="$(printf '%s\n' "$worktree_list_output" | worktree_porcelain_pairs | awk -F'\t' -v d="$normalized_worktree_path" '
+  $1 == d { print $2; exit }
+')"
+
+if [ "$registered_branch" != "$EXPECTED_BRANCH" ]; then
+  err "ワークツリーに checkout されているブランチが task_id と一致しない: 実際=${registered_branch:-なし（detached HEAD等）} 期待=$EXPECTED_BRANCH"
+  err "占有記録の誤った上書きを避けるため書き込みを中止した: $WORKTREE_PATH"
+  emit_result "ERROR"
+  exit 1
+fi
+
+OCCUPANCY_FILE="$WORKTREE_PATH/.worktree-occupancy"
+occupancy_write_file "$OCCUPANCY_FILE" "$TASK_ID"
+
+emit_result "OK"
+exit 0
