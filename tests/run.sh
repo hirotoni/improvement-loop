@@ -30,6 +30,7 @@ TEST_FILES=(
   "test_select_next_task.sh"
   "test_merge_reviewed_branch.sh"
   "test_create_worktree.sh"
+  "test_touch_occupancy.sh"
   "test_pre_commit_hook.sh"
   "test_check_handoff.sh"
   "test_skill_script_lookup.sh"

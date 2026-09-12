@@ -18,6 +18,11 @@
 # 責務外: backlog タスクのステータス変更と、STALE_BASE を受けて引き渡しを止めるかの
 # 判断（どちらも呼び出し側 = dispatch）。push・merge・rebase は行わない。
 # 診断結果によらず終了ステータスは 0 である。
+#
+# 占有記録のタイムスタンプだけを、ワークツリーの作成・再利用や起点解決を一切行わずに
+# 更新したい場合（例: 作業中のサブエージェントが生存を示すためだけに更新したい場合）は、
+# このスクリプトではなく claude-code/skills/improvement-dispatch/scripts/touch-occupancy
+# を使う（TASK-93）。
 
 set -euo pipefail
 
@@ -79,6 +84,8 @@ DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 # shellcheck source=../../../../bin/lib/worktree_porcelain.sh
 source "$DIST_REPO_ROOT/bin/lib/worktree_porcelain.sh"
+# shellcheck source=../../../../bin/lib/occupancy.sh
+source "$DIST_REPO_ROOT/bin/lib/occupancy.sh"
 
 # git-common-dir は cwd 相対のパスを返すことがあるため、絶対パスへ正規化する。
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir)"
@@ -361,17 +368,12 @@ grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE
 
 # ---- 占有記録 ----
 # このワークツリーが「いつ・どのタスクに割り当てられたか」を記録する。新規作成・再利用の
-# どちらの経路でも通るため、実行のたびに丸ごと上書きする（追記しない）。
-# ASSIGNED_AT_EPOCH を併記するのは、ISO8601 文字列の解析が GNU date と BSD date で
-# 割れるためで、鮮度の数値比較にはそちらを使う（読み手は check-progress-recovery）。
+# どちらの経路でも通るため、実行のたびに丸ごと上書きする（追記しない）。書き込み自体は
+# bin/lib/occupancy.sh の occupancy_write_file() に委ねる（TASK-93）。ワークツリーの
+# 作成・再利用や起点解決を伴わずに同じ書き込みだけを行いたい場合は、この関数を直接
+# 呼ぶ claude-code/skills/improvement-dispatch/scripts/touch-occupancy を使う。
 OCCUPANCY_FILE="$WORKTREE_DIR/.worktree-occupancy"
-ASSIGNED_AT="$(date -u +%FT%TZ)"
-ASSIGNED_AT_EPOCH="$(date -u +%s)"
-{
-  printf 'TASK_ID=%s\n' "$TASK_ID"
-  printf 'ASSIGNED_AT=%s\n' "$ASSIGNED_AT"
-  printf 'ASSIGNED_AT_EPOCH=%s\n' "$ASSIGNED_AT_EPOCH"
-} > "$OCCUPANCY_FILE"
+occupancy_write_file "$OCCUPANCY_FILE" "$TASK_ID"
 
 # .worktree-occupancy も .backlog と同様に git 管理外にする。
 grep -Fxq ".worktree-occupancy" "$EXCLUDE_FILE" 2>/dev/null || echo ".worktree-occupancy" >> "$EXCLUDE_FILE"
