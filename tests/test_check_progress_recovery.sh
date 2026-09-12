@@ -193,4 +193,86 @@ else
 $cr_out_h"
 fi
 
+# ---- TASK-95: 占有記録が稼働中に複数回更新されるシナリオ（TASK-93 touch-occupancy の
+# 軽量更新経路）でも OCCUPANCY_FRESH が最新の更新のみを反映することの回帰テスト。
+# occupancy_write_file()（bin/lib/occupancy.sh）は .worktree-occupancy を毎回丸ごと
+# 上書きするため、check-progress-recovery が読む ASSIGNED_AT_EPOCH は常に「直近の
+# 書き込み時刻」の1行のみになる。したがって check-progress-recovery 自体のロジックは
+# 更新回数を意識する必要がなく、変更不要という判断の根拠をここで実際に確認する。
+CR_WORKTREE_DIR3="${TMP_CR_REPO}-wt3"
+register_tmp_cleanup "$CR_WORKTREE_DIR3"
+(cd "$TMP_CR_REPO" && git worktree add -q -b feature-recovery-heartbeat "$CR_WORKTREE_DIR3" main)
+
+echo ""
+echo "--- 13i. 占有記録が稼働中に複数回更新されるシナリオ（引き渡し40分後だがハートビートは10分前）でも OCCUPANCY_FRESH が最新の更新を反映する（AC#1・AC#2） ---"
+
+# 1回目の書き込み: 引き渡し（40分前 = 鮮度しきい値30分を超える）を模した占有記録。
+# ハートビート更新がまだ無い状態の基準値として、既存13gと同じ「古い記録のみ」の
+# 挙動が変わらないことをここでも確認する。
+handoff_epoch=$(( $(date -u +%s) - 2400 ))
+cat > "$CR_WORKTREE_DIR3/.worktree-occupancy" <<EOF
+TASK_ID=task-999-occupancy-heartbeat-test
+ASSIGNED_AT=$(date -u +%FT%TZ)
+ASSIGNED_AT_EPOCH=$handoff_epoch
+EOF
+
+cr_out_i1="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR3" feature-recovery-heartbeat main 2>&1)"
+cr_exit_i1=$?
+if [ "$cr_exit_i1" -eq 2 ] && printf '%s\n' "$cr_out_i1" | grep -Fxq 'RESULT: REVERT_TO_TODO'; then
+  pass "13i: 引き渡しから40分経過し、ハートビート未更新の1回きりの記録では RESULT: REVERT_TO_TODO（既存13gと同じ挙動）"
+else
+  fail "13i: 期待した結果と異なる（exit ${cr_exit_i1}）:
+$cr_out_i1"
+fi
+
+# 2回目の書き込み（ハートビート、10分前）。occupancy_write_file と同じ「ファイル全体を
+# 上書きする」セマンティクスをここでも再現する。上書き後、ファイルには最新の1行の
+# ASSIGNED_AT_EPOCH だけが残り、40分前の初回書き込みの痕跡は残らない。
+heartbeat_epoch=$(( $(date -u +%s) - 600 ))
+cat > "$CR_WORKTREE_DIR3/.worktree-occupancy" <<EOF
+TASK_ID=task-999-occupancy-heartbeat-test
+ASSIGNED_AT=$(date -u +%FT%TZ)
+ASSIGNED_AT_EPOCH=$heartbeat_epoch
+EOF
+
+cr_out_i2="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR3" feature-recovery-heartbeat main 2>&1)"
+cr_exit_i2=$?
+if [ "$cr_exit_i2" -eq 0 ] && printf '%s\n' "$cr_out_i2" | grep -Fxq 'RESULT: REUSE_WORKTREE_REDISPATCH'; then
+  pass "13i: 引き渡しから40分経過していても、10分前のハートビート更新後は RESULT: REUSE_WORKTREE_REDISPATCH（exit 0）（AC#1）"
+else
+  fail "13i: 期待した結果と異なる（exit ${cr_exit_i2}）:
+$cr_out_i2"
+fi
+
+occupancy_age_i2="$(printf '%s\n' "$cr_out_i2" | grep -E '^OCCUPANCY_AGE_SECONDS: ' | sed -E 's/^OCCUPANCY_AGE_SECONDS: //')"
+if printf '%s\n' "$cr_out_i2" | grep -Fxq 'OCCUPANCY_FRESH: true' \
+    && [ -n "$occupancy_age_i2" ] && [[ "$occupancy_age_i2" =~ ^[0-9]+$ ]] \
+    && [ "$occupancy_age_i2" -ge 595 ] && [ "$occupancy_age_i2" -le 700 ]; then
+  pass "13i: OCCUPANCY_AGE_SECONDS が直近のハートビート（約10分前）を反映し、最初の引き渡し（40分前）ではないことを確認"
+else
+  fail "13i: OCCUPANCY_AGE_SECONDS が期待と異なる（最新の更新を反映していない可能性がある）: ${occupancy_age_i2:-なし}
+$cr_out_i2"
+fi
+
+echo ""
+echo "--- 13j. TASK-93 touch-occupancy を実際に複数回呼び出した後の check-progress-recovery の判定（統合確認）（AC#1） ---"
+CR_WORKTREE_DIR4="${TMP_CR_REPO}-wt4"
+register_tmp_cleanup "$CR_WORKTREE_DIR4"
+TO_HEARTBEAT_TASK_ID="task-95-heartbeat-integration-test"
+TO_HEARTBEAT_BRANCH="improvement/$TO_HEARTBEAT_TASK_ID"
+(cd "$TMP_CR_REPO" && git worktree add -q -b "$TO_HEARTBEAT_BRANCH" "$CR_WORKTREE_DIR4" main)
+
+(cd "$TMP_CR_REPO" && "$TOUCH_OCCUPANCY_SCRIPT" "$CR_WORKTREE_DIR4" "$TO_HEARTBEAT_TASK_ID" >/dev/null 2>&1)
+(cd "$TMP_CR_REPO" && "$TOUCH_OCCUPANCY_SCRIPT" "$CR_WORKTREE_DIR4" "$TO_HEARTBEAT_TASK_ID" >/dev/null 2>&1)
+
+cr_out_j="$(cd "$TMP_CR_REPO" && "$CHECK_RECOVERY_SCRIPT" "$CR_WORKTREE_DIR4" "$TO_HEARTBEAT_BRANCH" main 2>&1)"
+cr_exit_j=$?
+if [ "$cr_exit_j" -eq 0 ] && printf '%s\n' "$cr_out_j" | grep -Fxq 'RESULT: REUSE_WORKTREE_REDISPATCH' \
+    && printf '%s\n' "$cr_out_j" | grep -Fxq 'OCCUPANCY_FRESH: true'; then
+  pass "13j: touch-occupancy を実際に複数回呼んだ後も check-progress-recovery は RESULT: REUSE_WORKTREE_REDISPATCH / OCCUPANCY_FRESH: true と判定する（TASK-93 の軽量更新経路との結合）（AC#1）"
+else
+  fail "13j: touch-occupancy 複数回呼び出し後の統合結果が期待と異なる（exit ${cr_exit_j}）:
+$cr_out_j"
+fi
+
 finish_tests
