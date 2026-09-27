@@ -20,6 +20,7 @@ MERGE_SCRIPT="$REPO_ROOT/claude-code/skills/improvement-dispatch/scripts/merge-r
 SELECT_SCRIPT="$REPO_ROOT/claude-code/skills/improvement-dispatch/scripts/select-next-task"
 CHECK_RECOVERY_SCRIPT="$REPO_ROOT/claude-code/skills/improvement-dispatch/scripts/check-progress-recovery"
 CHECK_HANDOFF_SCRIPT="$REPO_ROOT/claude-code/skills/improvement-work/scripts/check-handoff"
+BACKLOG_CONFIG_SNAPSHOT_SCRIPT="$REPO_ROOT/claude-code/skills/improvement-dispatch/scripts/backlog-config-snapshot"
 CHECK_FORBIDDEN_ALLOWED_SCRIPT="$REPO_ROOT/claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths"
 RESOLVE_PATH_SCRIPT="$REPO_ROOT/bin/lib/resolve_path.sh"
 YAML_UNQUOTE_SCRIPT="$REPO_ROOT/bin/lib/yaml_unquote.sh"

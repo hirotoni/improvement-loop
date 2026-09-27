@@ -384,6 +384,32 @@ assert "ワークツリー内の .backlog が本体の .backlog を指すシン�
 assert "ワークツリー内の .backlog 越しに本体の config.my.yml が読める" \
   cmp -s "$CW_AHEAD_WORKTREE/.backlog/config.my.yml" "$CW_AHEAD_REPO/.backlog/config.my.yml"
 
+# ---- 本体に .backlog/config.yml がある場合、引き渡し時点の複製を git-common-dir の中に
+# 保存する（TASK-117）。検知・復元そのものは tests/test_backlog_config_snapshot.sh で
+# 確かめるので、ここでは create-worktree が保存を呼ぶことと出力契約を壊さないことだけを見る ----
+CW_SNAPSHOT_FILE="$CW_AHEAD_REPO/.git/improvement-loop/backlog-config-snapshots/$CW_AHEAD_TASK_ID.yml"
+printf 'project_name: "cw"\nstatuses: ["To Do", "In Progress", "Done"]\n' > "$CW_AHEAD_REPO/.backlog/config.yml"
+cw_run_stdout "$CW_AHEAD_REPO" "$CW_AHEAD_TASK_ID"
+assert "create-worktree の実行後、共有 config.yml の複製が git-common-dir の中に保存される" \
+  cmp -s "$CW_SNAPSHOT_FILE" "$CW_AHEAD_REPO/.backlog/config.yml"
+assert "複製を保存しても create-worktree の標準出力の最後の2行は WORKTREE_DIR と BRANCH のまま" \
+  last_lines_are "WORKTREE_DIR=$CW_AHEAD_WORKTREE" "BRANCH=improvement/$CW_AHEAD_TASK_ID"
+assert "複製を保存しても元のリポジトリの git status が汚れない" \
+  [ -z "$(git -C "$CW_AHEAD_REPO" status --porcelain)" ]
+cw_run "$CW_AHEAD_REPO" "$CW_AHEAD_TASK_ID"
+assert_not "正常に保存できたときは、複製スクリプトの RESULT: 行が標準出力にも標準エラーにも混ざらない" \
+  has_line "$RUN_OUT" "RESULT: SAVED"
+CW_SNAPSHOT_BEFORE="$(cat "$CW_SNAPSHOT_FILE")"
+printf 'project_name: "broken"\n' > "$CW_AHEAD_REPO/.backlog/config.yml"
+cw_run_stdout "$CW_AHEAD_REPO" "$CW_AHEAD_TASK_ID"
+assert "再引き渡しの時点で config.yml が変わっていても、引き渡し時点の複製は上書きされない" \
+  [ "$(cat "$CW_SNAPSHOT_FILE")" = "$CW_SNAPSHOT_BEFORE" ]
+assert "複製を残したときは BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING を WORKTREE_DIR/BRANCH の直前に出す" \
+  last_lines_are "BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING" "WORKTREE_DIR=$CW_AHEAD_WORKTREE" "BRANCH=improvement/$CW_AHEAD_TASK_ID"
+cw_run "$CW_AHEAD_REPO" "$CW_AHEAD_TASK_ID"
+assert "複製を残したときの標準エラーの行には [backlog-config-snapshot] の接頭辞が付く" \
+  has_line "$RUN_OUT" "[backlog-config-snapshot] RESULT: KEPT_EXISTING"
+
 # ---- auto_merge_reviewed: true で、再利用した作業ブランチが採用しなかった側の
 # 候補（ここでは origin/main）も含まない場合に branch_behind_default_branch を出す
 # （TASK-104）。候補どうしは包含関係にあるため、この理由はブランチが起点も含まない
