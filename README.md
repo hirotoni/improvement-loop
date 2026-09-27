@@ -124,7 +124,7 @@ rm -rf "$BACKLOG_TMP"
 グローバルにインストールした `backlog` も PATH に残っているので、PATH 上に backlog が2つある状態になる。このため、`tests/test_setup_improvement_loop.sh` の backlog が PATH に無い環境の検証（9g/9h）は SKIP になる。
 
 zsh はテストの共通の依存ではない。zsh を使うのは `install.zsh` を実際に実行する `tests/test_setup_improvement_loop.sh` の1箇所だけで、zsh が無い環境ではその検証だけが SKIP になり、他のテストはそのまま実行される。
-[shellcheck](https://www.shellcheck.net/) は必須依存ではなく任意依存である。無くてもテストは走るが、`tests/test_syntax.sh` の静的検査（`CHECK_SCRIPTS` に挙げた全スクリプトに対する shellcheck の実行。この記述時点で32件で、対象が増えれば増える）だけが失われる。失われた件数は未導入時の SKIP 行に実数で出る。`bash -n` による構文チェックは shellcheck の有無に関わらず実行される。未導入のまま作業すると SC2086 のような指摘を一度も見ないままコミットでき、shellcheck を持っている人の環境で初めて FAIL するため、このリポジトリを開発するなら `brew install shellcheck` で導入しておくこと。未導入の場合は `tests/run.sh` の総合サマリーの直後に、静的検査が実行されていない旨と導入方法の警告が出る（未導入それ自体はコミットをブロックしない）。
+[shellcheck](https://www.shellcheck.net/) は必須依存ではなく任意依存である。無くてもテストは走るが、`tests/test_syntax.sh` の静的検査（`CHECK_SCRIPTS` に挙げた全スクリプトに対する shellcheck の実行）だけが失われる。失われた件数は未導入時の SKIP 行に実数で出る。`bash -n` による構文チェックは shellcheck の有無に関わらず実行される。未導入のまま作業すると SC2086 のような指摘を一度も見ないままコミットでき、shellcheck を持っている人の環境で初めて FAIL するため、このリポジトリを開発するなら `brew install shellcheck` で導入しておくこと。未導入の場合は `tests/run.sh` の総合サマリーの直後に、静的検査が実行されていない旨と導入方法の警告が出る（未導入それ自体はコミットをブロックしない）。
 GitHub Actions 等の CI はこのリポジトリでは対象外とする。
 
 ### backlog CLI のバージョンとテストの方針
