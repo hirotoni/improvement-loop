@@ -1920,4 +1920,93 @@ $no_backlog_no_flag_output"
   fi
 fi
 
+
+echo ""
+echo "=== 10. 途中で停止しても作成済みの .backlog/ と .claude/skills/<スキル名> が .git/info/exclude で除外されている（TASK-134） ==="
+
+# 停止後の .git/info/exclude に EXPECTED_EXCLUDE_LINES の全行が揃っているか検証する。
+# 引数: 対象リポジトリ, ラベル
+assert_exclude_lines_present() {
+  local repo="$1"
+  local label="$2"
+  local file="$repo/.git/info/exclude"
+  local missing=()
+  local line
+  for line in "$EXCLUDE_HEADER" "${EXPECTED_EXCLUDE_LINES[@]}"; do
+    grep -Fxq "$line" "$file" 2>/dev/null || missing+=("$line")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    pass "$label: 停止後も .git/info/exclude に見出しコメントと期待する ${#EXPECTED_EXCLUDE_LINES[@]} 行がすべて含まれる"
+  else
+    fail "$label: 停止後の .git/info/exclude に不足がある（${missing[*]}）"
+  fi
+}
+
+# ---- 10a. 手順 4 で停止（先頭のスキル名の位置に未追跡の実体がある）: 起票時の再現手順そのもの（AC#1）----
+TMP_ABORT_FIRST="$(mktemp -d)"
+register_tmp_cleanup "$TMP_ABORT_FIRST"
+(cd "$TMP_ABORT_FIRST" && git init -q)
+abort_first_skill="${SKILL_NAMES[0]}"
+mkdir -p "$TMP_ABORT_FIRST/.claude/skills/$abort_first_skill"
+printf 'dummy\n' >"$TMP_ABORT_FIRST/.claude/skills/$abort_first_skill/SKILL.md"
+
+abort_first_output="$("$SETUP_SCRIPT" "$TMP_ABORT_FIRST" 2>&1)"
+abort_first_exit=$?
+if [ "$abort_first_exit" -ne 0 ] && grep -Fq "にはシンボリックリンクではない実体が既に存在する" <<<"$abort_first_output"; then
+  pass "10a: 前提: .claude/skills/$abort_first_skill の実体との衝突で手順 4 が停止する（exit ${abort_first_exit}）"
+else
+  fail "10a: 前提: 手順 4 の衝突で停止しなかった（exit ${abort_first_exit}）:
+$abort_first_output"
+fi
+if [ -d "$TMP_ABORT_FIRST/.backlog" ]; then
+  pass "10a: 前提: 停止時点で .backlog/ が作成済みである"
+else
+  fail "10a: 前提: 停止時点で .backlog/ が作られていない（検証したい状態を作れていない）"
+fi
+abort_first_status="$(git -C "$TMP_ABORT_FIRST" status --short --untracked-files=all 2>&1)"
+if grep -Fq ".backlog" <<<"$abort_first_status"; then
+  fail "10a: 手順 4 で停止した後の git status --short に .backlog が現れる:
+$abort_first_status"
+else
+  pass "10a: 手順 4 で停止した後の git status --short に .backlog が現れない"
+fi
+assert_exclude_lines_present "$TMP_ABORT_FIRST" "10a"
+
+# ---- 10b. 手順 4 の途中で停止（末尾のスキル名の位置に追跡済みの実体がある）: それより前に
+# 作られたシンボリックリンクも除外されている（AC#2）----
+# 衝突させる実体はコミットしておき、停止後の git status --short が空であることで
+# 「setup が作ったものが1つも未追跡として現れない」ことを確かめる。
+TMP_ABORT_LAST="$(mktemp -d)"
+register_tmp_cleanup "$TMP_ABORT_LAST"
+(cd "$TMP_ABORT_LAST" && git init -q)
+abort_last_skill="${SKILL_NAMES[${#SKILL_NAMES[@]}-1]}"
+mkdir -p "$TMP_ABORT_LAST/.claude/skills/$abort_last_skill"
+printf 'dummy\n' >"$TMP_ABORT_LAST/.claude/skills/$abort_last_skill/SKILL.md"
+git -C "$TMP_ABORT_LAST" add -A >/dev/null 2>&1
+git -C "$TMP_ABORT_LAST" -c user.name=test -c user.email=test@example.com commit -q -m init >/dev/null 2>&1
+
+abort_last_output="$("$SETUP_SCRIPT" "$TMP_ABORT_LAST" 2>&1)"
+abort_last_exit=$?
+if [ "$abort_last_exit" -ne 0 ] && grep -Fq "にはシンボリックリンクではない実体が既に存在する" <<<"$abort_last_output"; then
+  pass "10b: 前提: .claude/skills/$abort_last_skill の実体との衝突で手順 4 が停止する（exit ${abort_last_exit}）"
+else
+  fail "10b: 前提: 手順 4 の衝突で停止しなかった（exit ${abort_last_exit}）:
+$abort_last_output"
+fi
+if [ "${#SKILL_NAMES[@]}" -ge 2 ]; then
+  if [ -L "$TMP_ABORT_LAST/.claude/skills/${SKILL_NAMES[0]}" ]; then
+    pass "10b: 前提: 停止前に .claude/skills/${SKILL_NAMES[0]} のシンボリックリンクが作成済みである"
+  else
+    fail "10b: 前提: 停止前に .claude/skills/${SKILL_NAMES[0]} のシンボリックリンクが作られていない（検証したい状態を作れていない）"
+  fi
+fi
+abort_last_status="$(git -C "$TMP_ABORT_LAST" status --short --untracked-files=all 2>&1)"
+if [ -z "$abort_last_status" ]; then
+  pass "10b: 手順 4 の途中で停止した後、作成済みの .backlog/ と .claude/skills/<スキル名> が git status --short に現れない"
+else
+  fail "10b: 手順 4 の途中で停止した後、git status --short に未追跡のものが現れる:
+$abort_last_status"
+fi
+assert_exclude_lines_present "$TMP_ABORT_LAST" "10b"
+
 finish_tests
