@@ -47,15 +47,15 @@ echo "HANDOFF_EXIT=$HANDOFF_EXIT"
 
 - `check-handoff` は、作業ディレクトリ一致・ブランチ一致・`.backlog` シンボリックリンクの健全性という、引き渡しが完全かどうかを機械的に判定できる 3 条件をまとめて確認する（スクリプトの中身は配布元の `claude-code/skills/improvement-work/scripts/check-handoff` を読むこと。実行時にどのパスで呼ぶかは下の探索順で決める）。3 条件すべてを満たせば終了コード 0、いずれかを満たさなければ標準エラーにどの条件が満たされていないかを明示して非 0 の終了コードで終わる。
 - 引数には、引き渡された作業ディレクトリの絶対パスと、引き渡されたブランチ名をそのまま渡す。呼び出し側は `cd` 済みのワークツリーをカレントディレクトリとして持っていればよく、スクリプトをどのパスから呼んでも判定結果は変わらない（このスクリプト自身は `cd` せず、カレントディレクトリと引数だけで 3 条件を判定する）。
-- 参照パスは固定しない。次の順に探し、最初に見つかった実行可能な実体を使う。これは手順 8 が `check-forbidden-allowed-paths` に対して行う探索とまったく同じで、理由（導入先リポジトリには `claude-code/skills/` が無く、`bin/setup-improvement-loop` が配る `.claude/skills/<スキル名>` シンボリックリンクは git 管理外でワークツリーに複製されないこと、メインの作業木のパスを `git worktree list --porcelain` の 1 行目から取ること）は手順 8 の該当箇所に書いてある（TASK-68・TASK-71）。同じ説明をここに繰り返さない。この探索を共通化せず複数箇所（手順 1・5・7・8）に重複させたままにする判断とその理由、および食い違いを検知するテストについても手順 8 に書いてある（TASK-76）。
+- 参照パスは固定しない。次の順に探し、最初に見つかった実行可能な実体を使う。これは手順 8 が `check-forbidden-allowed-paths` に対して行う探索とまったく同じで、理由（導入先リポジトリには `claude-code/skills/` が無く、`bin/setup-improvement-loop` が配る `.claude/skills/<スキル名>` シンボリックリンクは git 管理外でワークツリーに複製されないこと、メインの作業木のパスを `git worktree list --porcelain` の 1 行目から取ること）の詳細は手順 8 の該当箇所に書いてある。この探索を共通化せず複数箇所（手順 1・5・7・8）に重複させたままにする判断とその理由、および食い違いを検知するテストについても手順 8 に書いてある。
   1. `claude-code/skills/improvement-work/scripts/check-handoff`（このワークツリー内。improvement-loop 自身のリポジトリで解決する）。
   2. `<メインの作業木>/.claude/skills/improvement-work/scripts/check-handoff`（improvement-loop 以外の導入先リポジトリで解決する）。
-- どちらのパスにも実体が無い場合（`setup-improvement-loop` による導入が済んでいない等）は、スクリプトを実行せずに `HANDOFF_EXIT=2`（環境不備）として扱い、下の「非 0 で終了した場合」と同じように報告して止まる。以前はワークツリー内の tracked パスだけを直接参照していたため、improvement-loop 以外の導入先では引き渡しが正常でも必ず `127` になり、毎回「引き渡し不備」と誤診断されていた（TASK-71）。
+- どちらのパスにも実体が無い場合（`setup-improvement-loop` による導入が済んでいない等）は、スクリプトを実行せずに `HANDOFF_EXIT=2`（環境不備）として扱い、下の「非 0 で終了した場合」と同じように報告して止まる。ワークツリー内の tracked パスだけを参照すると、improvement-loop 以外の導入先では引き渡しが正常でも必ず `127` になり、「引き渡し不備」と誤診断される。2 候補を探すのはそのためである。
 - 指定された作業ディレクトリ（ワークツリー、例: `<リポジトリルート>/.worktree/task-<n>-<スラッグ>`）へは自分で `cd` する。自分でブランチを作成・切り替え（`git switch`、`git checkout` 等）しない。ワークツリーは引き渡し時点で既に指定のブランチを checkout 済みである。
 - `check-handoff` が非 0 で終了した場合（`$HANDOFF_EXIT` が 0 以外。作業ディレクトリが存在しない、`.backlog/` が見当たらない・シンボリックリンクになっていない等）は、dispatch の引き渡しが不完全なので、標準エラーの内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側（自分自身）が行う。
 - `check-handoff` はこの 3 条件のみを機械的に確認する。ワークツリー自体が `git worktree list` に登録されているか（worktree の管理情報が壊れているケース等）は範囲外なので、疑わしい場合は別途 `git worktree list` で確認すること。
 - `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。dispatch が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。
-- **共有の `.backlog/config.yml` を書き換えない。** 上のシンボリックリンクがあるので、ワークツリー直下で `.backlog/config.yml` へ書き込む（`>`・`>>`・`cp`・`mv`・`sed -i` 等）と、メインの作業木と全ワークツリーが共有する config.yml がそのまま書き換わる。`backlog config set` も同じである。ワークツリー直下ではどちらも実行しない（TASK-117）。2026-09-27 に、実 CLI の挙動を確かめる即席のコマンドが `cd` の失敗で止まらずワークツリー直下で走り、共有 config.yml をフィクスチャの値で上書きした。その結果、全タスクのステータス変更が失敗してループが止まった。
+- **共有の `.backlog/config.yml` を書き換えない。** 上のシンボリックリンクがあるので、ワークツリー直下で `.backlog/config.yml` へ書き込む（`>`・`>>`・`cp`・`mv`・`sed -i` 等）と、メインの作業木と全ワークツリーが共有する config.yml がそのまま書き換わる。`backlog config set` も同じである。ワークツリー直下ではどちらも実行しない。実 CLI の挙動を確かめる即席のコマンドが `cd` の失敗で止まらずワークツリー直下で走ると、共有 config.yml がフィクスチャの値で上書きされる。そうなると全タスクのステータス変更が失敗し、ループが止まる。
   - backlog CLI の挙動や config.yml の読み方を確かめたいときは、`mktemp -d` で作った一時ディレクトリを git リポジトリにし、その中に実ディレクトリの `.backlog` を置いて行う（シンボリックリンクにしない）。
   - その一時ディレクトリへの `cd` は、失敗したら止まる形で書く（例: `cd "$TMP_REPO" || exit 1`）。`cd <dir>; <コマンド>` や、`cd` の成否を見ないループにしない。`cd` が失敗すると、後続のコマンドがカレントディレクトリ（ワークツリー直下）で走るためである。
   - 仕組みでも見張っている。dispatch は引き渡し時点の config.yml を複製しておき、手順 8 のコミット前の確認と dispatch の完了検証で改変を検知する。ただし検知できるのは壊れた後である。規定を守ることが先である。
@@ -154,7 +154,7 @@ backlog task edit TASK-<n> --plan '1. ...
 - 同じ根本原因が受入基準の範囲内に複数箇所あるなら、まとめて直す。
 - 関係のない既存の変更を戻さない。
 - 進捗は `backlog task edit TASK-<n> --append-notes '<実装したこと>'` に残す。
-- 各実装スライスが完了するたび（進捗を notes に残す前後など）、占有記録のハートビート更新（TASK-93 の軽量経路 `touch-occupancy`）を呼ぶ。1スライスの実装・その場での検証がコミットを伴わずに続くと、`claude-code/skills/improvement-dispatch/SKILL.md` に明記された残存リスク（30分を超えるコミット無し処理中に誤って `REVERT_TO_TODO` される）が現実になりうるためである。
+- 各実装スライスが完了するたび（進捗を notes に残す前後など）、占有記録のハートビート更新（コミットを伴わない軽量経路 `touch-occupancy`）を呼ぶ。1スライスの実装・その場での検証がコミットを伴わずに続くと、`claude-code/skills/improvement-dispatch/SKILL.md` に明記された残存リスク（30分を超えるコミット無し処理中に誤って `REVERT_TO_TODO` される）が現実になりうるためである。
 
   ```bash
   MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
@@ -273,17 +273,17 @@ echo "CHECK_EXIT=$CHECK_EXIT"
 ```
 
 - `git add` の直後、`git commit` の前に、`check-forbidden-allowed-paths` に、ステージした変更ファイル一覧（`git diff --name-only --cached`）を渡し、`.backlog/config.my.yml` の `forbidden_paths`/`allowed_paths` と機械的に突き合わせる。ファイル名に半角スペースが含まれていても 1 ファイル=1 引数のまま壊れないよう、`git diff` の出力を改行区切りで 1 行ずつ配列 `CHANGED_FILES` に読み込み、`"${CHANGED_FILES[@]}"` として展開する（`$CHANGED_FILES` のようにクォート無しで直接展開すると、ファイル名中の空白でも単語分割されて 1 つのパスが複数の偽の引数に壊れる）。
-- 参照パスは固定しない。次の順に探し、最初に見つかった実行可能な実体を使う（TASK-68）。
+- 参照パスは固定しない。次の順に探し、最初に見つかった実行可能な実体を使う。
   1. `claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`（このワークツリー内）。improvement-loop 自身のリポジトリでは `claude-code/skills/` が tracked なのでワークツリーにも実体としてチェックアウトされている。この場合は作業ブランチ側の内容が使われる。
   2. `<メインの作業木>/.claude/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths`。improvement-loop 以外の導入先リポジトリには `claude-code/skills/` が無く、`bin/setup-improvement-loop` が配るのは `.claude/skills/<スキル名>` というシンボリックリンクだけである。しかもそれは `.git/info/exclude` に登録されて git 管理外なので、`git worktree add` で作られたワークツリーには複製されない。つまり導入先ではこの実体はメインの作業木にしか存在しない。メインの作業木のパスは `git worktree list --porcelain` の 1 行目（`worktree <パス>`）から取る。
 - メインの作業木側の実体を呼んでも判定対象は変わらない。このスクリプトはカレントディレクトリから `git rev-parse --show-toplevel` で対象リポジトリを決め、その直下の `.backlog/config.my.yml`（ワークツリーでは `.backlog` シンボリックリンク経由でメインの作業木の実体を指す）を読むためである。スクリプト自身も自分の実パスから配布元リポジトリのルートを解決するので、シンボリックリンク経由でも `bin/lib/` の読み込みは壊れない。
-- どちらのパスにも実体が無い場合（`setup-improvement-loop` による導入が済んでいない等）は、スクリプトを実行せずに `CHECK_EXIT=2`（環境不備）として扱う。見つからないまま `git commit` に進まない。以前はワークツリー内の tracked パスだけを直接参照していたため、improvement-loop 以外の導入先では必ず終了コード `127` になり、下の `0`/`1`/`2` のどの分岐にも当たらなかった（TASK-68）。
-- この 2 候補探索は手順 1（`check-handoff` の解決）、手順 5・7（`touch-occupancy`）、この手順 8 の後半（`backlog-config-snapshot`）にも同じ形で書かれている。共通化せず重複させたままにするのは意図的な判断である（TASK-76）。理由は 3 つある。
+- どちらのパスにも実体が無い場合（`setup-improvement-loop` による導入が済んでいない等）は、スクリプトを実行せずに `CHECK_EXIT=2`（環境不備）として扱う。見つからないまま `git commit` に進まない。ワークツリー内の tracked パスだけを参照すると、improvement-loop 以外の導入先では必ず終了コード `127` になり、下の `0`/`1`/`2` のどの分岐にも当たらない。2 候補を探すのはそのためである。
+- この 2 候補探索は手順 1（`check-handoff` の解決）、手順 5・7（`touch-occupancy`）、この手順 8 の後半（`backlog-config-snapshot`）にも同じ形で書かれている。共通化せず重複させたままにするのは意図的な判断である。理由は 3 つある。
   1. 探索処理を外部のスクリプトや `bin/lib/*.sh` に切り出しても、SKILL.md からそれを呼ぶには切り出し先自身の実パスを同じ 2 候補探索で解決しなければならず、問題がそのまま再帰する。improvement-loop 以外の導入先リポジトリには `claude-code/` も `bin/` も無く、配布元の実体へ届く経路は `<メインの作業木>/.claude/skills/<スキル名>/` のシンボリックリンクだけだからである。
   2. `bin/lib/*.sh` を `DIST_REPO_ROOT` 経由で読む既存のスクリプト（`create-worktree` 等）は、自分自身の実パスを `BASH_SOURCE` から取れるので成立する。SKILL.md は読み手（AI）が実行する散文であり、それに相当する自己パスを持たない。同じ手は使えない。
   3. 手順 1 と手順 8 は別々の Bash 呼び出しで実行され、シェル変数を引き継げない（手順 1 の「重要」の項を参照）。片方で解決した結果をもう片方で使い回すこともできない。
 - 重複を残す代わりに、この SKILL.md にある 5 つの探索ブロック（手順 1 の `check-handoff`、手順 5・7 の `touch-occupancy`、手順 8 の `check-forbidden-allowed-paths` と `backlog-config-snapshot`）が対象スクリプト名を除いて同一であることを `tests/test_skill_script_lookup.sh` が機械的に検査する。どれか 1 つだけを変更すると `bash tests/run.sh` が FAIL する。探索順を変えるときは、5 つの bash ブロックを同時に直すこと。
-- `forbidden_paths`/`allowed_paths` が両方空、またはキー自体が無い場合、このスクリプトは常に `RESULT: OK`・終了コード `0` で終わる。したがってこの手順を追加しても、両方未設定の既存タスクの実行フローは変化しない（そのまま `git commit` に進むだけである）。
+- `forbidden_paths`/`allowed_paths` が両方空、またはキー自体が無い場合、このスクリプトは常に `RESULT: OK`・終了コード `0` で終わる。したがって両方未設定なら、この確認は実行フローを変えない（そのまま `git commit` に進むだけである）。
 - `$CHECK_EXIT` の値で分岐する。
   - `0`（`RESULT: OK`）：違反なし。下の「共有の `.backlog/config.yml` が書き換わっていないか確かめる」を経て `git commit` する。
   - `1`（`RESULT: VIOLATION`）：コミットしない。次の二段で対応する。
@@ -301,7 +301,7 @@ echo "CHECK_EXIT=$CHECK_EXIT"
 
 ### 共有の `.backlog/config.yml` が書き換わっていないか確かめる
 
-`git commit` の前に（上の `check-forbidden-allowed-paths` の後に続けて）、共有の `.backlog/config.yml` が引き渡し時点から変わっていないかを確かめる（TASK-117）。`.backlog/` は git 管理外なので、ここでの改変は `git diff` にも `check-forbidden-allowed-paths` にも現れない。
+`git commit` の前に（上の `check-forbidden-allowed-paths` の後に続けて）、共有の `.backlog/config.yml` が引き渡し時点から変わっていないかを確かめる。`.backlog/` は git 管理外なので、ここでの改変は `git diff` にも `check-forbidden-allowed-paths` にも現れない。
 
 ```bash
 MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
