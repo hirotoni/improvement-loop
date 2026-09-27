@@ -1920,7 +1920,97 @@ $no_backlog_no_flag_output"
   fi
 fi
 
-echo "=== 10. 使い方の表示と引数の誤りの検出 ==="
+
+echo ""
+echo "=== 10. 途中で停止しても作成済みの .backlog/ と .claude/skills/<スキル名> が .git/info/exclude で除外されている（TASK-134） ==="
+
+# 停止後の .git/info/exclude に EXPECTED_EXCLUDE_LINES の全行が揃っているか検証する。
+# 引数: 対象リポジトリ, ラベル
+assert_exclude_lines_present() {
+  local repo="$1"
+  local label="$2"
+  local file="$repo/.git/info/exclude"
+  local missing=()
+  local line
+  for line in "$EXCLUDE_HEADER" "${EXPECTED_EXCLUDE_LINES[@]}"; do
+    grep -Fxq "$line" "$file" 2>/dev/null || missing+=("$line")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    pass "$label: 停止後も .git/info/exclude に見出しコメントと期待する ${#EXPECTED_EXCLUDE_LINES[@]} 行がすべて含まれる"
+  else
+    fail "$label: 停止後の .git/info/exclude に不足がある（${missing[*]}）"
+  fi
+}
+
+# ---- 10a. 手順 4 で停止（先頭のスキル名の位置に未追跡の実体がある）: 起票時の再現手順そのもの（AC#1）----
+TMP_ABORT_FIRST="$(mktemp -d)"
+register_tmp_cleanup "$TMP_ABORT_FIRST"
+(cd "$TMP_ABORT_FIRST" && git init -q)
+abort_first_skill="${SKILL_NAMES[0]}"
+mkdir -p "$TMP_ABORT_FIRST/.claude/skills/$abort_first_skill"
+printf 'dummy\n' >"$TMP_ABORT_FIRST/.claude/skills/$abort_first_skill/SKILL.md"
+
+abort_first_output="$("$SETUP_SCRIPT" "$TMP_ABORT_FIRST" 2>&1)"
+abort_first_exit=$?
+if [ "$abort_first_exit" -ne 0 ] && grep -Fq "にはシンボリックリンクではない実体が既に存在する" <<<"$abort_first_output"; then
+  pass "10a: 前提: .claude/skills/$abort_first_skill の実体との衝突で手順 4 が停止する（exit ${abort_first_exit}）"
+else
+  fail "10a: 前提: 手順 4 の衝突で停止しなかった（exit ${abort_first_exit}）:
+$abort_first_output"
+fi
+if [ -d "$TMP_ABORT_FIRST/.backlog" ]; then
+  pass "10a: 前提: 停止時点で .backlog/ が作成済みである"
+else
+  fail "10a: 前提: 停止時点で .backlog/ が作られていない（検証したい状態を作れていない）"
+fi
+abort_first_status="$(git -C "$TMP_ABORT_FIRST" status --short --untracked-files=all 2>&1)"
+if grep -Fq ".backlog" <<<"$abort_first_status"; then
+  fail "10a: 手順 4 で停止した後の git status --short に .backlog が現れる:
+$abort_first_status"
+else
+  pass "10a: 手順 4 で停止した後の git status --short に .backlog が現れない"
+fi
+assert_exclude_lines_present "$TMP_ABORT_FIRST" "10a"
+
+# ---- 10b. 手順 4 の途中で停止（末尾のスキル名の位置に追跡済みの実体がある）: それより前に
+# 作られたシンボリックリンクも除外されている（AC#2）----
+# 衝突させる実体はコミットしておき、停止後の git status --short が空であることで
+# 「setup が作ったものが1つも未追跡として現れない」ことを確かめる。
+TMP_ABORT_LAST="$(mktemp -d)"
+register_tmp_cleanup "$TMP_ABORT_LAST"
+(cd "$TMP_ABORT_LAST" && git init -q)
+abort_last_skill="${SKILL_NAMES[${#SKILL_NAMES[@]}-1]}"
+mkdir -p "$TMP_ABORT_LAST/.claude/skills/$abort_last_skill"
+printf 'dummy\n' >"$TMP_ABORT_LAST/.claude/skills/$abort_last_skill/SKILL.md"
+git -C "$TMP_ABORT_LAST" add -A >/dev/null 2>&1
+git -C "$TMP_ABORT_LAST" -c user.name=test -c user.email=test@example.com commit -q -m init >/dev/null 2>&1
+
+abort_last_output="$("$SETUP_SCRIPT" "$TMP_ABORT_LAST" 2>&1)"
+abort_last_exit=$?
+if [ "$abort_last_exit" -ne 0 ] && grep -Fq "にはシンボリックリンクではない実体が既に存在する" <<<"$abort_last_output"; then
+  pass "10b: 前提: .claude/skills/$abort_last_skill の実体との衝突で手順 4 が停止する（exit ${abort_last_exit}）"
+else
+  fail "10b: 前提: 手順 4 の衝突で停止しなかった（exit ${abort_last_exit}）:
+$abort_last_output"
+fi
+if [ "${#SKILL_NAMES[@]}" -ge 2 ]; then
+  if [ -L "$TMP_ABORT_LAST/.claude/skills/${SKILL_NAMES[0]}" ]; then
+    pass "10b: 前提: 停止前に .claude/skills/${SKILL_NAMES[0]} のシンボリックリンクが作成済みである"
+  else
+    fail "10b: 前提: 停止前に .claude/skills/${SKILL_NAMES[0]} のシンボリックリンクが作られていない（検証したい状態を作れていない）"
+  fi
+fi
+abort_last_status="$(git -C "$TMP_ABORT_LAST" status --short --untracked-files=all 2>&1)"
+if [ -z "$abort_last_status" ]; then
+  pass "10b: 手順 4 の途中で停止した後、作成済みの .backlog/ と .claude/skills/<スキル名> が git status --short に現れない"
+else
+  fail "10b: 手順 4 の途中で停止した後、git status --short に未追跡のものが現れる:
+$abort_last_status"
+fi
+assert_exclude_lines_present "$TMP_ABORT_LAST" "10b"
+
+echo ""
+echo "=== 11. 使い方の表示と引数の誤りの検出 ==="
 # --help/-h は使い方を出して何もせず成功し、未知のオプションと 2 つ目以降の位置引数は
 # 何も変更せずに失敗することを確かめる。「何も変更しない」は、対象ディレクトリ配下の
 # ファイル一覧と .git/info/exclude の内容を実行の前後で比べて判定する。
@@ -1955,58 +2045,58 @@ assert_args_repos_unchanged() {
   fi
 }
 
-# ---- 10a. --help と -h ----
+# ---- 11a. --help と -h ----
 for help_flag in --help -h; do
   help_stdout="$(cd "$TMP_ARGS_REPO_A" && "$SETUP_SCRIPT" "$help_flag" 2>/dev/null)"
   help_exit=$?
   if [ "$help_exit" -eq 0 ] && grep -Fq "使い方:" <<<"$help_stdout" && grep -Fq -- "--workspace" <<<"$help_stdout"; then
-    pass "10a: $help_flag は使い方（--workspace の説明を含む）を標準出力に出して exit 0 で終わる"
+    pass "11a: $help_flag は使い方（--workspace の説明を含む）を標準出力に出して exit 0 で終わる"
   else
-    fail "10a: $help_flag の結果が想定と異なる（exit ${help_exit}）:
+    fail "11a: $help_flag の結果が想定と異なる（exit ${help_exit}）:
 $help_stdout"
   fi
   "$SETUP_SCRIPT" "$help_flag" "$TMP_ARGS_REPO_A" >/dev/null 2>&1
   help_with_path_exit=$?
   if [ "$help_with_path_exit" -eq 0 ]; then
-    pass "10a: 対象パスと併せて $help_flag を渡しても exit 0 で終わる"
+    pass "11a: 対象パスと併せて $help_flag を渡しても exit 0 で終わる"
   else
-    fail "10a: 対象パスと併せて $help_flag を渡すと exit ${help_with_path_exit} になった"
+    fail "11a: 対象パスと併せて $help_flag を渡すと exit ${help_with_path_exit} になった"
   fi
-  assert_args_repos_unchanged "10a: $help_flag"
+  assert_args_repos_unchanged "11a: $help_flag"
 done
 
-# ---- 10b. 未知のオプション ----
+# ---- 11b. 未知のオプション ----
 unknown_opt_output="$("$SETUP_SCRIPT" --worksapce "$TMP_ARGS_REPO_A" 2>&1)"
 unknown_opt_exit=$?
 if [ "$unknown_opt_exit" -ne 0 ] && grep -Fq "認識しないオプション: --worksapce" <<<"$unknown_opt_output" &&
   grep -Fq "使い方:" <<<"$unknown_opt_output"; then
-  pass "10b: 未知のオプションはその名前と使い方を示して非 0 で終わる"
+  pass "11b: 未知のオプションはその名前と使い方を示して非 0 で終わる"
 else
-  fail "10b: 未知のオプションの扱いが想定と異なる（exit ${unknown_opt_exit}）:
+  fail "11b: 未知のオプションの扱いが想定と異なる（exit ${unknown_opt_exit}）:
 $unknown_opt_output"
 fi
-assert_args_repos_unchanged "10b"
+assert_args_repos_unchanged "11b"
 
-# ---- 10c. 位置引数が 2 つ ----
+# ---- 11c. 位置引数が 2 つ ----
 extra_pos_output="$("$SETUP_SCRIPT" "$TMP_ARGS_REPO_A" "$TMP_ARGS_REPO_B" 2>&1)"
 extra_pos_exit=$?
 if [ "$extra_pos_exit" -ne 0 ] && grep -Fq "受け付けなかった引数: $TMP_ARGS_REPO_B" <<<"$extra_pos_output" &&
   grep -Fq "使い方:" <<<"$extra_pos_output"; then
-  pass "10c: 位置引数が 2 つあると、受け付けなかった引数と使い方を示して非 0 で終わる"
+  pass "11c: 位置引数が 2 つあると、受け付けなかった引数と使い方を示して非 0 で終わる"
 else
-  fail "10c: 位置引数が 2 つのときの扱いが想定と異なる（exit ${extra_pos_exit}）:
+  fail "11c: 位置引数が 2 つのときの扱いが想定と異なる（exit ${extra_pos_exit}）:
 $extra_pos_output"
 fi
-assert_args_repos_unchanged "10c"
+assert_args_repos_unchanged "11c"
 
 extra_pos_ws_output="$("$SETUP_SCRIPT" --workspace "$TMP_ARGS_REPO_A" "$TMP_ARGS_REPO_B" 2>&1)"
 extra_pos_ws_exit=$?
 if [ "$extra_pos_ws_exit" -ne 0 ]; then
-  pass "10c: --workspace でも位置引数が 2 つあると非 0 で終わる"
+  pass "11c: --workspace でも位置引数が 2 つあると非 0 で終わる"
 else
-  fail "10c: --workspace で位置引数が 2 つのときに成功してしまった:
+  fail "11c: --workspace で位置引数が 2 つのときに成功してしまった:
 $extra_pos_ws_output"
 fi
-assert_args_repos_unchanged "10c: --workspace"
+assert_args_repos_unchanged "11c: --workspace"
 
 finish_tests

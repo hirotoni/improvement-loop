@@ -1021,6 +1021,18 @@ SKIPPED=()
 # 書き換えはしなかったが人間に読んでほしい事項。該当が無ければサマリーに節自体を出さない。
 WARNED=()
 
+# ---- .git/info/exclude への追記（backlog init より先に行う） ----
+# .backlog/ や .claude/skills/<スキル名> を作るより先に追記する。これらを作った後の手順
+# （place_skill_symlinks の衝突検知など）は exit 1 で止まる経路を持つため、追記を最後に
+# 回すと、停止時に作成済みの .backlog/ が未追跡ファイルとして git status に現れ、
+# git add -A 等でタスク本文を対象リポジトリにコミットしうる。まだ存在しないパスを
+# 除外対象に書いても害は無い。
+EXCLUDE_LINES=(".backlog")
+for name in "${SKILL_NAMES[@]}"; do
+  EXCLUDE_LINES+=(".claude/skills/$name")
+done
+append_git_exclude_lines "$TARGET_REPO_ROOT" "${EXCLUDE_LINES[@]}"
+
 # ---- 3. backlog init ----
 BACKLOG_CONFIG_YML="$TARGET_REPO_ROOT/.backlog/config.yml"
 if [ -f "$BACKLOG_CONFIG_YML" ]; then
@@ -1067,14 +1079,7 @@ else
   CREATED+=(".backlog/config.my.yml")
 fi
 
-# ---- 6. .git/info/exclude への追記 ----
-EXCLUDE_LINES=(".backlog")
-for name in "${SKILL_NAMES[@]}"; do
-  EXCLUDE_LINES+=(".claude/skills/$name")
-done
-append_git_exclude_lines "$TARGET_REPO_ROOT" "${EXCLUDE_LINES[@]}"
-
-# ---- 7. サマリー ----
+# ---- 6. サマリー ----
 log ""
 log "=== サマリー ==="
 log "作成/実行した項目 (${#CREATED[@]} 件):"
