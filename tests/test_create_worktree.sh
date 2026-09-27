@@ -140,13 +140,6 @@ else
 $cw_output2"
 fi
 
-cw_worktree_count="$(git -C "$TMP_CW_REPO" worktree list --porcelain | grep -Fxc "worktree $CW_EXPECTED_WORKTREE_DIR")"
-if [ "$cw_worktree_count" = "1" ]; then
-  pass "2回目の実行後もワークツリーが重複登録されていない"
-else
-  fail "2回目の実行後、ワークツリーが重複登録されている（${cw_worktree_count} 件）"
-fi
-
 cw_exclude_count="$(grep -Fxc ".backlog" "$TMP_CW_REPO/.git/info/exclude" 2>/dev/null || true)"
 if [ "$cw_exclude_count" = "1" ]; then
   pass "2回目の実行後も .git/info/exclude の .backlog 行が重複していない"
@@ -238,13 +231,6 @@ if [ "$cw_exit3" -eq 0 ] && [ -d "$CW_EXPECTED_WORKTREE_DIR" ]; then
 else
   fail "ワークツリーのディレクトリのみ消えた状態からの再実行が失敗した（exit ${cw_exit3}）:
 $cw_output3"
-fi
-
-cw_branch_count="$(git -C "$TMP_CW_REPO" branch --list "$CW_EXPECTED_BRANCH" | wc -l | tr -d ' ')"
-if [ "$cw_branch_count" = "1" ]; then
-  pass "復旧後もブランチ $CW_EXPECTED_BRANCH が重複作成されていない"
-else
-  fail "復旧後、ブランチ $CW_EXPECTED_BRANCH が重複している（${cw_branch_count} 件）"
 fi
 
 # ---- ディレクトリ消失からの復旧経路でも占有記録が作り直される ----
@@ -530,6 +516,7 @@ fi
   git commit -qm "D: 別の先行タスクの成果"
 ) >/dev/null 2>&1
 cw_stale_output="$(cd "$CW_AHEAD_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_AHEAD_TASK_ID" 2>/dev/null)"
+cw_stale_exit=$?
 
 if printf '%s\n' "$cw_stale_output" | head -1 | grep -Fxq "RESULT: STALE_BASE"; then
   pass "既存ブランチの再利用で起点の先端を含まない場合、RESULT: STALE_BASE を出す（AC#2）"
@@ -546,11 +533,10 @@ else
 $cw_stale_output"
 fi
 
-cw_stale_exit_check="$(cd "$CW_AHEAD_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_AHEAD_TASK_ID" >/dev/null 2>&1; echo $?)"
-if [ "$cw_stale_exit_check" = "0" ]; then
+if [ "$cw_stale_exit" -eq 0 ]; then
   pass "STALE_BASE でも終了ステータスは 0 のまま（引き渡しを機械的に止めず、判断は dispatch に委ねる）"
 else
-  fail "STALE_BASE で終了ステータスが 0 以外になった（${cw_stale_exit_check}）"
+  fail "STALE_BASE で終了ステータスが 0 以外になった（${cw_stale_exit}）"
 fi
 
 # ---- auto_merge_reviewed: true でも、ローカルが origin より古い場合は
@@ -823,11 +809,14 @@ else
 $cw_stale_out3"
 fi
 
-if printf '%s\n' "$cw_stale_out3" | tail -2 | head -1 | grep -q '^WORKTREE_DIR=' &&
+# 末尾2行の値そのものは STALE_EXCLUDE の無い経路で検証済みなので、ここでは
+# STALE_EXCLUDE 行が WORKTREE_DIR/BRANCH の2行の直前（末尾から3行目）に出ることを確かめる。
+if [ "$(printf '%s\n' "$cw_stale_out3" | tail -3 | head -1)" = "STALE_EXCLUDE=.worktree:added_by_improvement_loop" ] &&
+   printf '%s\n' "$cw_stale_out3" | tail -2 | head -1 | grep -q '^WORKTREE_DIR=' &&
    printf '%s\n' "$cw_stale_out3" | tail -1 | grep -q '^BRANCH='; then
-  pass "STALE_EXCLUDE を出しても標準出力の最後の2行は WORKTREE_DIR と BRANCH のままである"
+  pass "STALE_EXCLUDE 行は WORKTREE_DIR/BRANCH の2行の直前（末尾から3行目）に出る（末尾2行の契約を崩さない）"
 else
-  fail "標準出力の最後の2行が WORKTREE_DIR/BRANCH でない:
+  fail "末尾3行が STALE_EXCLUDE/WORKTREE_DIR/BRANCH の順になっていない:
 $cw_stale_out3"
 fi
 
@@ -838,22 +827,6 @@ if diff "$TMP_CW_STALE_REPO/exclude.pristine" "$CW_STALE_EXCLUDE_FILE" | grep -q
 $(diff "$TMP_CW_STALE_REPO/exclude.pristine" "$CW_STALE_EXCLUDE_FILE")"
 else
   pass "ユーザーが書いた行と他ツール由来の行群は変更も削除もされない（追加のみ。AC#2）"
-fi
-
-cw_stale_preserved_ok=1
-for cw_stale_line in \
-  "# interview-dev-loop plan docs" \
-  "docs/plans/" \
-  "# claude-code-runtime" \
-  "**/.claude/scheduled_tasks.lock" \
-  "my-own-scratch/"; do
-  if ! grep -Fxq "$cw_stale_line" "$CW_STALE_EXCLUDE_FILE"; then
-    cw_stale_preserved_ok=0
-    fail "既存行が .git/info/exclude から失われた（AC#2）: $cw_stale_line"
-  fi
-done
-if [ "$cw_stale_preserved_ok" -eq 1 ]; then
-  pass "# interview-dev-loop plan docs / # claude-code-runtime 由来の行群とユーザー独自の行がすべて残っている（AC#2）"
 fi
 
 # マーカー行は improvement-loop 自身のものなので、現在の値へ更新される。

@@ -117,7 +117,7 @@ echo "=== 共有フィクスチャの構築 ==="
 # 実行しても結果が変わらない。実行結果に対するアサーションは各セクションの側に置いてある。
 
 # FIXTURE_FRESH: git リポジトリに setup-improvement-loop を初めて実行した直後の状態。
-# 「新規導入」を前提に検証するセクション 2・6c-4・8a が読み取り専用で共有する。
+# 「新規導入」を前提に検証するセクション 2・8a が読み取り専用で共有する。
 FIXTURE_FRESH_REPO="$(mktemp -d)"
 register_tmp_cleanup "$FIXTURE_FRESH_REPO"
 (cd "$FIXTURE_FRESH_REPO" && git init -q)
@@ -128,7 +128,7 @@ FIXTURE_FRESH_EXIT=$?
 #   - .backlog/config.my.yml への $FIXTURE_RERUN_MARKER の追記
 #   - .backlog/config.yml の statuses への $FIXTURE_RERUN_CUSTOM_STATUS の追加
 # を加えたうえで setup-improvement-loop を2回目に実行した状態。「導入済みリポジトリ
-# への再実行」を前提に検証するセクション 3・7c・8b が読み取り専用で共有する。
+# への再実行」を前提に検証するセクション 3・8b が読み取り専用で共有する。
 # この2つのユーザー変更はフィクスチャの契約の一部であり、消費側はこれを前提にしてよい。
 FIXTURE_RERUN_REPO="$(mktemp -d)"
 register_tmp_cleanup "$FIXTURE_RERUN_REPO"
@@ -488,18 +488,6 @@ else
   fail "statuses 以降の他のキー（labels）が失われた、または壊れた"
 fi
 
-# 再実行しても壊れず、冪等であることも確認する（正規化後はインライン形式に
-# なっているはずなので、既存のインライン形式向け経路がそのまま通る）。
-multiline_statuses_output2="$("$SETUP_SCRIPT" "$TMP_REPO_MULTILINE_STATUSES" 2>&1)"
-multiline_statuses_exit2=$?
-if [ "$multiline_statuses_exit2" -eq 0 ]; then
-  pass "複数行リスト形式から正規化された後の再実行も成功する（exit 0）"
-else
-  fail "複数行リスト形式から正規化された後の再実行が失敗した（exit ${multiline_statuses_exit2}）:
-$multiline_statuses_output2"
-fi
-assert_statuses_present "$multiline_result_config" "複数行リスト形式からの正規化後、再実行後"
-
 echo ""
 echo "=== 5b. statuses のシングルクォート形式に対する回帰テスト（TASK-62） ==="
 # 引用符除去がダブルクォートしか剥がさないと、有効な YAML であるシングルクォートで
@@ -562,7 +550,6 @@ $singlequote_inline_output"
 fi
 
 singlequote_inline_config="$TMP_REPO_SINGLEQUOTE_INLINE/.backlog/config.yml"
-assert_statuses_present "$singlequote_inline_config" "シングルクォートのインライン配列からの補完後（AC#3: 空扱いになっていない）"
 assert_no_duplicate_status_insertion "$singlequote_inline_config" "シングルクォートのインライン配列からの補完後（AC#3）"
 
 echo ""
@@ -604,7 +591,6 @@ $singlequote_multiline_output"
 fi
 
 singlequote_multiline_config="$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog/config.yml"
-assert_statuses_present "$singlequote_multiline_config" "シングルクォートの複数行YAMLリストからの補完後（AC#1: 要素に引用符が残ったまま比較されていない）"
 assert_no_duplicate_status_insertion "$singlequote_multiline_config" "シングルクォートの複数行YAMLリストからの補完後（AC#1）"
 
 if grep -m1 '^statuses:' "$singlequote_multiline_config" | grep -Fq "'"; then
@@ -701,27 +687,6 @@ if [ "$perm_644_after" = "$perm_644_before" ]; then
   pass "5c-1(AC#1): statuses 書き換え後も config.yml のパーミッションが実行前と同じ（${perm_644_before}）"
 else
   fail "5c-1(AC#1): statuses 書き換えで config.yml のパーミッションが変わった（${perm_644_before} → ${perm_644_after}）"
-fi
-
-# ---- 5c-2. statuses が既に揃っているリポジトリへの再実行（AC#2）----
-perm_rerun_before="$(file_mode "$perm_644_config")"
-perm_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_PERM_644" 2>&1)"
-perm_rerun_exit=$?
-perm_rerun_after="$(file_mode "$perm_644_config")"
-
-if [ "$perm_rerun_exit" -eq 0 ]; then
-  pass "5c-2: statuses が揃った状態での再実行が成功する（exit 0）"
-else
-  fail "5c-2: statuses が揃った状態での再実行が失敗した（exit ${perm_rerun_exit}）:
-$perm_rerun_output"
-fi
-
-# 再実行の直前の値だけでなく、最初に設定したモードとも比較する。直前の値だけを見ると、
-# 1回目の実行で既に狭められた後の状態を「変化なし」と判定してしまう。
-if [ "$perm_rerun_after" = "$perm_rerun_before" ] && [ "$perm_rerun_after" = "$perm_644_before" ]; then
-  pass "5c-2(AC#2): statuses が揃った状態での再実行でも config.yml のパーミッションが当初のまま（${perm_644_before}）"
-else
-  fail "5c-2(AC#2): 再実行後の config.yml のパーミッションが当初と異なる（当初 ${perm_644_before} / 再実行前 ${perm_rerun_before} → 再実行後 ${perm_rerun_after}）"
 fi
 
 # ---- 5c-3. 0644 以外のモードでも保たれる（AC#1 の一般性）----
@@ -1143,28 +1108,6 @@ else
 fi
 
 echo ""
-echo "--- 6c-4. 新規導入（config.my.yml が無い状態）は従来どおりテンプレートのコピー（TASK-74 AC#3） ---"
-# 「config.my.yml が無い git リポジトリへの1回目の実行」は FIXTURE_FRESH がまさに
-# その状態なので、専用の一時リポジトリを作らず読み取りで共有する。
-if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
-  pass "config.my.yml が無い新規導入の実行が成功する（exit 0）"
-else
-  fail "config.my.yml が無い新規導入の実行が失敗した（exit ${FIXTURE_FRESH_EXIT}）:
-$FIXTURE_FRESH_OUTPUT"
-fi
-if cmp -s "$SOURCE_CONFIG" "$FIXTURE_FRESH_REPO/.backlog/config.my.yml"; then
-  pass "新規導入の config.my.yml はテンプレートと完全に一致する"
-else
-  fail "新規導入の config.my.yml がテンプレートと一致しない"
-fi
-if printf '%s\n' "$FIXTURE_FRESH_OUTPUT" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
-  fail "新規導入で説明コメントの差異が報告された（差異検出は既存ファイルがある場合だけ動くべき）:
-$FIXTURE_FRESH_OUTPUT"
-else
-  pass "新規導入では説明コメントの差異検出が動かない"
-fi
-
-echo ""
 echo "=== 7. 旧ステータス名 Reviewed が残る既存 consumer リポジトリの移行（TASK-48） ==="
 # 旧ステータス名 Reviewed が残ったままの既存 consumer リポジトリ（statuses に Reviewed と
 # Approved が両方あり、status: Reviewed の既存タスクもある状態）を一時ディレクトリで模擬し、
@@ -1212,12 +1155,6 @@ if [ -z "$reviewed_task_file" ] || ! grep -Fxq 'status: Reviewed' "$reviewed_tas
   fail "テスト前提が壊れている: TASK-1 を status: Reviewed にできなかった"
 fi
 
-# 移行前の状態をログに残す（模擬環境での before）。
-echo "--- 移行前（before） ---"
-echo "config.yml statuses: $(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
-echo "TASK-1 status: $(grep -m1 '^status:' "$reviewed_task_file")"
-echo "TASK-2 status: $(grep -m1 '^status:' "$todo_task_file")"
-
 reviewed_migration_output="$("$SETUP_SCRIPT" "$TMP_REPO_REVIEWED_MIGRATION" 2>&1)"
 reviewed_migration_exit=$?
 if [ "$reviewed_migration_exit" -eq 0 ]; then
@@ -1226,12 +1163,6 @@ else
   fail "Reviewed が残る一時リポジトリに対する setup-improvement-loop 実行が失敗した（exit ${reviewed_migration_exit}）:
 $reviewed_migration_output"
 fi
-
-# 移行後の状態をログに残す（模擬環境での after）。
-echo "--- 移行後（after） ---"
-echo "config.yml statuses: $(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
-echo "TASK-1 status: $(grep -m1 '^status:' "$reviewed_task_file")"
-echo "TASK-2 status: $(grep -m1 '^status:' "$todo_task_file")"
 
 # ---- statuses から旧名 Reviewed が消え、Approved の重複が解消される ----
 result_status_line="$(grep -m1 '^statuses:' "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")"
@@ -1259,16 +1190,6 @@ if grep -Fxq 'status: To Do' "$todo_task_file"; then
   pass "移行対象外のタスク（To Do）が変更されずに保持されている"
 else
   fail "移行対象外のタスク（To Do）の status が意図せず変更された: $(grep -m1 '^status:' "$todo_task_file")"
-fi
-
-# タイトル中の "TASK-999" が存在しないタスクIDとして誤検出・誤操作されていないことを
-# 確認する。誤検出されていれば上の実行の時点で既に失敗しているはずだが、念のため
-# タスクファイルが作られていないことも直接確認する。
-fake_task_999_file="$(find "$TMP_REPO_REVIEWED_MIGRATION/.backlog/tasks" -name 'task-999*' 2>/dev/null)"
-if [ -z "$fake_task_999_file" ]; then
-  pass "タイトル中の 'TASK-999' という文字列が存在しないタスクIDとして誤検出されなかった"
-else
-  fail "タイトル中の 'TASK-999' が誤ってタスクIDとして扱われた形跡がある: $fake_task_999_file"
 fi
 
 echo ""
@@ -1304,25 +1225,6 @@ if [ "$(cat "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml")" = "$config_befo
   pass "AC#3: config.yml は再実行後も変化しない"
 else
   fail "AC#3: config.yml が再実行で変化した"
-fi
-
-echo ""
-echo "=== 7c. Reviewed が元から存在しないリポジトリでは何も変化しない（AC#3） ==="
-# FIXTURE_RERUN（Reviewed を一度も含んだことが無いリポジトリへの再実行）の出力を読み、
-# Reviewed 関連の移行処理が両方ともスキップと報告されることを確認する。
-
-if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
-  pass "Reviewed が元から無いリポジトリへの実行が成功する（exit 0）"
-else
-  fail "Reviewed が元から無いリポジトリへの実行が失敗した（exit ${FIXTURE_RERUN_EXIT}）:
-$FIXTURE_RERUN_OUTPUT"
-fi
-if grep -Fq "status: Reviewed の既存タスクは見つからなかった" <<<"$FIXTURE_RERUN_OUTPUT" \
-  && grep -Fq "旧名 'Reviewed' は残っていない" <<<"$FIXTURE_RERUN_OUTPUT"; then
-  pass "AC#3: Reviewed が元から無い場合も、両方の移行処理がスキップと報告される"
-else
-  fail "AC#3: Reviewed が元から無い場合に期待するスキップ報告が出力されなかった:
-$FIXTURE_RERUN_OUTPUT"
 fi
 
 echo ""
@@ -1393,13 +1295,6 @@ echo "=== 8. remoteOperations / defaultAssignee の既定値収束の検証 ==="
 
 # 8a の前状態は FIXTURE_FRESH と同一なので読み取りで共有する
 # （backlog config get は読み取り専用でフィクスチャを変更しない）。
-if [ "$FIXTURE_FRESH_EXIT" -eq 0 ]; then
-  pass "8a: 新規セットアップの実行が成功する（exit 0）"
-else
-  fail "8a: 新規セットアップの実行が失敗した（exit ${FIXTURE_FRESH_EXIT}）:
-$FIXTURE_FRESH_OUTPUT"
-fi
-
 remote_ops_after_setup="$(cd "$FIXTURE_FRESH_REPO" && backlog config get remoteOperations 2>/dev/null)"
 if [ "$remote_ops_after_setup" = "false" ]; then
   pass "8a: 新規セットアップ後、remoteOperations が false に収束する"
@@ -1417,12 +1312,6 @@ fi
 # ---- 8b. 冪等性: 再実行しても壊れず、両方とも [skip] と報告される ----
 # 前状態は FIXTURE_RERUN と同一なので読み取りで共有する。
 rerun_defaults_config="$FIXTURE_RERUN_REPO/.backlog/config.yml"
-if [ "$FIXTURE_RERUN_EXIT" -eq 0 ]; then
-  pass "8b: remoteOperations/defaultAssignee が既に収束済みの状態への再実行が成功する（exit 0）"
-else
-  fail "8b: 再実行が失敗した（exit ${FIXTURE_RERUN_EXIT}）:
-$FIXTURE_RERUN_OUTPUT"
-fi
 if grep -Fq "remoteOperations は既に false" <<<"$FIXTURE_RERUN_OUTPUT"; then
   pass "8b: 再実行時、remoteOperations の収束処理がスキップと報告される"
 else

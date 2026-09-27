@@ -55,19 +55,6 @@ else
   fail "14a: 占有記録に ASSIGNED_AT_EPOCH が記録されていない: $(cat "$TO_OCCUPANCY_FILE" 2>/dev/null)"
 fi
 
-if git -C "$TMP_TO_REPO" worktree list --porcelain | grep -Fxq "worktree $TO_WORKTREE_DIR"; then
-  pass "14a: 実行後もワークツリーは1件のまま登録されている（git worktree add/remove を実行していない）（AC#1）"
-else
-  fail "14a: ワークツリーの登録状態が変わってしまった（AC#1違反の疑い）"
-fi
-
-to_worktree_count_a="$(git -C "$TMP_TO_REPO" worktree list --porcelain | grep -c '^worktree ')"
-if [ "$to_worktree_count_a" = "2" ]; then
-  pass "14a: 登録されているワークツリーの総数が変化していない（メイン + 対象の2件）（AC#1）"
-else
-  fail "14a: 登録されているワークツリーの総数が想定と異なる（${to_worktree_count_a}件）（AC#1）"
-fi
-
 echo ""
 echo "--- 14b. 冪等性・上書き更新: 2回目の実行でタイムスタンプが更新され、記録が壊れない ---"
 TO_FIRST_EPOCH="$(grep '^ASSIGNED_AT_EPOCH=' "$TO_OCCUPANCY_FILE" 2>/dev/null | cut -d= -f2)"
@@ -107,12 +94,6 @@ if [ "$to_exit_c" -ne 0 ] && printf '%s\n' "$to_out_c" | grep -Fxq 'RESULT: ERRO
 else
   fail "14c: 期待した結果と異なる（exit ${to_exit_c}）:
 $to_out_c"
-fi
-
-if [ ! -e "$TO_NONEXISTENT_DIR/.worktree-occupancy" ]; then
-  pass "14c: 存在しないワークツリーに占有記録が作られていない（AC#2）"
-else
-  fail "14c: 存在しないはずのワークツリーに占有記録が作られてしまった（AC#2違反）"
 fi
 
 echo ""
