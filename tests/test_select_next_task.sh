@@ -200,7 +200,7 @@ echo "=== 9. 複数依存・存在しない依存の扱い（TASK-99） ==="
 # "Dependency Graph:" の "Depends on" 木で依存を表す。依存の一部だけが Done の場合、
 # 推移的依存を持つ場合、存在しない依存を持つ場合に、直接依存を正しく読み取って
 # 判定できることを確かめる。1.48.0 の "Dependencies:" 行の形式でも同じ結果になる
-# （PATH に 1.48.0 の backlog を置いてこのファイルを実行すると確かめられる）。
+# （このうちカンマ区切りの複数依存の解析は、実 CLI が 1.53.0 でも 10b がスタブで検証する）。
 
 TMP_REPO_DEPS_SELECT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_DEPS_SELECT"
@@ -299,6 +299,154 @@ if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID:
   pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 説明文中の依存表記に似た行を無視し、依存の無い TASK-9 を選ぶ"
 else
   fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 説明文中の依存表記に似た行を依存として読んだ（TASK-9 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+echo ""
+echo "=== 10. backlog CLI の出力順・バージョンによらない選定ロジックの検証（TASK-103） ==="
+# 実 CLI（1.53.0）の task list は最初から優先度→ID順で返し、task view は 1.48.0 の
+# "Dependencies:" 行を出さない。そのため 7〜9 節だけでは、select-next-task 自身の
+# 優先度→数値ID順の選定と 1.48.0 形式の依存解析が壊れても検出できない。
+# ここでは PATH の先頭に backlog のスタブを置き、固定の出力を返させて検証する。
+# スタブは SELECT_STUB_FIXTURE_DIR 配下の次のファイルを返す。
+#   task list --plain                         -> list.txt
+#   task list --status "To Do" --labels blocked:needs-decision --plain -> blocked.txt
+#   task view <ID> --plain                    -> view-<ID>.txt（無ければ exit 1）
+# それ以外の呼び出しは想定外として exit 1 にする。
+
+STUB_ROOT_SELECT="$(mktemp -d)"
+register_tmp_cleanup "$STUB_ROOT_SELECT"
+mkdir -p "$STUB_ROOT_SELECT/bin"
+cat > "$STUB_ROOT_SELECT/bin/backlog" <<'STUB'
+#!/usr/bin/env bash
+set -u
+dir="${SELECT_STUB_FIXTURE_DIR:?}"
+if [ "$#" -eq 3 ] && [ "$1 $2 $3" = "task list --plain" ]; then
+  cat "$dir/list.txt"
+  exit 0
+fi
+if [ "$#" -eq 7 ] && [ "$1 $2 $3 $4 $5 $6 $7" = "task list --status To Do --labels blocked:needs-decision --plain" ]; then
+  cat "$dir/blocked.txt"
+  exit 0
+fi
+if [ "$#" -eq 4 ] && [ "$1 $2 $4" = "task view --plain" ] && [ -f "$dir/view-$3.txt" ]; then
+  cat "$dir/view-$3.txt"
+  exit 0
+fi
+printf 'backlog スタブ: 想定外の呼び出し: %s\n' "$*" >&2
+exit 1
+STUB
+chmod +x "$STUB_ROOT_SELECT/bin/backlog"
+
+# $1 = フィクスチャのディレクトリ、$2 以降 = タスクID。依存無しの view をID ごとに書く。
+write_stub_view_without_deps() {
+  local dir="$1"
+  shift
+  local id
+  for id in "$@"; do
+    printf 'Task %s - stub\n==================================================\n\nStatus: ○ To Do\n\nDescription:\n--------------------------------------------------\nstub\n' \
+      "$id" > "$dir/view-$id.txt"
+  done
+}
+
+# --- 10a. CLI が優先度・ID の順になっていない一覧を返しても、High の中で数値ID最小（TASK-4）を選ぶ ---
+# 先頭は Low、High は TASK-9・TASK-10・TASK-4 の順に並べる。選定ループを無効化すると TASK-1、
+# 同優先度のID比較を無効化すると TASK-9、ID を文字列で比べると TASK-10 が選ばれて FAIL する。
+FIXTURE_ORDER_SELECT="$STUB_ROOT_SELECT/order"
+mkdir -p "$FIXTURE_ORDER_SELECT"
+cat > "$FIXTURE_ORDER_SELECT/list.txt" <<'LIST'
+To Do:
+  [LOW] TASK-1 - Low first
+  TASK-2 - No priority
+  [MEDIUM] TASK-3 - Medium
+  [HIGH] TASK-9 - High nine
+  [HIGH] TASK-10 - High ten
+  [HIGH] TASK-4 - High four
+  [MEDIUM] TASK-5 - Medium five
+
+LIST
+: > "$FIXTURE_ORDER_SELECT/blocked.txt"
+write_stub_view_without_deps "$FIXTURE_ORDER_SELECT" TASK-1 TASK-2 TASK-3 TASK-9 TASK-10 TASK-4 TASK-5
+select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_ORDER_SELECT" "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-4'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: CLI が未ソートの順で返しても、優先度最高（High）の中で数値ID最小の TASK-4 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 未ソートの候補一覧からの選定結果が期待と異なる（TASK-4 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 10b. 1.48.0 形式の "Dependencies:" 行を読み、未完了の依存を持つタスクを除外する ---
+# High の TASK-4 は "Dependencies: TASK-3, TASK-7" を持ち、TASK-3 は Done、TASK-7 は In Progress。
+# 未完了の依存を末尾に置き、カンマ区切りの全要素を見ていることも確かめる。
+# view の内容は select-next-task のコメントにある 1.48.0 の形式を手で写したもので、実出力の細部までは再現しない。
+# 1.48.0 形式の解析を無効化すると TASK-4 が選ばれて FAIL する。
+FIXTURE_DEPS148_SELECT="$STUB_ROOT_SELECT/deps148"
+mkdir -p "$FIXTURE_DEPS148_SELECT"
+cat > "$FIXTURE_DEPS148_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-4 - Has open dep
+  [MEDIUM] TASK-6 - Has done dep
+
+In Progress:
+  TASK-7 - Open dep
+
+Done:
+  TASK-3 - Done dep
+
+LIST
+: > "$FIXTURE_DEPS148_SELECT/blocked.txt"
+cat > "$FIXTURE_DEPS148_SELECT/view-TASK-4.txt" <<'VIEW'
+Task TASK-4 - Has open dep
+==================================================
+
+Status: ○ To Do
+Priority: High
+Dependencies: TASK-3, TASK-7
+
+Description:
+--------------------------------------------------
+stub
+VIEW
+cat > "$FIXTURE_DEPS148_SELECT/view-TASK-6.txt" <<'VIEW'
+Task TASK-6 - Has done dep
+==================================================
+
+Status: ○ To Do
+Priority: Medium
+Dependencies: TASK-3
+
+Description:
+--------------------------------------------------
+stub
+VIEW
+cat > "$FIXTURE_DEPS148_SELECT/view-TASK-3.txt" <<'VIEW'
+Task TASK-3 - Done dep
+==================================================
+
+Status: ✔ Done
+
+Description:
+--------------------------------------------------
+stub
+VIEW
+cat > "$FIXTURE_DEPS148_SELECT/view-TASK-7.txt" <<'VIEW'
+Task TASK-7 - Open dep
+==================================================
+
+Status: ◒ In Progress
+
+Description:
+--------------------------------------------------
+stub
+VIEW
+# max_in_progress は In Progress の TASK-7 でゲートされないよう 2 にする。
+select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_DEPS148_SELECT" "$SELECT_SCRIPT" 2 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-6'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.48.0 形式の Dependencies: 行から未完了の依存（TASK-7）を読み、TASK-4 を除外して TASK-6 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.48.0 形式の依存行を持つタスクの選定結果が期待と異なる（TASK-6 を期待、exit ${select_exit}）:
 $select_out"
 fi
 
