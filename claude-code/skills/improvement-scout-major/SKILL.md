@@ -28,7 +28,7 @@ description: コードベースを探索し、アーキテクチャ級の大き�
 
 `Proposed` から先には進めない。人間が milestone とタスクの内容を確認して個々のタスクを `To Do` に上げたものだけが improvement-dispatch に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。
-`improvement-dispatch` は `Dependencies` が `Done` になっていない `To Do` タスクを既に自動的に除外する仕組みを持つため、依存関係を付けて起票するだけで実行順は dispatch 側が守る。dispatch・work・既存 scout に変更は要らない。
+`improvement-dispatch` は `Dependencies` が `Done` になっていない `To Do` タスクを既に自動的に除外する仕組みを持つため、依存関係を付けて起票するだけで実行順は dispatch 側が守る。
 
 使わない場面：
 
@@ -204,4 +204,3 @@ milestone・タスク本文と報告の言語は会話の言語に合わせる�
 - 依存グラフに循環を作らない。起票前に依存の向きを確認する。
 - 監査の中でコードを変更しない。修正は起票したタスクの実行として行われる。
 - 未確認の推測を起票しない。根拠のない指摘は、起票しないより悪い。
-- `improvement-scout`・`improvement-dispatch`・`improvement-work` を変更しない。既存の依存解決ロジックのみでこのスキルの出力を消化できる。
