@@ -1921,6 +1921,97 @@ $no_backlog_no_flag_output"
 fi
 
 
+# ---- 9i. git 作業木を対象に途中で停止しても、作成済みの .claude/skills/<スキル名> が
+# .git/info/exclude で除外されている（TASK-136 AC#1・AC#2）----
+# 末尾のスキル名の位置に追跡済みの実体を置いて place_skill_symlinks を途中で停止させる。
+# 衝突させる実体はコミットしておき、停止後の git status --short が空であることで
+# 「setup が作ったものが1つも未追跡として現れない」ことを確かめる（セクション 10b と同じ手法）。
+TMP_WORKSPACE_ABORT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_WORKSPACE_ABORT"
+(cd "$TMP_WORKSPACE_ABORT" && git init -q)
+workspace_abort_skill="${WORKSPACE_SKILL_NAMES[${#WORKSPACE_SKILL_NAMES[@]}-1]}"
+mkdir -p "$TMP_WORKSPACE_ABORT/.claude/skills/$workspace_abort_skill"
+printf 'dummy\n' >"$TMP_WORKSPACE_ABORT/.claude/skills/$workspace_abort_skill/SKILL.md"
+git -C "$TMP_WORKSPACE_ABORT" add -A >/dev/null 2>&1
+git -C "$TMP_WORKSPACE_ABORT" -c user.name=test -c user.email=test@example.com commit -q -m init >/dev/null 2>&1
+
+workspace_abort_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_ABORT" 2>&1)"
+workspace_abort_exit=$?
+if [ "$workspace_abort_exit" -ne 0 ] && grep -Fq "にはシンボリックリンクではない実体が既に存在する" <<<"$workspace_abort_output"; then
+  pass "9i: 前提: .claude/skills/$workspace_abort_skill の実体との衝突で --workspace が停止する（exit ${workspace_abort_exit}）"
+else
+  fail "9i: 前提: --workspace が衝突で停止しなかった（exit ${workspace_abort_exit}）:
+$workspace_abort_output"
+fi
+workspace_abort_created=()
+for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
+  [ -L "$TMP_WORKSPACE_ABORT/.claude/skills/$name" ] && workspace_abort_created+=("$name")
+done
+if [ "${#WORKSPACE_SKILL_NAMES[@]}" -ge 2 ]; then
+  if [ "${#workspace_abort_created[@]}" -ge 1 ]; then
+    pass "9i: 前提: 停止前にシンボリックリンクが作成済みである（${workspace_abort_created[*]}）"
+  else
+    fail "9i: 前提: 停止前にシンボリックリンクが1つも作られていない（検証したい状態を作れていない）"
+  fi
+fi
+workspace_abort_status="$(git -C "$TMP_WORKSPACE_ABORT" status --short --untracked-files=all 2>&1)"
+if [ -z "$workspace_abort_status" ]; then
+  pass "9i: --workspace が途中で停止した後、git status --short に .claude/skills/ 配下が現れない"
+else
+  fail "9i: --workspace が途中で停止した後、git status --short に未追跡のものが現れる:
+$workspace_abort_status"
+fi
+workspace_abort_missing=()
+for name in "${workspace_abort_created[@]}"; do
+  if [ -n "$(git -C "$TMP_WORKSPACE_ABORT" check-ignore ".claude/skills/$name" 2>/dev/null)" ] \
+    && grep -Fxq ".claude/skills/$name" "$TMP_WORKSPACE_ABORT/.git/info/exclude" 2>/dev/null; then
+    :
+  else
+    workspace_abort_missing+=("$name")
+  fi
+done
+if [ "${#workspace_abort_missing[@]}" -eq 0 ]; then
+  pass "9i: 停止時点で作成済みの .claude/skills/<スキル名> がすべて .git/info/exclude で除外されている"
+else
+  fail "9i: 停止時点で作成済みなのに .git/info/exclude で除外されていないものがある（${workspace_abort_missing[*]}）"
+fi
+
+# ---- 9j. 正常に完走したときの .git/info/exclude の内容が変わらず、再実行で行が増えない（TASK-136 AC#3）----
+# 期待する内容は「git init 直後の内容 + 見出しコメント + 各スキルの行（列挙順）」である。
+TMP_WORKSPACE_EXCLUDE="$(mktemp -d)"
+register_tmp_cleanup "$TMP_WORKSPACE_EXCLUDE"
+(cd "$TMP_WORKSPACE_EXCLUDE" && git init -q)
+workspace_exclude_file="$TMP_WORKSPACE_EXCLUDE/.git/info/exclude"
+workspace_exclude_expected="$(
+  cat "$workspace_exclude_file" 2>/dev/null
+  printf '%s\n' "$EXCLUDE_HEADER"
+  for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
+    printf '%s\n' ".claude/skills/$name"
+  done
+)"
+workspace_exclude_first_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_EXCLUDE" 2>&1)" \
+  || fail "9j: 1 回目の --workspace 実行が失敗した:
+$workspace_exclude_first_output"
+workspace_exclude_first="$(cat "$workspace_exclude_file")"
+if [ "$workspace_exclude_first" = "$workspace_exclude_expected" ]; then
+  pass "9j: 完走後の .git/info/exclude が「git init 直後の内容 + 見出しコメント + 各スキルの行」と完全一致する"
+else
+  fail "9j: 完走後の .git/info/exclude の内容が想定と異なる:
+--- 期待 ---
+$workspace_exclude_expected
+--- 実際 ---
+$workspace_exclude_first"
+fi
+workspace_exclude_second_output="$("$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_EXCLUDE" 2>&1)" \
+  || fail "9j: 2 回目の --workspace 実行が失敗した:
+$workspace_exclude_second_output"
+if [ "$(cat "$workspace_exclude_file")" = "$workspace_exclude_first" ]; then
+  pass "9j: 2 回目の --workspace 実行で .git/info/exclude の行が増えない"
+else
+  fail "9j: 2 回目の --workspace 実行で .git/info/exclude が変化した:
+$(cat "$workspace_exclude_file")"
+fi
+
 echo ""
 echo "=== 10. 途中で停止しても作成済みの .backlog/ と .claude/skills/<スキル名> が .git/info/exclude で除外されている（TASK-134） ==="
 

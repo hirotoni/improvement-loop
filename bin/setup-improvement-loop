@@ -609,7 +609,7 @@ append_git_exclude_lines() {
 # `--workspace` 経路のセットアップ本体。対象ディレクトリ（git リポジトリでなくてよい）に
 # claude-code/workspace-skills/ 配下のスキル一式（実行時に動的列挙）を `.claude/skills/`
 # へ冪等に配置する。backlog init や .backlog/ 配下の配置は一切行わない。
-# 対象が git リポジトリでもある場合だけ、配置したパスを .git/info/exclude に追記する。
+# 対象が git リポジトリでもある場合だけ、配置するパスを .git/info/exclude に追記する（配置より先に行う）。
 setup_workspace() {
   local target_dir="$1"
 
@@ -638,9 +638,12 @@ setup_workspace() {
     exit 1
   fi
 
-  local target_skills_dir="$target_dir/.claude/skills"
-  place_skill_symlinks "$SOURCE_WORKSPACE_SKILLS_DIR" "$target_skills_dir" "${workspace_skill_names[@]}"
-
+  # .git/info/exclude への追記は、シンボリックリンクを置くより先に行う。
+  # place_skill_symlinks は衝突検知などで exit 1 する経路を持つため、追記を後に回すと、
+  # 途中で停止したときに作成済みの .claude/skills/<スキル名> が未追跡ファイルとして
+  # git status に現れ、git add -A 等でコミットしうる（単一リポジトリ経路の同じ判断は
+  # 「.git/info/exclude への追記（backlog init より先に行う）」を参照）。まだ存在しない
+  # パスを除外対象に書いても害は無い。
   if git -C "$target_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local exclude_lines=()
     local name
@@ -649,6 +652,9 @@ setup_workspace() {
     done
     append_git_exclude_lines "$target_dir" "${exclude_lines[@]}"
   fi
+
+  local target_skills_dir="$target_dir/.claude/skills"
+  place_skill_symlinks "$SOURCE_WORKSPACE_SKILLS_DIR" "$target_skills_dir" "${workspace_skill_names[@]}"
 
   log ""
   log "=== サマリー ==="
