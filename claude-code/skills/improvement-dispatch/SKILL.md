@@ -38,7 +38,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 
 ファイルが存在しない場合、`improvement_loop` が無い場合、個別のキーが欠けている場合は、それぞれ既定値を使う。読めなかった旨を報告に 1 行添えること。値の変更は直接編集で行う。`backlog config set` は `config.yml` 側の設定を触るもので、このファイルには効かない。
 
-`forbidden_paths` / `allowed_paths` は二層で効く。1つ目は AIエージェント（improvement-work やその配下で動く実装パス）への指示で、手順 5 の引き渡しプロンプトに明記される。2つ目は機械的な照合で、improvement-work の手順 8（コミット直前）と dispatch の手順 6（完了検証）が `check-forbidden-allowed-paths` に変更ファイル一覧を渡し、一致すれば `RESULT: VIOLATION` としてコミット・完了が止まる。ただし照合に渡す変更ファイル一覧は呼び出し側 2 箇所とも `git diff` から作るため、機械的に止まるのは git の追跡対象パスへの変更だけである。git 管理外のパス（`.backlog/` 配下、`.claude/skills/<スキル名>` 配下、`.git/` 配下）は差分に一度も現れないので、ここに書いても機械的には止まらず、1つ目の指示としてのみ効く。この限界の詳細は `.backlog/config.my.yml` の当該キーのコメント（配布元テンプレートは `backlog-md/config.my.yml`）にある。両方とも空、またはキー自体が無い場合は制限なく動作する（従来どおり）。両方が設定されている場合は「`allowed_paths` の範囲内、かつ `forbidden_paths` に無いパス」に変更を留めるよう指示する（手順 5 参照）。
+`forbidden_paths` / `allowed_paths` は二層で効く。1つ目は AIエージェント（improvement-work やその配下で動く実装パス）への指示で、手順 5 の引き渡しプロンプトに明記される。2つ目は機械的な照合で、improvement-work の手順 8（コミット直前）と dispatch の手順 6（完了検証）が `check-forbidden-allowed-paths` に変更ファイル一覧を渡し、一致すれば `RESULT: VIOLATION` としてコミット・完了が止まる。ただし照合に渡す変更ファイル一覧は呼び出し側 2 箇所とも `git diff` から作るため、機械的に止まるのは git の追跡対象パスへの変更だけである。git 管理外のパス（`.backlog/` 配下、`.claude/skills/<スキル名>` 配下、`.git/` 配下）は差分に一度も現れないので、ここに書いても機械的には止まらず、1つ目の指示としてのみ効く。この限界の詳細は `.backlog/config.my.yml` の当該キーのコメント（配布元テンプレートは `backlog-md/config.my.yml`）にある。両方とも空、またはキー自体が無い場合は制限なく動作する。両方が設定されている場合は「`allowed_paths` の範囲内、かつ `forbidden_paths` に無いパス」に変更を留めるよう指示する（手順 5 参照）。
 
 `.backlog/` は `.git/info/exclude` に登録され除外されるため、このファイルはバージョン管理されない。新しい機体では存在しないのが正常であり、その場合は既定値で動く。
 
@@ -54,7 +54,7 @@ git worktree list
 cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を使う
 ```
 
-進行中のサブエージェントがあるかも確認する。稼働中のサブエージェントの列挙には `ListAgents` を使う（ツール一覧に最初からあり、schema のロードは要らない）。個々のサブエージェントの出力は、背景実行した `Agent` ツールの結果そのものと、完了時に届く `task-notification` から得る。**この用途で `TaskOutput` を呼ばない。** 手順 5 のとおり引き渡しは `Agent`（`subagent_type: general-purpose`）の背景実行、すなわち local_agent タスクであり、`TaskOutput` の説明文は現在この経路への使用を名指しで非推奨としている（返るのは実行結果のファイルパスだが、local_agent タスクのその `.output` はサブエージェントの会話トランスクリプト全体（JSONL）へのシンボリックリンクであり、読むとコンテキストウィンドウを溢れさせる）。だから以前ここにあった `TaskOutput` の使用指示と `ToolSearch` での `select:TaskOutput` の schema 取得指示は外した（TASK-89）。この手順にツール名を書くときは、実在し、かつ非推奨でないものだけにする。`ToolSearch` の `select:` は、存在しないツール名を渡されても何の診断も出さず無音で欠落させるだけなので、名前を間違えても取得できていないことに気付けず、手順 2 の判定材料が1つ黙って欠ける（TASK-88）。`ListAgents` が示す running/completed（busy/idle）の表示は、同一サブエージェントに対してすら呼び出しごとに running→completed→running のように矛盾して変化することが実際に観測されている。次の手順 2 で判定するときも、この表示は補助情報にとどめ、単独の根拠にしない。
+進行中のサブエージェントがあるかも確認する。稼働中のサブエージェントの列挙には `ListAgents` を使う（ツール一覧に最初からあり、schema のロードは要らない）。個々のサブエージェントの出力は、背景実行した `Agent` ツールの結果そのものと、完了時に届く `task-notification` から得る。**この用途で `TaskOutput` を呼ばない。** 手順 5 のとおり引き渡しは `Agent`（`subagent_type: general-purpose`）の背景実行、すなわち local_agent タスクであり、`TaskOutput` の説明文は現在この経路への使用を名指しで非推奨としている（返るのは実行結果のファイルパスだが、local_agent タスクのその `.output` はサブエージェントの会話トランスクリプト全体（JSONL）へのシンボリックリンクであり、読むとコンテキストウィンドウを溢れさせる）。この手順にツール名を書くときは、実在し、かつ非推奨でないものだけにする。`ToolSearch` の `select:` は、存在しないツール名を渡されても何の診断も出さず無音で欠落させるだけなので、名前を間違えても取得できていないことに気付けず、手順 2 の判定材料が1つ黙って欠ける。`ListAgents` が示す running/completed（busy/idle）の表示は、同一サブエージェントに対してすら呼び出しごとに running→completed→running のように矛盾して変化することが実際に観測されている。次の手順 2 で判定するときも、この表示は補助情報にとどめ、単独の根拠にしない。
 
 ### 2. 進行中のものを突合する
 
@@ -65,7 +65,7 @@ cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を�
 次のいずれかが得られたときに限り「完了している」と確定し、手順 6 の検証に進む。
 
 - 対応するサブエージェントからの `task-notification` が実際に届いている。
-- 背景実行した `Agent` ツールの結果そのもの（サブエージェントの報告本文）が返っている。手順 1 のとおり、これを `TaskOutput` で取りに行かない（TASK-89）。
+- 背景実行した `Agent` ツールの結果そのもの（サブエージェントの報告本文）が返っている。手順 1 のとおり、これを `TaskOutput` で取りに行かない。
 - 上記が無くても、`backlog task view TASK-<n> --plain` の notes/ステータスに検証記録（テスト実行結果、レビュー結果、`In Review` への遷移など）がすでに残っている。
 
 #### 2-2. 稼働中の確認
@@ -121,7 +121,7 @@ backlog task view TASK-<n> --plain                       # 前回この手順で
        RESULT: <値>
        ```
 
-       `OCCUPANCY_*` は、ワークツリー直下の占有記録（`.worktree-occupancy`。`.claude/skills/improvement-dispatch/scripts/create-worktree` が引き渡し・再引き渡しのたびに上書きする。`TASK_ID`・`ASSIGNED_AT`・`ASSIGNED_AT_EPOCH` の3行）を読み、その `ASSIGNED_AT_EPOCH`（最後に `create-worktree` が実行された＝最後にこのワークツリーが引き渡された時刻）からの経過秒数が 1800 秒（30分）未満かどうかを示す。占有記録が無い、または読めない場合は `OCCUPANCY_RECORD_EXISTS: false` / `OCCUPANCY_AGE_SECONDS: N/A` / `OCCUPANCY_FRESH: N/A` となり、占有記録導入前と同じくコミット履歴のみの判定にフォールバックする。dispatch はこれらの行を個別に解釈する必要は無く、最後の行 `RESULT: <値>` だけで結果を判別すればよい（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
+       `OCCUPANCY_*` は、ワークツリー直下の占有記録（`.worktree-occupancy`。`.claude/skills/improvement-dispatch/scripts/create-worktree` が引き渡し・再引き渡しのたびに上書きする。`TASK_ID`・`ASSIGNED_AT`・`ASSIGNED_AT_EPOCH` の3行）を読み、その `ASSIGNED_AT_EPOCH`（最後に `create-worktree` が実行された＝最後にこのワークツリーが引き渡された時刻）からの経過秒数が 1800 秒（30分）未満かどうかを示す。占有記録が無い、または読めない場合は `OCCUPANCY_RECORD_EXISTS: false` / `OCCUPANCY_AGE_SECONDS: N/A` / `OCCUPANCY_FRESH: N/A` となり、コミット履歴のみの判定にフォールバックする。dispatch はこれらの行を個別に解釈する必要は無く、最後の行 `RESULT: <値>` だけで結果を判別すればよい（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
 
        | `RESULT` | 意味 | dispatch が行うこと |
        | --- | --- | --- |
@@ -134,17 +134,17 @@ backlog task view TASK-<n> --plain                       # 前回この手順で
 
 この 30 分という目安の根拠は手順 7 の起動間隔である。手順 7 では、サブエージェント稼働中の次回起動を保険として 1800 秒以上後に、承認待ち・レビュー待ちで動けないときは 1200〜1800 秒後にそれぞれ設定する目安を定めている。1 回の起動間隔が概ね 20〜30 分であることを踏まえ、記録した観測から 30 分以上が経過していれば、その間に少なくとも 1 回以上は別の起動を挟んでいる（＝複数回の起動にわたって同じ状態を確認した）とみなせる。
 
-この基準はワークツリーの静けさをサブエージェントの生死の代理指標として使っているため、コミットを伴わない長時間の処理（大きなテスト実行など）が続いている場合には、「まだ生きているのに存在しないと誤判定し、再引き渡しした先で同一ワークツリーへの二重書き込みが起きる」リスクがある。占有記録（`.worktree-occupancy` と `OCCUPANCY_FRESH`、上の対応表参照）は、このリスクのうち「直近に引き渡し・再引き渡しされたばかりのワークツリーが、コミットを伴わない処理の間に誤って `REVERT_TO_TODO` されてしまう」場合を軽減する。TASK-93 で `.claude/skills/improvement-dispatch/scripts/touch-occupancy`（`create-worktree` を経由せず `ASSIGNED_AT`/`ASSIGNED_AT_EPOCH` だけを軽量に更新する経路）が追加され、TASK-94 で `improvement-work` の SKILL.md 手順 5（実装スライスが完了するたび）・手順 7（コミットを伴わない検証コマンドの直前・直後）からこれを呼ぶ運用が明記されたことで、占有記録は `create-worktree` 実行時だけでなく、サブエージェントの作業の進行に合わせて継続的に更新されるハートビートとして機能するようになった（`OCCUPANCY_FRESH` がハートビート更新後の占有記録を正しく解釈することは TASK-95 の回帰テストで担保している）。
+この基準はワークツリーの静けさをサブエージェントの生死の代理指標として使っているため、コミットを伴わない長時間の処理（大きなテスト実行など）が続いている場合には、「まだ生きているのに存在しないと誤判定し、再引き渡しした先で同一ワークツリーへの二重書き込みが起きる」リスクがある。占有記録（`.worktree-occupancy` と `OCCUPANCY_FRESH`、上の対応表参照）は、このリスクのうち「直近に引き渡し・再引き渡しされたばかりのワークツリーが、コミットを伴わない処理の間に誤って `REVERT_TO_TODO` されてしまう」場合を軽減する。サブエージェントは `improvement-work` の SKILL.md 手順 5（実装スライスが完了するたび）・手順 7（コミットを伴わない検証コマンドの直前・直後）で `.claude/skills/improvement-dispatch/scripts/touch-occupancy`（`create-worktree` を経由せず `ASSIGNED_AT`/`ASSIGNED_AT_EPOCH` だけを軽量に更新する経路）を呼ぶ。そのため占有記録は `create-worktree` 実行時だけでなく、サブエージェントの作業の進行に合わせて継続的に更新されるハートビートとして機能する（`OCCUPANCY_FRESH` がハートビート更新後の占有記録を正しく解釈することは `tests/test_check_progress_recovery.sh` で検査している）。
 
-ただし、この導入によってもなお次の残余リスクは残る。
+ただし、ハートビートがあっても次の残余リスクは残る。
 
-- `touch-occupancy` の呼び出しは `improvement-work` の SKILL.md 上でベストエフォートと明記されている。実体が見つからない場合や、引数不正・ワークツリー未登録・ブランチ不一致などで失敗した場合も `|| true` で握り潰され、実装やコミットへの移行は止まらない。呼び出しが機能していないこと自体を検知する仕組みは無いため、失敗が積み重なれば占有記録は更新されないまま古びていき、占有記録導入前と同じ誤判定のリスクに戻る。
+- `touch-occupancy` の呼び出しは `improvement-work` の SKILL.md 上でベストエフォートと明記されている。実体が見つからない場合や、引数不正・ワークツリー未登録・ブランチ不一致などで失敗した場合も `|| true` で握り潰され、実装やコミットへの移行は止まらない。呼び出しが機能していないこと自体を検知する仕組みは無いため、失敗が積み重なれば占有記録は更新されないまま古びていき、占有記録が無い場合と同じ誤判定のリスクに戻る。
 - 呼び出しは `improvement-work` の SKILL.md という散文の指示に依存しており、これを実行するのはサブエージェント自身である。手順 5・手順 7 でこの呼び出しを実際には飛ばした場合、それを機械的に強制・検知する仕組みは無く、軽減は働かない。
 - 1 回のコミットを伴わない検証コマンド自体が 30 分を超えて実行され続ける場合、手順 7 はその直前・直後にしか `touch-occupancy` を呼ばないため、実行の最中はタイムスタンプが更新されない。その間に dispatch 側の復旧診断（本手順）が走れば、`OCCUPANCY_FRESH` はなお `false` になりうる。
 
 これらを完全に無くす設計（呼び出し失敗の可視化、実行中コマンドに対する自動的な定期ハートビートなど）は現時点では未着手であり、必要になった際に別途タスク化する。
 
-`In Progress` は同時に `max_in_progress` 件までとする。以前はメインの作業木を複数のサブエージェントで共有していたため、この上限がブランチの混線を防ぐ唯一の歯止めだった。手順 5 でタスクごとに独立したワークツリーへ分離した現在、その理由自体は成立しなくなっている。ただし値を引き上げるかどうかはこのタスクのスコープ外として据え置く（レビュー体制や運用実績を見て別途判断する）。
+`In Progress` は同時に `max_in_progress` 件までとする。手順 5 でタスクごとに独立したワークツリーに分離しているので、この上限はブランチの混線を防ぐためのものではない。値を引き上げるかどうかは、レビュー体制や運用実績を見て判断する。
 
 ### 3. レビュー済みのものを扱う
 
@@ -218,7 +218,7 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 - `RESULT: NO_CANDIDATE` → `To Do` に選べる候補が無い（`blocked:needs-decision` ラベル付き・依存タスク未完了のものを除いて残らない場合を含む）。手順 7 に進む。
 - `RESULT: ERROR` → 引数不正など。標準エラーに詳細が出る。原因を確認する。
 
-以前はメインの作業木が汚れている（`git status --porcelain` に出力がある）ことも引き渡しを止める条件だった。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリルートの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる。この条件は停止条件から外す（`.claude/skills/improvement-dispatch/scripts/select-next-task` もこの条件を見ない）。
+メインの作業木が汚れている（`git status --porcelain` に出力がある）ことは、引き渡しを止める条件にしない。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリルートの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる（`.claude/skills/improvement-dispatch/scripts/select-next-task` もこの条件を見ない）。
 
 ### 5. ワークツリーを作って引き渡す
 
@@ -263,12 +263,12 @@ STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexistin
 
 出力された `WORKTREE_DIR` と `BRANCH` の値は、以降の手順（サブエージェントへの引き渡しプロンプト、`--append-notes` への記録）でリテラルな文字列として使う。シェル変数として次の呼び出しに持ち越そうとしない。
 
-新しいワークツリーの起点は `auto_merge_reviewed` の値で決まる（TASK-75）。
+新しいワークツリーの起点は `auto_merge_reviewed` の値で決まる。
 
 - `auto_merge_reviewed: false`（既定・PR 運用）。フェッチできれば `origin/<デフォルトブランチ>` を起点にするため、ローカルの `main` 自体が古くても最新の内容から分岐する。未 push のローカルコミットはレビューを通っていない変更なので、作業ブランチの起点に混ぜない。
 - `auto_merge_reviewed: true`（push しない完全ローカル運用）。この設定では手順 3 のマージ結果が push されないので `origin/<デフォルトブランチ>` は進まない。先行タスクの成果はローカルのデフォルトブランチにしか無いため、ローカルとリモートの包含関係を見て起点を選ぶ。ローカルが `origin` を含む（先行・同一）ならローカル、ローカルが遅れているなら `origin` を起点にする。これにより、`--dep` で順序付けたタスクの先行分がワークツリーに入る。
 
-ローカルの `main` は、以前のように毎回 `pull` されるわけではなく、手順 3 の ff-only マージで進む分だけ更新される。
+ローカルの `main` は毎回 `pull` されるわけではなく、手順 3 の ff-only マージで進む分だけ更新される。
 
 `create-worktree` は起点を決めた後、割り当てたブランチが実際にその起点の先端を含んでいるかを検査し、結果を `RESULT:` 行として出す。**この行を読まずに引き渡さない。** 既存のワークツリー・ブランチを再利用する経路（再引き渡し）では起点が使われないため、この検査を見ないと古い起点のまま気づかずに引き渡すことになる。
 
@@ -280,11 +280,11 @@ STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexistin
 | `STALE_BASE` / `STALE_REASON=branch_behind_default_branch` | 起点以外の候補（`auto_merge_reviewed: true` のときのもう一方のデフォルトブランチ）を含まない | `reused_branch_behind_base` と同じ扱いにする。欠けているコミットがタスクの前提かどうかで判断する。 |
 | `STALE_BASE` / `STALE_REASON=base_ref_unresolved` | 起点そのものを解決できない（リモートが消えた等） | 引き渡さない。環境の不備として報告する。 |
 
-`STALE_EXCLUDE` は上の表とは独立している（TASK-79）。`worktree_base_dir` を変更したときに、以前の値で書かれた `.git/info/exclude` の除外行がそのまま残っていることを示す。残った行は既に失効した理由で git の追跡を黙って止め続けるが、これはローカルの設定ファイルの問題であり、引き渡しを止める理由にはならない。**引き渡しはそのまま進め、`STALE_EXCLUDE` の内容（残っている行と、それを improvement-loop が追記したのか元からあったのか）を手順7の報告に含める。** 削除するかどうかは人間が決める。`create-worktree` は共有物である `.git/info/exclude` の既存行を削除・書き換えしない（自分が書いた管理記録のコメント行だけを更新する）。
+`STALE_EXCLUDE` は上の表とは独立している。`worktree_base_dir` を変更したときに、以前の値で書かれた `.git/info/exclude` の除外行がそのまま残っていることを示す。残った行は既に失効した理由で git の追跡を黙って止め続けるが、これはローカルの設定ファイルの問題であり、引き渡しを止める理由にはならない。**引き渡しはそのまま進め、`STALE_EXCLUDE` の内容（残っている行と、それを improvement-loop が追記したのか元からあったのか）を手順7の報告に含める。** 削除するかどうかは人間が決める。`create-worktree` は共有物である `.git/info/exclude` の既存行を削除・書き換えしない（自分が書いた管理記録のコメント行だけを更新する）。
 
 `RESULT: STALE_BASE` でも `create-worktree` 自体は 0 で終了する（`&&` は切れず、後続の `backlog task edit` は実行される）。引き渡すかどうかの判断は上の表のとおり dispatch の責務であり、引き渡さないと判断した場合は `backlog task edit TASK-<n> -s "To Do" --comment '<STALE_BASE の内容>' --comment-author @dispatch --plain` で `To Do` に戻す。
 
-`create-worktree` は `.backlog` シンボリックリンクを置いた後、共有の `.backlog/config.yml` の引き渡し時点の複製を `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml` に保存する（TASK-117。実体は `.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot save`）。ワークツリーの `.backlog` は共有の実体へのリンクなので、サブエージェントがワークツリー直下で config.yml を書き換えると本体と全ワークツリーに及ぶ。複製は手順 6 の改変検知と、壊れたときの復元の基準になる。`.git` の中に置くので `.git/info/exclude` は変えず、ワークツリーを片付けた後も残る。同じ task-id で再実行（再引き渡し）したとき、既存の複製と内容が違えば複製を上書きせず残し、差分を標準エラーに出す（`RESULT: KEPT_EXISTING`）。再引き渡しは前のサブエージェントが止まった後に起き、そのサブエージェントについて手順 6 の検知が走っていないので、その時点の config.yml が壊れている可能性があるためである。この場合、手順 6 の検知が `CHANGED` を返し続ける。このとき `create-worktree` は標準出力の `WORKTREE_DIR` の手前に `BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING` の行を出す。**引き渡しはそのまま進め**、この行と標準エラーの差分を手順 7 の報告の「人間に必要な行動」に載せる（意図した変更なら人間が `backlog-config-snapshot accept <task-id>`、意図しない改変なら `restore <task-id>` を実行する）。人間の意図した変更でもこの行は出る（誤検知）。見逃しより誤検知を選んでいるのは、壊れた内容を複製にすると以後の検知も復元もできなくなるためである。保存の結果は標準エラーに出す（標準出力に出すのは上の `BACKLOG_CONFIG_SNAPSHOT=` の1行だけで、`WORKTREE_DIR` と `BRANCH` が最後の2行である契約は変わらない）。保存に失敗してもワークツリー作成は止めない（このタスクの既存の複製が無ければ、手順 6 の検知が `NO_SNAPSHOT` になるだけである）。
+`create-worktree` は `.backlog` シンボリックリンクを置いた後、共有の `.backlog/config.yml` の引き渡し時点の複製を `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml` に保存する（実体は `.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot save`）。ワークツリーの `.backlog` は共有の実体へのリンクなので、サブエージェントがワークツリー直下で config.yml を書き換えると本体と全ワークツリーに及ぶ。複製は手順 6 の改変検知と、壊れたときの復元の基準になる。`.git` の中に置くので `.git/info/exclude` は変えず、ワークツリーを片付けた後も残る。同じ task-id で再実行（再引き渡し）したとき、既存の複製と内容が違えば複製を上書きせず残し、差分を標準エラーに出す（`RESULT: KEPT_EXISTING`）。再引き渡しは前のサブエージェントが止まった後に起き、そのサブエージェントについて手順 6 の検知が走っていないので、その時点の config.yml が壊れている可能性があるためである。この場合、手順 6 の検知が `CHANGED` を返し続ける。このとき `create-worktree` は標準出力の `WORKTREE_DIR` の手前に `BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING` の行を出す。**引き渡しはそのまま進め**、この行と標準エラーの差分を手順 7 の報告の「人間に必要な行動」に載せる（意図した変更なら人間が `backlog-config-snapshot accept <task-id>`、意図しない改変なら `restore <task-id>` を実行する）。人間の意図した変更でもこの行は出る（誤検知）。見逃しより誤検知を選んでいるのは、壊れた内容を複製にすると以後の検知も復元もできなくなるためである。保存の結果は標準エラーに出す（標準出力に出すのは上の `BACKLOG_CONFIG_SNAPSHOT=` の1行だけで、`WORKTREE_DIR` と `BRANCH` が最後の2行である契約は変わらない）。保存に失敗してもワークツリー作成は止めない（このタスクの既存の複製が無ければ、手順 6 の検知が `NO_SNAPSHOT` になるだけである）。
 
 `$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`create-worktree` はエラーを報告して非ゼロで終了する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
 
@@ -297,7 +297,7 @@ STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexistin
 - **作業ディレクトリ（ワークツリーの絶対パス、`$WORKTREE_DIR`）**と、そのディレクトリから移動しないこと。
 - ブランチ名（`$BRANCH`）。参考情報として伝えるが、サブエージェントは自分でブランチを切り替えたり新しく作ったりしない。ワークツリーは引き渡し時点で既にそのブランチを checkout 済みである。
 - リポジトリの規約（`CLAUDE.md` の場所、backlog CLI 経由の原則、実行すべき検証コマンド）。
-- 手順 1 で読んだ `improvement_loop.forbidden_paths` / `allowed_paths` のいずれかに 1 件以上の値がある場合、それぞれ「変更してはいけないパス」「変更してよいパス」として明記する。あわせて、この制限が improvement-work の手順 8（コミット直前）と dispatch の手順 6（完了検証）で `check-forbidden-allowed-paths` により機械的に照合され、違反すればコミットも完了検証も通らない旨を伝える。git 管理外のパスは `git diff` に現れないため機械的には止まらないが、指示としては同じく守ること（検知されないことを守らなくてよい理由にしないこと）も添える。両方とも空、またはキー自体が無い場合はこの指示を省略する（従来どおり制限なし）。
+- 手順 1 で読んだ `improvement_loop.forbidden_paths` / `allowed_paths` のいずれかに 1 件以上の値がある場合、それぞれ「変更してはいけないパス」「変更してよいパス」として明記する。あわせて、この制限が improvement-work の手順 8（コミット直前）と dispatch の手順 6（完了検証）で `check-forbidden-allowed-paths` により機械的に照合され、違反すればコミットも完了検証も通らない旨を伝える。git 管理外のパスは `git diff` に現れないため機械的には止まらないが、指示としては同じく守ること（検知されないことを守らなくてよい理由にしないこと）も添える。両方とも空、またはキー自体が無い場合はこの指示を省略する（制限なし）。
 - 共有の `.backlog/config.yml` を守る指示。ワークツリー直下（`.backlog` シンボリックリンク経由）で `.backlog/config.yml` を書き換えたり `backlog config set` を実行したりしないこと、CLI の挙動の確認は `mktemp -d` の一時リポジトリ（実ディレクトリの `.backlog` を置く）の中で行い、その `cd` は失敗したら止まる形（`cd <dir> || exit 1`）にすること（improvement-work 手順 1 に同じ規定がある）。
 - 非目標。タスクの受入基準の外に手を広げないこと。
 - 完了時に返すべき内容：変更ファイル、実行した検証とその結果、残るリスク、受入基準を満たせたか、人間の判断が必要な未解決点、共有 `.backlog/config.yml` の確認結果（improvement-work 手順 8）。
@@ -340,19 +340,19 @@ git diff <デフォルトブランチ>...<作業ブランチ> --stat
   変更ファイル一覧は改行区切りで配列 `CHANGED_FILES` に読み込んでから `"${CHANGED_FILES[@]}"` として展開する。`$(git diff ...)` をクォート無しで直接展開すると、ファイル名中の半角スペースでも単語分割され、1つのパスが複数の偽の引数に壊れる。
 
   終了ステータスと標準出力の `RESULT: <値>` の行で判別する（0=OK, 1=VIOLATION, 2=ERROR）。`forbidden_paths`/`allowed_paths` が両方空、キー自体が無い、または `.backlog/config.my.yml` 自体が無い場合、このスクリプトは常に `RESULT: OK` で終わる（スクリプト自身の仕様）。そのため未設定のときはこの検証を実行しても判定は常に無違反となり、既存の手順6の実行フローに変化は生じない。`RESULT: VIOLATION` のときは標準出力の `VIOLATING_FILES` に違反ファイルが列挙される。`RESULT: ERROR` のときは標準エラー出力を確認し、環境不備（対象リポジトリでない等）を解消したうえで手順6をやり直す。backlog タスクの状態はこのスクリプト自体では変更しない。
-- 共有の `.backlog/config.yml` の改変検知（TASK-117）。手順 5 で保存した引き渡し時点の複製と、メインの作業木の `.backlog/config.yml` を比べる。`.backlog/` は git 管理外なので、ここでの改変は上の `git diff` にもバックストップ検証にも現れない。
+- 共有の `.backlog/config.yml` の改変検知。手順 5 で保存した引き渡し時点の複製と、メインの作業木の `.backlog/config.yml` を比べる。`.backlog/` は git 管理外なので、ここでの改変は上の `git diff` にもバックストップ検証にも現れない。
 
   ```bash
   .claude/skills/improvement-dispatch/scripts/backlog-config-snapshot check task-<n>-<英小文字のスラッグ>
   ```
 
-  task-id は手順 5 で `create-worktree` に渡したもの（作業ブランチ名から `improvement/` を除いたもの）である。スクリプトの実体が無く実行できない場合（終了ステータス 126・127。TASK-117 より前の版で導入した先など）は `ERROR` と同じに扱う。このスクリプトは読むだけで何も書き込まない。最終行の `RESULT:` と終了ステータスで判別する。
+  task-id は手順 5 で `create-worktree` に渡したもの（作業ブランチ名から `improvement/` を除いたもの）である。スクリプトの実体が無く実行できない場合（終了ステータス 126・127。`backlog-config-snapshot` を含まない版で導入した先など）は `ERROR` と同じに扱う。このスクリプトは読むだけで何も書き込まない。最終行の `RESULT:` と終了ステータスで判別する。
 
   | `RESULT` | 終了ステータス | dispatch が行うこと |
   | --- | --- | --- |
   | `OK` | 0 | 何もしない。 |
   | `CHANGED` | 1 | 共有 config.yml が引き渡し時点から変わっている（消えている場合を含む）。標準エラーの差分と、標準出力の `RESTORE_COMMAND=` を手順 7 の報告の「人間に必要な行動」に載せる。dispatch は自分で `restore` しない。変更が人間の意図的な設定変更かどうかを区別できないためである。タスクの完了判定（下の「満たしていない場合の扱い」）はこの結果では変えない。改変は作業ブランチの差分とは別の問題だからである。ただし config.yml の `statuses` が壊れていると以降の `backlog task edit` が失敗しうるので、この結果を見たら他の手順より先に報告に回す。 |
-  | `NO_SNAPSHOT` | 3 | 複製が無く比較できない（TASK-117 以前に作られたワークツリー、引き渡し時点で config.yml が無かった場合等。後者では、後から作られた config.yml も検知されない）。その旨を報告に書き、先へ進む。 |
+  | `NO_SNAPSHOT` | 3 | 複製が無く比較できない（複製を保存しない版の `create-worktree` で作られたワークツリー、引き渡し時点で config.yml が無かった場合等。後者では、後から作られた config.yml も検知されない）。その旨を報告に書き、先へ進む。 |
   | `ERROR` | 2 | 標準エラーを確認し、環境不備として報告する。 |
 
   並行して複数のタスクが走っている場合、1 件の改変はその間に引き渡された全タスクの `check` で `CHANGED` になる。どのタスクが原因かはこの結果だけでは分からない。報告には、`CHANGED` になったタスクをすべて並べる。
@@ -362,7 +362,7 @@ git diff <デフォルトブランチ>...<作業ブランチ> --stat
 
   照合の前提が 2 つある。
 
-  - 照合の範囲。照合するのは今回の引き渡しで残された記録だけである。notes 中で手順 5 の `### 引き渡し` 見出しが最後に現れる位置より後にある `### レビュー <巡数> 巡目` だけを対象にする。再引き渡しでは前回の引き渡し分の記録が notes に残っており、巡数が 1 から数え直されることもあるためである。前回分の記録は、条件に当たらない自己レビューや残っていた指摘を含んでいても判定に使わない（手順 2 で観測記録の最後の 1 件だけを使うのと同じ考え方である）。`### 引き渡し` 見出しが notes に 1 つも無い場合（見出しをそろえる前に引き渡したタスク）は、notes 全体を対象にする。
+  - 照合の範囲。照合するのは今回の引き渡しで残された記録だけである。notes 中で手順 5 の `### 引き渡し` 見出しが最後に現れる位置より後にある `### レビュー <巡数> 巡目` だけを対象にする。再引き渡しでは前回の引き渡し分の記録が notes に残っており、巡数が 1 から数え直されることもあるためである。前回分の記録は、条件に当たらない自己レビューや残っていた指摘を含んでいても判定に使わない（手順 2 で観測記録の最後の 1 件だけを使うのと同じ考え方である）。`### 引き渡し` 見出しが notes に 1 つも無い場合（この見出しを残さずに引き渡されたタスク）は、notes 全体を対象にする。
   - 照合を適用しない場合。improvement-work が手順 3 の差し戻し（`blocked:needs-decision` を付けて `To Do` に戻す）をした場合は、実装前やレビュー途中で止まるのが仕様どおりであり、記録が無いことも最終巡に `P0`/`P1`/`P2` が残っていることもありうる。この場合はレビュー記録の照合結果を 1 つ目の扱い（再引き渡し）の根拠にせず、2 つ目の扱い（人間の判断が必要と報告された）に従う。
 
   そのうえで次の 3 点を確かめる。
