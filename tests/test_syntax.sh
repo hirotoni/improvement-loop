@@ -59,7 +59,7 @@ CHECK_SCRIPTS=(
 # ---- tests/ 配下のスクリプトを実体から動的に追記する ----
 # tests/ はテストを増やすたびにファイルが増える場所なので、ここを列挙で持つと登録漏れが
 # そのまま「静的検査を一度も通らないテストコード」になる。実体を単一の情報源として
-# 動的に追記する（列挙方式は run.sh の網羅性検査や SKILL_NAMES と同じ nullglob 方式）。
+# 動的に追記する（該当ファイルが無いときにパターン文字列が残らないよう nullglob で列挙する）。
 # 上の静的な列挙がパス変数と1対1なのは他のテストからも使い回すためで、tests/ 配下の
 # ファイルは構文チェック以外に参照されないので変数を増やす理由が無い。
 #
@@ -152,11 +152,43 @@ done
 
 if command -v shellcheck >/dev/null 2>&1; then
   # まとめて1回の呼び出しで渡すと、zsh は対応外の shell なので SC1071 で即座に fatal
-  # parse error になり、他のスクリプトも巻き添えで FAIL する。1エントリずつ実行する。
+  # parse error になり、他のスクリプトも巻き添えで FAIL する。1エントリずつ別の
+  # プロセスで実行する。直列だと待ち時間の大半を占めるので、xargs -P で並列に走らせる
+  # （TASK-111）。各エントリの出力と終了コードは一時ディレクトリに番号つきで書き出し、
+  # 全件の完了後に CHECK_SCRIPTS の順で読み戻して報告する。並列でも出力の順序と
+  # PASS/FAIL の判定は直列のときと変わらない（ただし shellcheck の標準エラーは
+  # 標準出力にまとめて表示される）。
+  sc_results_dir="$(mktemp -d)"
+  register_tmp_cleanup "$sc_results_dir"
+  sc_index=0
   for entry in "${CHECK_SCRIPTS[@]}"; do
-    IFS='|' read -r script_path script_label sc_flags sc_allow_fail <<<"$entry"
-    # shellcheck disable=SC2086  # sc_flags は複数フラグをそのまま単語分割させたいので意図的
-    if shellcheck $sc_flags "$script_path"; then
+    printf '%s\n' "$entry" > "$sc_results_dir/$sc_index.entry"
+    sc_index=$((sc_index + 1))
+  done
+  sc_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+  case "$sc_jobs" in ''|*[!0-9]*|0) sc_jobs=4 ;; esac
+  # 子の bash は $1 に結果ディレクトリ、$2 にエントリ番号を受け取る。sc_flags は複数
+  # フラグをそのまま単語分割させたいので、クォートせずに展開する。
+  # shellcheck disable=SC2016  # 展開は子の bash に任せるので単一引用符のままが正しい
+  [ "$sc_index" -gt 0 ] && seq 0 $((sc_index - 1)) | xargs -n 1 -P "$sc_jobs" bash -c '
+    IFS="|" read -r p _l f _a < "$1/$2.entry"
+    shellcheck $f "$p" > "$1/$2.out" 2>&1
+    echo "$?" > "$1/$2.rc"
+  ' _ "$sc_results_dir"
+
+  sc_index=0
+  for entry in "${CHECK_SCRIPTS[@]}"; do
+    IFS='|' read -r _script_path script_label _sc_flags sc_allow_fail <<<"$entry"
+    sc_rc="$(cat "$sc_results_dir/$sc_index.rc" 2>/dev/null)"
+    cat "$sc_results_dir/$sc_index.out" 2>/dev/null
+    sc_index=$((sc_index + 1))
+    case "$sc_rc" in ''|*[!0-9]*) sc_rc="" ;; esac
+    if [ -z "$sc_rc" ]; then
+      # 並列実行の仕組み自体が壊れて結果が残らなかった場合に、無音で PASS にしない。
+      fail "shellcheck $script_label (結果が得られなかった。並列実行の不具合の可能性がある)"
+      continue
+    fi
+    if [ "$sc_rc" -eq 0 ]; then
       if [ "$sc_allow_fail" = "true" ]; then
         pass "shellcheck $script_label (shell=bash として、精度は参考程度)"
       else
@@ -178,8 +210,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   done
 else
   # 上の bash -n の層は shellcheck が無くても実行済みである（TASK-60）。ここで失われるのは
-  # 静的検査の層だけなので、その規模と導入方法を1行で伝える。tests/run.sh 経由の実行では
-  # 総合サマリーの「未導入の任意依存」にも再掲される（tests/run.sh の OPTIONAL_DEPENDENCIES）。
+  # 静的検査の層だけなので、その規模と導入方法を1行で伝える。
   skip "shellcheck が PATH に無いため、CHECK_SCRIPTS ${#CHECK_SCRIPTS[@]}件に対する静的検査を実行しなかった（bash -n は実行済み。導入するには: brew install shellcheck）"
 fi
 
