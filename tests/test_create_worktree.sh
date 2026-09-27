@@ -255,17 +255,50 @@ else
 fi
 
 # ---- 引数の妥当性検証 ----
-if "$CREATE_WORKTREE_SCRIPT" >/dev/null 2>&1; then
-  fail "引数無しで claude-code/skills/improvement-dispatch/scripts/create-worktree を実行してもエラーにならない"
-else
-  pass "引数無しで claude-code/skills/improvement-dispatch/scripts/create-worktree を実行するとエラーになる"
-fi
+# 検証が壊れると create-worktree はカレントディレクトリのリポジトリに worktree と
+# ブランチを作るため、専用の一時リポジトリ内で実行する（テストを実行した本体
+# リポジトリを汚さない）。終了コードの非ゼロだけでは別の理由の失敗と区別できない
+# ので、検証固有のメッセージと、worktree・ブランチが増えていないことも確かめる。
+TMP_CW_ARGS_REPO="$(mktemp -d)"
+TMP_CW_ARGS_REPO="$(cd "$TMP_CW_ARGS_REPO" && pwd -P)"
+register_tmp_cleanup "$TMP_CW_ARGS_REPO"
+(cd "$TMP_CW_ARGS_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 
-if "$CREATE_WORKTREE_SCRIPT" "Invalid_Task_ID!" >/dev/null 2>&1; then
-  fail "不正な形式の task-id を渡してもエラーにならない"
-else
-  pass "不正な形式の task-id を渡すとエラーになる"
-fi
+cw_args_refs_snapshot() {
+  git -C "$TMP_CW_ARGS_REPO" worktree list --porcelain
+  git -C "$TMP_CW_ARGS_REPO" branch --list
+}
+
+# 引数: <ケース名> <期待する標準エラーの部分文字列> [create-worktree に渡す引数...]
+check_cw_rejects_args() {
+  local label="$1" expected_msg="$2"
+  shift 2
+  local before after output exit_code
+  before="$(cw_args_refs_snapshot)"
+  output="$(cd "$TMP_CW_ARGS_REPO" && "$CREATE_WORKTREE_SCRIPT" "$@" 2>&1 >/dev/null)"
+  exit_code=$?
+  after="$(cw_args_refs_snapshot)"
+
+  if [ "$exit_code" -ne 0 ] && printf '%s\n' "$output" | grep -Fq "エラー: $expected_msg"; then
+    pass "${label}で create-worktree を実行すると、引数の検証でエラーになる"
+  else
+    fail "${label}で create-worktree を実行しても引数の検証でエラーにならない（exit ${exit_code}, 期待する標準エラー: エラー: ${expected_msg}）:
+$output"
+  fi
+
+  if [ "$before" = "$after" ]; then
+    pass "${label}で create-worktree を実行しても、worktree とブランチが作られない"
+  else
+    fail "${label}で create-worktree を実行すると、worktree またはブランチが作られる:
+実行前:
+$before
+実行後:
+$after"
+  fi
+}
+
+check_cw_rejects_args "引数無し" "使い方: "
+check_cw_rejects_args "不正な形式の task-id（Invalid_Task_ID!）" "task-id の形式が不正: " "Invalid_Task_ID!"
 
 echo ""
 echo "=== 9b. BASE_REF 起因の worktree add 失敗（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
