@@ -76,7 +76,7 @@ improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` 
 
 ### セットアップ
 
-1. 対象にしたい各リポジトリで、これまで通り `setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作である。
+1. 対象にしたい各リポジトリで、`setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作である。
 2. ワークスペースディレクトリ自体に対して `setup-improvement-loop --workspace [ワークスペースディレクトリのパス]` を実行する（引数を省略した場合は現在のディレクトリを対象とする）。ワークスペースディレクトリが git リポジトリである必要はない。以下を冪等に行う。
    - `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` の3スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）
    - ワークスペースディレクトリ自体が git リポジトリでもある場合に限り、配置したスキルパスを `.git/info/exclude` に追記する（git リポジトリでなければスキップされ、エラーにはならない）
@@ -110,7 +110,7 @@ git config core.hooksPath githooks
 `tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash・git・backlog）が欠けている場合は、対象テストが SKIP として報告され、総合サマリーの SKIP 件数に計上される。総合サマリーには PASS/FAIL/SKIP の件数に続けて、テストファイル単位の内訳（実行 / 丸ごとスキップ / 集計不能）も出力される。
 依存不足で全テストファイルがスキップされ、検証が1件も実行されなかった場合は、全件成功した場合と区別できるよう FAIL を1件計上して非ゼロで終了する（pre-commit フックはコミットをブロックする）。終了ステータスしか見ない利用者から両者が区別できないと、1件も検証しないままコミットが通ってしまうためである。
 
-インストール済みでないバージョンの backlog CLI（通常は動作確認済み最小バージョン `1.48.0`）で `tests/run.sh` を手動で実行するときは、次のコマンドを使う。グローバルにインストールした `backlog` は変えずに、指定バージョンの `backlog.md` を npm で repo の外の一時ディレクトリに入れ、その実行ファイルの置き場所を PATH の先頭に置く。Node.js と npm が必要である。pre-commit フックはこの手順とは関係なく、これまでどおり PATH 上の `backlog` で `tests/run.sh` を実行する。
+インストール済みでないバージョンの backlog CLI（通常は動作確認済み最小バージョン `1.48.0`）で `tests/run.sh` を手動で実行するときは、次のコマンドを使う。グローバルにインストールした `backlog` は変えずに、指定バージョンの `backlog.md` を npm で repo の外の一時ディレクトリに入れ、その実行ファイルの置き場所を PATH の先頭に置く。Node.js と npm が必要である。pre-commit フックはこの手順とは関係なく、PATH 上の `backlog` で `tests/run.sh` を実行する。
 
 ```sh
 BACKLOG_VERSION=1.48.0
