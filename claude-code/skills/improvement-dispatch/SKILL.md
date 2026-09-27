@@ -54,7 +54,19 @@ git worktree list
 cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を使う
 ```
 
-進行中のサブエージェントがあるかも確認する。稼働中のサブエージェントの列挙には `ListAgents` を使う（ツール一覧に最初からあり、schema のロードは要らない）。個々のサブエージェントの出力は、背景実行した `Agent` ツールの結果そのものと、完了時に届く `task-notification` から得る。**この用途で `TaskOutput` を呼ばない。** 手順 5 のとおり引き渡しは `Agent`（`subagent_type: general-purpose`）の背景実行、すなわち local_agent タスクであり、`TaskOutput` の説明文は現在この経路への使用を名指しで非推奨としている（返るのは実行結果のファイルパスだが、local_agent タスクのその `.output` はサブエージェントの会話トランスクリプト全体（JSONL）へのシンボリックリンクであり、読むとコンテキストウィンドウを溢れさせる）。この手順にツール名を書くときは、実在し、かつ非推奨でないものだけにする。`ToolSearch` の `select:` は、存在しないツール名を渡されても何の診断も出さず無音で欠落させるだけなので、名前を間違えても取得できていないことに気付けず、手順 2 の判定材料が1つ黙って欠ける。`ListAgents` が示す running/completed（busy/idle）の表示は、同一サブエージェントに対してすら呼び出しごとに running→completed→running のように矛盾して変化することが実際に観測されている。次の手順 2 で判定するときも、この表示は補助情報にとどめ、単独の根拠にしない。
+進行中のサブエージェントがあるかも確認する。次の規定に従う。
+
+- 稼働中のサブエージェントの列挙には `ListAgents` を使う（ツール一覧に最初からあり、schema のロードは要らない）。
+- 個々のサブエージェントの出力は、背景実行した `Agent` ツールの結果そのものと、完了時に届く `task-notification` から得る。
+- **この用途で `TaskOutput` を呼ばない。**
+- この手順にツール名を書くときは、実在し、かつ非推奨でないものだけにする。
+- `ListAgents` が示す running/completed（busy/idle）の表示は、次の手順 2 で判定するときも補助情報にとどめ、単独の根拠にしない。
+
+これらの規定の理由は次のとおりである。
+
+- `TaskOutput` を呼ばない理由：手順 5 のとおり引き渡しは `Agent`（`subagent_type: general-purpose`）の背景実行、すなわち local_agent タスクであり、`TaskOutput` の説明文は現在この経路への使用を名指しで非推奨としている（返るのは実行結果のファイルパスだが、local_agent タスクのその `.output` はサブエージェントの会話トランスクリプト全体（JSONL）へのシンボリックリンクであり、読むとコンテキストウィンドウを溢れさせる）。
+- ツール名を実在し非推奨でないものに限る理由：`ToolSearch` の `select:` は、存在しないツール名を渡されても何の診断も出さず無音で欠落させるだけなので、名前を間違えても取得できていないことに気付けず、手順 2 の判定材料が1つ黙って欠ける。
+- `ListAgents` の表示を単独の根拠にしない理由：この表示は、同一サブエージェントに対してすら呼び出しごとに running→completed→running のように矛盾して変化することが実際に観測されている。
 
 ### 2. 進行中のものを突合する
 
@@ -151,7 +163,12 @@ RESULT: <値>
 
 この 30 分という目安の根拠は手順 7 の起動間隔である。手順 7 では、サブエージェント稼働中の次回起動を保険として 1800 秒以上後に、承認待ち・レビュー待ちで動けないときは 1200〜1800 秒後にそれぞれ設定する目安を定めている。1 回の起動間隔が概ね 20〜30 分であることを踏まえ、記録した観測から 30 分以上が経過していれば、その間に少なくとも 1 回以上は別の起動を挟んでいる（＝複数回の起動にわたって同じ状態を確認した）とみなせる。
 
-この基準はワークツリーの静けさをサブエージェントの生死の代理指標として使っているため、コミットを伴わない長時間の処理（大きなテスト実行など）が続いている場合には、「まだ生きているのに存在しないと誤判定し、再引き渡しした先で同一ワークツリーへの二重書き込みが起きる」リスクがある。占有記録（`.worktree-occupancy` と `OCCUPANCY_FRESH`、上の対応表参照）は、このリスクのうち「直近に引き渡し・再引き渡しされたばかりのワークツリーが、コミットを伴わない処理の間に誤って `REVERT_TO_TODO` されてしまう」場合を軽減する。サブエージェントは `improvement-work` の SKILL.md 手順 5（実装スライスが完了するたび）・手順 7（コミットを伴わない検証コマンドの直前・直後）で `.claude/skills/improvement-dispatch/scripts/touch-occupancy`（`create-worktree` を経由せず `ASSIGNED_AT`/`ASSIGNED_AT_EPOCH` だけを軽量に更新する経路）を呼ぶ。そのため占有記録は `create-worktree` 実行時だけでなく、サブエージェントの作業の進行に合わせて継続的に更新されるハートビートとして機能する（`OCCUPANCY_FRESH` がハートビート更新後の占有記録を正しく解釈することは `tests/test_check_progress_recovery.sh` で検査している）。
+この基準はワークツリーの静けさをサブエージェントの生死の代理指標として使っているため、コミットを伴わない長時間の処理（大きなテスト実行など）が続いている場合には、「まだ生きているのに存在しないと誤判定し、再引き渡しした先で同一ワークツリーへの二重書き込みが起きる」リスクがある。占有記録（`.worktree-occupancy` と `OCCUPANCY_FRESH`、上の対応表参照）とハートビートによる軽減は次のとおりである。
+
+- 軽減する範囲：占有記録は、このリスクのうち「直近に引き渡し・再引き渡しされたばかりのワークツリーが、コミットを伴わない処理の間に誤って `REVERT_TO_TODO` されてしまう」場合を軽減する。
+- ハートビートを呼ぶ箇所：サブエージェントは `improvement-work` の SKILL.md 手順 5（実装スライスが完了するたび）・手順 7（コミットを伴わない検証コマンドの直前・直後）で `.claude/skills/improvement-dispatch/scripts/touch-occupancy` を呼ぶ。
+- `touch-occupancy` の役割：`create-worktree` を経由せず `ASSIGNED_AT`/`ASSIGNED_AT_EPOCH` だけを軽量に更新する経路である。上の箇所で呼ばれるため、占有記録は `create-worktree` 実行時だけでなく、サブエージェントの作業の進行に合わせて継続的に更新されるハートビートとして機能する。
+- 検査：`OCCUPANCY_FRESH` がハートビート更新後の占有記録を正しく解釈することは `tests/test_check_progress_recovery.sh` で検査している。
 
 ただし、ハートビートがあっても次の残余リスクは残る。
 
@@ -301,7 +318,23 @@ STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexistin
 
 `RESULT: STALE_BASE` でも `create-worktree` 自体は 0 で終了する（`&&` は切れず、後続の `backlog task edit` は実行される）。引き渡すかどうかの判断は上の表のとおり dispatch の責務であり、引き渡さないと判断した場合は `backlog task edit TASK-<n> -s "To Do" --comment '<STALE_BASE の内容>' --comment-author @dispatch --plain` で `To Do` に戻す。
 
-`create-worktree` は `.backlog` シンボリックリンクを置いた後、共有の `.backlog/config.yml` の引き渡し時点の複製を `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml` に保存する（実体は `.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot save`）。ワークツリーの `.backlog` は共有の実体へのリンクなので、サブエージェントがワークツリー直下で config.yml を書き換えると本体と全ワークツリーに及ぶ。複製は手順 6 の改変検知と、壊れたときの復元の基準になる。`.git` の中に置くので `.git/info/exclude` は変えず、ワークツリーを片付けた後も残る。同じ task-id で再実行（再引き渡し）したとき、既存の複製と内容が違えば複製を上書きせず残し、差分を標準エラーに出す（`RESULT: KEPT_EXISTING`）。再引き渡しは前のサブエージェントが止まった後に起き、そのサブエージェントについて手順 6 の検知が走っていないので、その時点の config.yml が壊れている可能性があるためである。この場合、手順 6 の検知が `CHANGED` を返し続ける。このとき `create-worktree` は標準出力の `WORKTREE_DIR` の手前に `BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING` の行を出す。**引き渡しはそのまま進め**、この行と標準エラーの差分を手順 7 の報告の「人間に必要な行動」に載せる（意図した変更なら人間が `backlog-config-snapshot accept <task-id>`、意図しない改変なら `restore <task-id>` を実行する）。人間の意図した変更でもこの行は出る（誤検知）。見逃しより誤検知を選んでいるのは、壊れた内容を複製にすると以後の検知も復元もできなくなるためである。保存の結果は標準エラーに出す（標準出力に出すのは上の `BACKLOG_CONFIG_SNAPSHOT=` の1行だけで、`WORKTREE_DIR` と `BRANCH` が最後の2行である契約は変わらない）。保存に失敗してもワークツリー作成は止めない（このタスクの既存の複製が無ければ、手順 6 の検知が `NO_SNAPSHOT` になるだけである）。
+`create-worktree` は `.backlog` シンボリックリンクを置いた後、共有の `.backlog/config.yml` の引き渡し時点の複製を `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml` に保存する（実体は `.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot save`）。
+
+- 保存する理由：ワークツリーの `.backlog` は共有の実体へのリンクなので、サブエージェントがワークツリー直下で config.yml を書き換えると本体と全ワークツリーに及ぶ。複製は手順 6 の改変検知と、壊れたときの復元の基準になる。
+- 置き場所：`.git` の中に置くので `.git/info/exclude` は変えず、ワークツリーを片付けた後も残る。
+- 出力：保存の結果は標準エラーに出す。標準出力に出すのは下の `BACKLOG_CONFIG_SNAPSHOT=` の1行だけで、`WORKTREE_DIR` と `BRANCH` が最後の2行である契約は変わらない。
+- 保存に失敗した場合：ワークツリー作成は止めない（このタスクの既存の複製が無ければ、手順 6 の検知が `NO_SNAPSHOT` になるだけである）。
+
+同じ task-id で再実行（再引き渡し）したとき、既存の複製と内容が違えば、`create-worktree` は複製を上書きせず残し、差分を標準エラーに出す（`RESULT: KEPT_EXISTING`）。このとき標準出力の `WORKTREE_DIR` の手前に `BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING` の行を出す。この行が出たら、dispatch は次のとおりにする。
+
+- **引き渡しはそのまま進める。**
+- この行と標準エラーの差分を手順 7 の報告の「人間に必要な行動」に載せる（意図した変更なら人間が `backlog-config-snapshot accept <task-id>`、意図しない改変なら `restore <task-id>` を実行する）。
+
+`KEPT_EXISTING` の挙動の理由と影響は次のとおりである。
+
+- 複製を上書きしない理由：再引き渡しは前のサブエージェントが止まった後に起き、そのサブエージェントについて手順 6 の検知が走っていないので、その時点の config.yml が壊れている可能性があるためである。
+- 手順 6 への影響：この場合、手順 6 の検知が `CHANGED` を返し続ける。
+- 誤検知：人間の意図した変更でも `BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING` の行は出る。見逃しより誤検知を選んでいるのは、壊れた内容を複製にすると以後の検知も復元もできなくなるためである。
 
 `$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`create-worktree` はエラーを報告して非ゼロで終了する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
 
