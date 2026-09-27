@@ -15,8 +15,8 @@
 #   1 = NOT_CONVERGED
 #   2 = ERROR（引数の誤り、backlog task view の失敗など）
 #   3 = NO_RECORDS
-#   4 = FORMAT_ERROR
-#   5 = NEEDS_REVIEW
+#   5 = NEEDS_REVIEW（書式の崩れがあるときも含む。書式の崩れは FORMAT_WARNING: の行で名指しする）
+#   書式の崩れは差し戻しの根拠にしないので、専用の RESULT・終了ステータスを持たない。
 #
 # 責務外: backlog タスクの状態の変更。照合結果を出すだけで、差し戻しなどは呼び出し元が行う。
 # improvement-work が手順 3 の差し戻し（blocked:needs-decision）をしたタスクかどうかも見ない。
@@ -81,7 +81,7 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
   function starts_with(s, p) { return substr(s, 1, length(p)) == p }
   function ends_with(s, p) { return length(s) >= length(p) && substr(s, length(s) - length(p) + 1) == p }
   # レビュー記録として扱う見出しか（書式に合わないものも含む）。「巡目」で終わる見出しはすべて
-  # レビュー記録とみなし、形が崩れていれば書式不備として名指しする（数え漏れで前の巡が最終巡に
+  # レビュー記録とみなし、形が崩れていれば書式の崩れとして名指しする（数え漏れで前の巡が最終巡に
   # 繰り上がらないようにするため）。「（レビュー1巡目を受けて）」のように途中に含むだけの見出しは
   # 別の記録なので数えない。
   function is_review_title(t, rest) {
@@ -100,7 +100,16 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
     }
     return s
   }
-  function flush(   k, prev, pos, key, missing) {
+  # key_of(line): 項目名で始まる行ならその項目名、そうでなければ空文字列。
+  function key_of(line,   k) {
+    for (k = 1; k <= 4; k++) {
+      if (starts_with(line, "- " keys[k] ": ") || line == "- " keys[k] ":") { return keys[k] }
+    }
+    return ""
+  }
+  # 書式の崩れは差し戻しの根拠にせず、報告に載せるだけである（正本の「照合の規則」）。
+  # 必須の行は方法と結果の 2 行だけで、自己レビューにした理由・対応の欠落、行の順序は検査しない。
+  function flush(   k, key, v) {
     if (!in_review) { return }
     rounds++
     last_title = title
@@ -109,45 +118,35 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
     last_result = ""
     last_p012 = 0
     if (title !~ ("^レビュー [0-9]+ 巡目$")) {
-      ferr[++nferr] = title ": 見出しが「レビュー <巡数> 巡目」の形ではない"
+      warn[++nwarn] = title ": 見出しが「レビュー <巡数> 巡目」の形ではない"
     }
-    if (stray != "") {
-      ferr[++nferr] = title ": 対応より前に項目名で始まらない行がある（" stray "）"
-    }
-    prev = 0
-    for (k = 1; k <= 4; k++) {
-      key = keys[k]
-      if (cnt[key] == 0 && late[key]) {
-        ferr[++nferr] = title ": 「- " key ": 」の行が対応より後にある（4 行の順序が「方法・自己レビューにした理由・結果・対応」ではない）"
-        missing = 1
-      } else if (cnt[key] == 0) {
-        ferr[++nferr] = title ": 「- " key ": 」の行が無い"
-        missing = 1
+    for (k = 1; k <= 2; k++) {
+      key = required[k]
+      if (cnt[key] == 0) {
+        warn[++nwarn] = title ": 「- " key ": 」の行が無い"
       } else if (cnt[key] > 1) {
-        ferr[++nferr] = title ": 「- " key ": 」の行が " cnt[key] " 行ある"
-        missing = 1
-      } else {
-        pos = at[key]
-        if (pos < prev) { order_bad = 1 }
-        prev = pos
+        warn[++nwarn] = title ": 「- " key ": 」の行が " cnt[key] " 行ある"
       }
-    }
-    if (bullet_taiou) {
-      ferr[++nferr] = title ": 対応の値が空で、続きの行が「- 」で始まっている"
-    }
-    if (!missing && order_bad) {
-      ferr[++nferr] = title ": 4 行の順序が「方法・自己レビューにした理由・結果・対応」ではない"
     }
     if (cnt["方法"] == 1) {
       v = strip_note(val["方法"])
       if (v == "独立サブエージェント" || v == "自己レビュー") {
         last_method = v
       } else {
-        ferr[++nferr] = title ": 方法の値が「独立サブエージェント」「自己レビュー」のどちらでもない（" val["方法"] "）"
+        warn[++nwarn] = title ": 方法の値が「独立サブエージェント」「自己レビュー」のどちらでもない（" val["方法"] "）"
       }
     }
+    if (last_method == "") {
+      # 方法が読めなければ、自己レビューの巡の扱い（理由の確認・取り下げを認めない）を適用できない。
+      warn[++nwarn] = title ": 方法が読めないので、自己レビューの巡かどうかは確かめていない" UNVERIFIED
+    }
     if (last_method == "自己レビュー") {
-      need[++nneed] = title ": 自己レビューの巡。自己レビューにした理由が 2 条件のどちらかに当たるか"
+      if (cnt["自己レビューにした理由"] == 0 || val["自己レビューにした理由"] == "") {
+        # 理由の欠落は差し戻しの根拠にしない。判断する材料が無いので報告に載せるだけにする。
+        warn[++nwarn] = title ": 自己レビューの巡だが「自己レビューにした理由」が書かれておらず、理由の妥当性は確かめていない" UNVERIFIED
+      } else {
+        need[++nneed] = title ": 自己レビューの巡。自己レビューにした理由が 2 条件のどちらかに当たるか"
+      }
     }
     if (cnt["結果"] == 1) {
       v = strip_note(val["結果"])
@@ -157,7 +156,7 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
         split(v, f, " ")
         last_result_ok = 1; last_p012 = f[2] + f[5] + f[8]
       } else {
-        ferr[++nferr] = title ": 結果の件数が読めない（" v "）"
+        warn[++nwarn] = title ": 結果の件数が読めない（" v "）"
       }
       last_result = v
     }
@@ -165,52 +164,42 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
   }
   BEGIN {
     keys[1] = "方法"; keys[2] = "自己レビューにした理由"; keys[3] = "結果"; keys[4] = "対応"
-    rounds = 0; nferr = 0; nneed = 0
+    required[1] = "方法"; required[2] = "結果"
+    # 照合で確かめられなかった旨の書式の崩れに付ける印。dispatch はこの印で「人間に必要な行動」に載せる行を選ぶ。
+    UNVERIFIED = "（未照合）"
+    rounds = 0; nwarn = 0; nneed = 0
   }
   /^### / {
     flush()
     title = substr($0, 5)
     sub(/[ \t]+$/, "", title)
     in_review = is_review_title(title)
-    delete cnt; delete at; delete val; delete late; bullet_taiou = 0; is_key = 0
-    stray = ""; taiou = ""; in_taiou = 0; taiou_done = 0; lineno = 0; order_bad = 0
+    delete cnt; delete val
+    taiou = ""; seen_key = 0; seen_taiou = 0; in_taiou = 0; done = 0
     next
   }
-  !in_review || taiou_done { next }
+  !in_review || done { next }
   {
-    # 対応の続きは、空行か `- ` で始まる行の手前までとする。それより後は、見出し無しで
+    # 記録は、項目行が 1 つでも現れた後の最初の空行で終わる。それより後は、見出し無しで
     # 追記された別の notes（検証の記録など）が同じ記録に連なったものなので読まない。
-    if ($0 ~ /^[ \t]*$/) { if (in_taiou) { taiou_done = 1 }; next }
-    if (in_taiou) {
-      if (starts_with($0, "- ")) {
-        # 対応の直後に項目行が来たら、その項目は対応より後に書かれている（順序の誤り）。
-        for (k = 1; k <= 3; k++) {
-          if (starts_with($0, "- " keys[k] ": ") || $0 == "- " keys[k] ":") { late[keys[k]] = 1; is_key = 1 }
-        }
-        # 対応の値が空のまま `- ` の箇条書きで続けた（続きを記録の外として捨てずに書式不備にする）。
-        if (!is_key && taiou == "") { bullet_taiou = 1 }
-        is_key = 0
-        taiou_done = 1
-        next
-      }
-      taiou = taiou " " $0
+    # 対応は任意の行なので、対応の有無で終わりを決めない。
+    if ($0 ~ /^[ \t]*$/) { if (seen_key) { done = 1 }; next }
+    key = key_of($0)
+    # 対応は最後の行である。対応より後に項目行が来たら、そこで記録は終わる（読まない）。
+    if (key != "" && seen_taiou) { done = 1; next }
+    if (key != "") {
+      seen_key = 1
+      cnt[key]++
+      v = substr($0, length("- " key ": ") + 1)
+      sub(/[ \t]+$/, "", v)
+      val[key] = v
+      if (key == "対応") { in_taiou = 1; seen_taiou = 1; taiou = v }
       next
     }
-    lineno++
-    matched = ""
-    for (k = 1; k <= 4; k++) {
-      if (starts_with($0, "- " keys[k] ": ") || $0 == "- " keys[k] ":") { matched = keys[k]; break }
-    }
-    if (matched == "") {
-      if (stray == "") { stray = $0 }
-      next
-    }
-    cnt[matched]++
-    at[matched] = lineno
-    v = substr($0, length("- " matched ": ") + 1)
-    sub(/[ \t]+$/, "", v)
-    val[matched] = v
-    if (matched == "対応") { in_taiou = 1; taiou = v }
+    if (!in_taiou) { next }
+    # 対応の続きの行（`- ` の箇条書きを含む）。空行か項目行の手前までを対応の内容として読む。
+    # 取り下げを箇条書きで書いた記録から、取り下げの記載を捨てないためである。
+    taiou = taiou " " $0
   }
   END {
     flush()
@@ -218,7 +207,7 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
     if (rounds == 0) { print "RESULT: NO_RECORDS"; exit }
     print "FINAL_ROUND: " last_title
     if (last_result_ok) { print "FINAL_RESULT: " last_result }
-    for (k = 1; k <= nferr; k++) { print "FORMAT_ERROR: " ferr[k] }
+    else { warn[++nwarn] = last_title ": 最終巡の結果の件数が読めないので、停止条件（P0/P1/P2 が残っていないこと）は確かめていない" UNVERIFIED }
     not_conv = 0
     if (last_result_ok && last_p012 > 0) {
       if (last_method == "自己レビュー") {
@@ -227,14 +216,14 @@ REPORT="$(printf '%s\n' "$RECORDS" | LC_ALL=C awk '
       } else if (!last_withdrawn) {
         print "NOT_CONVERGED: " last_title ": P0/P1/P2 が " last_p012 " 件あり、対応に取り下げの記載が無い"
         not_conv = 1
-      } else if (last_method == "独立サブエージェント") {
-        need[++nneed] = last_title ": 最終巡の P0/P1/P2 " last_p012 " 件のすべてに、レビュー役が取り下げたと指摘ごとに書かれているか"
+      } else {
+        need[++nneed] = last_title ": 最終巡の P0/P1/P2 " last_p012 " 件のすべてに、レビュー役が取り下げたと指摘ごとに書かれているか" (last_method == "" ? "（方法が読めないので、独立サブエージェントの巡であることも確かめる）" : "")
       }
     }
     for (k = 1; k <= nneed; k++) { print "NEEDS_REVIEW: " need[k] }
-    if (nferr > 0) { print "RESULT: FORMAT_ERROR" }
-    else if (not_conv) { print "RESULT: NOT_CONVERGED" }
-    else if (nneed > 0) { print "RESULT: NEEDS_REVIEW" }
+    for (k = 1; k <= nwarn; k++) { print "FORMAT_WARNING: " warn[k] }
+    if (not_conv) { print "RESULT: NOT_CONVERGED" }
+    else if (nneed > 0 || nwarn > 0) { print "RESULT: NEEDS_REVIEW" }
     else { print "RESULT: OK" }
   }
 ')"
@@ -244,7 +233,6 @@ case "$(printf '%s\n' "$REPORT" | tail -n 1)" in
   "RESULT: OK") exit 0 ;;
   "RESULT: NOT_CONVERGED") exit 1 ;;
   "RESULT: NO_RECORDS") exit 3 ;;
-  "RESULT: FORMAT_ERROR") exit 4 ;;
   "RESULT: NEEDS_REVIEW") exit 5 ;;
   *)
     err "照合の出力を解釈できない"

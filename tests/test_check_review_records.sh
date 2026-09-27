@@ -82,25 +82,39 @@ write_notes() {
   build_view "$1"
 }
 
-# check_both <ラベル> <タスク ID> <期待する終了コード> [出力に含まれるべき行...]
+# check_both <ラベル> <タスク ID> <期待する終了コード> [出力に含まれるべき行 | !出力に含まれてはならない文字列 ...]
 #   両バージョンのスタブで check-review-records を実行し、終了コードと最終行の RESULT、
-#   指定した行の完全一致を検証する。期待する RESULT は終了コードから決める。
+#   指定した行の完全一致を検証する。`!` で始まる引数は、その後ろの文字列が出力のどこにも
+#   含まれないことを検証する。期待する RESULT は終了コードから決める。
 check_both() {
-  local label="$1" id="$2" code="$3" ver expect
+  local label="$1" id="$2" code="$3" ver expect arg absent_ok
+  local -a present=() absent=()
   shift 3
+  for arg in "$@"; do
+    case "$arg" in
+      '!'*) absent+=("${arg#!}") ;;
+      *) present+=("$arg") ;;
+    esac
+  done
   case "$code" in
     0) expect="RESULT: OK" ;;
     1) expect="RESULT: NOT_CONVERGED" ;;
     2) expect="RESULT: ERROR" ;;
     3) expect="RESULT: NO_RECORDS" ;;
-    4) expect="RESULT: FORMAT_ERROR" ;;
     5) expect="RESULT: NEEDS_REVIEW" ;;
   esac
   for ver in 1.48.0 1.53.0; do
     run_in "$STUB_ROOT" env PATH="$STUB_ROOT/bin:$PATH" REVIEW_STUB_FIXTURE_DIR="$STUB_ROOT/$ver" \
       "$CHECK_REVIEW_RECORDS_SCRIPT" "$id"
-    assert "[$ver] $label" run_result "$code" "$@"
+    assert "[$ver] $label" run_result "$code" ${present[@]+"${present[@]}"}
     assert "[${ver}] ${label}（最終行が ${expect}）" last_lines_are "$expect"
+    if [ "${#absent[@]}" -gt 0 ]; then
+      absent_ok=1
+      for arg in "${absent[@]}"; do
+        if has_text "$RUN_OUT" "$arg"; then absent_ok=0; fi
+      done
+      assert "[${ver}] ${label}（出力に含まれない: ${absent[*]}）" [ "$absent_ok" -eq 1 ]
+    fi
   done
 }
 
@@ -269,31 +283,36 @@ check_both "方法・結果の値の後ろの全角括弧の注記は除いて�
   "FINAL_RESULT: P0 0 / P1 0 / P2 0 / P3 2"
 
 echo ""
-echo "=== 4. 書式不備（受入基準 #3） ==="
+echo "=== 4. 書式の崩れ（受入基準 #3・#8・#9） ==="
+# 書式の崩れは差し戻しの根拠にしない。巡を FORMAT_WARNING: で名指しし、RESULT は NEEDS_REVIEW（要確認）になる。
 
-# format_case <ID> <期待する FORMAT_ERROR 行> : 標準入力の 1 巡目を記録にして検証する。
+# format_case <ID> <期待する FORMAT_WARNING 行...> : 標準入力の 1 巡目を記録にして検証する。
 format_case() {
-  local id="$1" expected="$2"
+  local id="$1"
+  shift
   { printf '### 引き渡し\n- BRANCH: x\n\n'; cat; } > "$STUB_ROOT/notes/$id.txt"
   build_view "$id"
-  check_both "書式不備を名指しする: $expected" "$id" 4 "$expected"
+  check_both "書式の崩れを名指しし、要確認にする: $1" "$id" 5 "$@"
 }
 
-format_case FMT_NO_METHOD "FORMAT_ERROR: レビュー 1 巡目: 「- 方法: 」の行が無い" <<'NOTES'
+FINAL_UNREADABLE="FORMAT_WARNING: レビュー 1 巡目: 最終巡の結果の件数が読めないので、停止条件（P0/P1/P2 が残っていないこと）は確かめていない（未照合）"
+METHOD_UNREADABLE="FORMAT_WARNING: レビュー 1 巡目: 方法が読めないので、自己レビューの巡かどうかは確かめていない（未照合）"
+
+format_case FMT_NO_METHOD "FORMAT_WARNING: レビュー 1 巡目: 「- 方法: 」の行が無い" "$METHOD_UNREADABLE" <<'NOTES'
 ### レビュー 1 巡目
 - 自己レビューにした理由: 該当なし
 - 結果: No findings
 - 対応: なし
 NOTES
 
-format_case FMT_NO_RESULT "FORMAT_ERROR: レビュー 1 巡目: 「- 結果: 」の行が無い" <<'NOTES'
+format_case FMT_NO_RESULT "FORMAT_WARNING: レビュー 1 巡目: 「- 結果: 」の行が無い" "$FINAL_UNREADABLE" <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
 - 対応: なし
 NOTES
 
-format_case FMT_FULLWIDTH_COLON "FORMAT_ERROR: レビュー 1 巡目: 「- 結果: 」の行が無い" <<'NOTES'
+format_case FMT_FULLWIDTH_COLON "FORMAT_WARNING: レビュー 1 巡目: 「- 結果: 」の行が無い" "$FINAL_UNREADABLE" <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
@@ -301,7 +320,7 @@ format_case FMT_FULLWIDTH_COLON "FORMAT_ERROR: レビュー 1 巡目: 「- 結�
 - 対応: なし
 NOTES
 
-format_case FMT_UNREADABLE "FORMAT_ERROR: レビュー 1 巡目: 結果の件数が読めない（P0 0 / P1 0 / P2 0）" <<'NOTES'
+format_case FMT_UNREADABLE "FORMAT_WARNING: レビュー 1 巡目: 結果の件数が読めない（P0 0 / P1 0 / P2 0）" "$FINAL_UNREADABLE" <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
@@ -309,15 +328,17 @@ format_case FMT_UNREADABLE "FORMAT_ERROR: レビュー 1 巡目: 結果の件数
 - 対応: なし
 NOTES
 
-format_case FMT_WORDS "FORMAT_ERROR: レビュー 1 巡目: 結果の件数が読めない（指摘なし）" <<'NOTES'
+# 最終巡の件数が読めなければ、指摘が残っていそうでも NOT_CONVERGED にはしない（#8）。
+format_case FMT_WORDS "FORMAT_WARNING: レビュー 1 巡目: 結果の件数が読めない（指摘は P1 が 1 件）" "$FINAL_UNREADABLE" \
+  '!NOT_CONVERGED' <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
-- 結果: 指摘なし
-- 対応: なし
+- 結果: 指摘は P1 が 1 件
+- 対応: 直した。
 NOTES
 
-format_case FMT_METHOD "FORMAT_ERROR: レビュー 1 巡目: 方法の値が「独立サブエージェント」「自己レビュー」のどちらでもない（サブエージェント）" <<'NOTES'
+format_case FMT_METHOD "FORMAT_WARNING: レビュー 1 巡目: 方法の値が「独立サブエージェント」「自己レビュー」のどちらでもない（サブエージェント）" "$METHOD_UNREADABLE" <<'NOTES'
 ### レビュー 1 巡目
 - 方法: サブエージェント
 - 自己レビューにした理由: 該当なし
@@ -325,7 +346,7 @@ format_case FMT_METHOD "FORMAT_ERROR: レビュー 1 巡目: 方法の値が「�
 - 対応: なし
 NOTES
 
-format_case FMT_HEADING "FORMAT_ERROR: レビュー1巡目: 見出しが「レビュー <巡数> 巡目」の形ではない" <<'NOTES'
+format_case FMT_HEADING "FORMAT_WARNING: レビュー1巡目: 見出しが「レビュー <巡数> 巡目」の形ではない" <<'NOTES'
 ### レビュー1巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
@@ -333,12 +354,50 @@ format_case FMT_HEADING "FORMAT_ERROR: レビュー1巡目: 見出しが「レ�
 - 対応: なし
 NOTES
 
-format_case FMT_HEADING_PREFIX "FORMAT_ERROR: 再レビュー 1 巡目: 見出しが「レビュー <巡数> 巡目」の形ではない" <<'NOTES'
+format_case FMT_HEADING_PREFIX "FORMAT_WARNING: 再レビュー 1 巡目: 見出しが「レビュー <巡数> 巡目」の形ではない" <<'NOTES'
 ### 再レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
 - 結果: No findings
 - 対応: なし
+NOTES
+
+format_case FMT_DUP "FORMAT_WARNING: レビュー 1 巡目: 「- 結果: 」の行が 2 行ある" "$FINAL_UNREADABLE" <<'NOTES'
+### レビュー 1 巡目
+- 方法: 独立サブエージェント
+- 自己レビューにした理由: 該当なし
+- 結果: No findings
+- 結果: P0 0 / P1 0 / P2 0 / P3 0
+- 対応: なし
+NOTES
+
+# 自己レビューの巡で理由が無い・空なら、理由の妥当性は判断できないので要確認の報告に留める（#9）。
+# NEEDS_REVIEW: の行（AI が判断して差し戻しうる行）は出さない。
+format_case SELF_NO_REASON "FORMAT_WARNING: レビュー 1 巡目: 自己レビューの巡だが「自己レビューにした理由」が書かれておらず、理由の妥当性は確かめていない（未照合）" \
+  '!NEEDS_REVIEW:' <<'NOTES'
+### レビュー 1 巡目
+- 方法: 自己レビュー
+- 結果: No findings
+- 対応: なし
+NOTES
+
+format_case SELF_EMPTY_REASON "FORMAT_WARNING: レビュー 1 巡目: 自己レビューの巡だが「自己レビューにした理由」が書かれておらず、理由の妥当性は確かめていない（未照合）" \
+  '!NEEDS_REVIEW:' <<'NOTES'
+### レビュー 1 巡目
+- 方法: 自己レビュー
+- 自己レビューにした理由:
+- 結果: No findings
+- 対応: なし
+NOTES
+
+# 方法が読めない最終巡で取り下げの記載があれば、独立サブエージェントの巡であることも確かめさせる。
+format_case METHOD_UNKNOWN_WITHDRAWN "$METHOD_UNREADABLE" \
+  "NEEDS_REVIEW: レビュー 1 巡目: 最終巡の P0/P1/P2 1 件のすべてに、レビュー役が取り下げたと指摘ごとに書かれているか（方法が読めないので、独立サブエージェントの巡であることも確かめる）" <<'NOTES'
+### レビュー 1 巡目
+- 方法: セルフレビュー
+- 自己レビューにした理由: 差分が小さい
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+- 対応: P1 はレビュー役が取り下げた
 NOTES
 
 # 見出しの途中に「巡目」を含むだけの別の記録は、レビュー記録として数えない（実例: TASK-112）。
@@ -354,52 +413,122 @@ write_notes NOT_A_ROUND <<'NOTES'
 NOTES
 check_both "途中に「巡目」を含むだけの見出しは数えない" NOT_A_ROUND 0 "REVIEW_ROUNDS: 1"
 
-format_case FMT_BULLET_TAIOU "FORMAT_ERROR: レビュー 1 巡目: 対応の値が空で、続きの行が「- 」で始まっている" <<'NOTES'
+echo ""
+echo "=== 4b. 必須でない行・順序は検査しない（受入基準 #9） ==="
+
+# 必須は方法と結果の 2 行だけ。理由・対応の欠落、行の順序、項目名で始まらない行は書式の崩れにしない。
+write_notes OPTIONAL_MISSING <<'NOTES'
+### 引き渡し
+- BRANCH: x
+
+### レビュー 1 巡目
+- 方法: 独立サブエージェント
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+- 対応: 直した。
+
+### レビュー 2 巡目
+- 方法: 独立サブエージェント
+- 結果: No findings
+NOTES
+check_both "理由・対応の行が無くても書式の崩れにしない" OPTIONAL_MISSING 0 \
+  "REVIEW_ROUNDS: 2" '!FORMAT_WARNING'
+
+write_notes ORDER_STRAY <<'NOTES'
+### レビュー 1 巡目
+- 結果: No findings
+- 指摘: なし
+- 自己レビューにした理由: 該当なし
+- 方法: 独立サブエージェント
+- 対応: なし
+NOTES
+check_both "対応より前の行の順序と項目名で始まらない行は検査しない" ORDER_STRAY 0 \
+  "FINAL_RESULT: No findings" '!FORMAT_WARNING'
+
+# 対応より後の項目行は読まない（対応が最後の行）。結果を対応の後に書けば結果が無いものとして名指しする。
+write_notes AFTER_TAIOU <<'NOTES'
+### レビュー 1 巡目
+- 方法: 独立サブエージェント
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+- 対応: 直した
+- 結果: No findings
+NOTES
+check_both "対応より後の項目行は読まず、最終巡の指摘を打ち消さない" AFTER_TAIOU 1 \
+  "NOT_CONVERGED: レビュー 1 巡目: P0/P1/P2 が 1 件あり、対応に取り下げの記載が無い" '!FORMAT_WARNING'
+
+# 対応の行が無い記録も最初の空行で終わる。その後に見出し無しで追記された notes の項目行は読まない。
+write_notes NO_TAIOU_TRAILING <<'NOTES'
+### レビュー 1 巡目
+- 方法: 独立サブエージェント
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+
+検証:
+- 結果: bash tests/run.sh 全件 pass
+- 対応: 取り下げは無し
+NOTES
+check_both "対応が無くても空行で記録が終わり、後続の notes は読まない" NO_TAIOU_TRAILING 1 \
+  "NOT_CONVERGED: レビュー 1 巡目: P0/P1/P2 が 1 件あり、対応に取り下げの記載が無い" '!FORMAT_WARNING'
+
+# 対応を `- ` の箇条書きで続けた場合は、箇条書きを対応の内容として読む（値が空でも、値があっても）。
+# 取り下げの記載を捨てて NOT_CONVERGED にしない。
+write_notes BULLET_TAIOU <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
 - 結果: P0 0 / P1 1 / P2 0 / P3 0
 - 対応:
-- P1 → レビュー役が取り下げた
-NOTES
+- P1 → 却下の根拠を渡し、
+  レビュー役が取り下げた
 
-format_case FMT_DUP "FORMAT_ERROR: レビュー 1 巡目: 「- 結果: 」の行が 2 行ある" <<'NOTES'
+検証:
+- 別の記録
+NOTES
+check_both "対応の値が空で箇条書きが続けば、それを対応として読む" BULLET_TAIOU 5 \
+  "NEEDS_REVIEW: レビュー 1 巡目: 最終巡の P0/P1/P2 1 件のすべてに、レビュー役が取り下げたと指摘ごとに書かれているか" \
+  '!FORMAT_WARNING'
+
+# 空行の後の見出し無しの記録は、対応の箇条書きの続きとして読まない。
+write_notes VALUED_TAIOU_BULLETS <<'NOTES'
+### レビュー 1 巡目
+- 方法: 独立サブエージェント
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+- 対応: 以下のとおり。
+- P1（…）→ 却下の根拠を渡し、レビュー役が取り下げた
+NOTES
+check_both "値のある対応に続く箇条書きも対応として読む" VALUED_TAIOU_BULLETS 5 \
+  "NEEDS_REVIEW: レビュー 1 巡目: 最終巡の P0/P1/P2 1 件のすべてに、レビュー役が取り下げたと指摘ごとに書かれているか" \
+  '!NOT_CONVERGED'
+
+write_notes BULLET_TAIOU_TRAILING <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
 - 自己レビューにした理由: 該当なし
-- 結果: No findings
-- 結果: P0 0 / P1 0 / P2 0 / P3 0
-- 対応: なし
-NOTES
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+- 対応:
+- P1 を直した
 
-format_case FMT_ORDER "FORMAT_ERROR: レビュー 1 巡目: 4 行の順序が「方法・自己レビューにした理由・結果・対応」ではない" <<'NOTES'
-### レビュー 1 巡目
-- 結果: No findings
-- 方法: 独立サブエージェント
-- 自己レビューにした理由: 該当なし
-- 対応: なし
+検証:
+- レビュー役が取り下げた、とは書いていない別の記録
 NOTES
+check_both "対応の箇条書きも空行で終わる" BULLET_TAIOU_TRAILING 1 \
+  "NOT_CONVERGED: レビュー 1 巡目: P0/P1/P2 が 1 件あり、対応に取り下げの記載が無い"
 
-format_case FMT_TAIOU_FIRST "FORMAT_ERROR: レビュー 1 巡目: 「- 結果: 」の行が対応より後にある（4 行の順序が「方法・自己レビューにした理由・結果・対応」ではない）" <<'NOTES'
+write_notes BULLET_TAIOU_KEY <<'NOTES'
 ### レビュー 1 巡目
 - 方法: 独立サブエージェント
-- 自己レビューにした理由: 該当なし
-- 対応: なし
+- 結果: P0 0 / P1 1 / P2 0 / P3 0
+- 対応:
+- P1 → 直した
 - 結果: No findings
 NOTES
+check_both "対応の箇条書きも項目行で終わり、その項目行は読まない" BULLET_TAIOU_KEY 1 \
+  "NOT_CONVERGED: レビュー 1 巡目: P0/P1/P2 が 1 件あり、対応に取り下げの記載が無い" '!FORMAT_WARNING'
 
-format_case FMT_STRAY "FORMAT_ERROR: レビュー 1 巡目: 対応より前に項目名で始まらない行がある（- 指摘: P2 1 件）" <<'NOTES'
-### レビュー 1 巡目
-- 方法: 独立サブエージェント
-- 指摘: P2 1 件
-- 自己レビューにした理由: 該当なし
-- 結果: No findings
-- 対応: なし
-NOTES
+echo ""
+echo "=== 4c. 差し戻しの根拠は NO_RECORDS と NOT_CONVERGED だけ（受入基準 #8） ==="
 
-# 書式不備は停止条件未達より優先する。前の巡が不備なら、最終巡に指摘が残っていても FORMAT_ERROR。
-write_notes FMT_PRIORITY <<'NOTES'
-### レビュー 1 巡目
+# 書式の崩れがあっても、最終巡に指摘が残っていれば NOT_CONVERGED が優先する。崩れは併せて名指しする。
+write_notes PRIORITY <<'NOTES'
+### レビュー1巡目
 - 方法: 独立サブエージェント
 - 結果: P0 0 / P1 1 / P2 0 / P3 0
 - 対応: 直した。
@@ -410,9 +539,32 @@ write_notes FMT_PRIORITY <<'NOTES'
 - 結果: P0 0 / P1 1 / P2 0 / P3 0
 - 対応: 直した。
 NOTES
-check_both "書式不備は NOT_CONVERGED より優先し、不備の巡を名指しする" FMT_PRIORITY 4 \
-  "FORMAT_ERROR: レビュー 1 巡目: 「- 自己レビューにした理由: 」の行が無い" \
+check_both "書式の崩れより NOT_CONVERGED を優先し、崩れも名指しする" PRIORITY 1 \
+  "FORMAT_WARNING: レビュー1巡目: 見出しが「レビュー <巡数> 巡目」の形ではない" \
   "NOT_CONVERGED: レビュー 2 巡目: P0/P1/P2 が 1 件あり、対応に取り下げの記載が無い"
+
+# 方法が読めなくても、件数が読めて取り下げの記載が無ければ NOT_CONVERGED（書式ではなく件数が根拠）。
+write_notes NO_METHOD_REMAIN <<'NOTES'
+### レビュー 1 巡目
+- 結果: P0 0 / P1 0 / P2 1 / P3 0
+- 対応: 直した。
+NOTES
+check_both "方法の行が無くても件数で停止条件を判定する" NO_METHOD_REMAIN 1 \
+  "FORMAT_WARNING: レビュー 1 巡目: 「- 方法: 」の行が無い"
+
+# 書式の崩れだけのケースは、差し戻しの根拠になる RESULT（NO_RECORDS・NOT_CONVERGED）にならない。
+format4=0
+for id in METHOD_UNKNOWN_WITHDRAWN FMT_NO_METHOD FMT_NO_RESULT FMT_FULLWIDTH_COLON FMT_UNREADABLE FMT_WORDS FMT_METHOD FMT_HEADING FMT_HEADING_PREFIX FMT_DUP SELF_NO_REASON SELF_EMPTY_REASON; do
+  for ver in 1.48.0 1.53.0; do
+    run_in "$STUB_ROOT" env PATH="$STUB_ROOT/bin:$PATH" REVIEW_STUB_FIXTURE_DIR="$STUB_ROOT/$ver" \
+      "$CHECK_REVIEW_RECORDS_SCRIPT" "$id"
+    if [ "$RUN_EXIT" -eq 1 ] || [ "$RUN_EXIT" -eq 3 ]; then
+      format4=1
+    fi
+  done
+done
+ASSERT_DETAIL=""
+assert "書式の崩れだけのケースは差し戻しの RESULT（NO_RECORDS・NOT_CONVERGED）にならない" [ "$format4" -eq 0 ]
 
 echo ""
 echo "=== 5. 要確認（受入基準 #4） ==="
@@ -489,7 +641,7 @@ write_notes OLD_BAD <<'NOTES'
 - 結果: No findings
 - 対応: なし
 NOTES
-check_both "前回の引き渡しの書式不備・自己レビューは判定に使わない" OLD_BAD 0 "REVIEW_ROUNDS: 1"
+check_both "前回の引き渡しの書式の崩れ・自己レビューは判定に使わない" OLD_BAD 0 "REVIEW_ROUNDS: 1"
 
 write_notes OLD_GOOD <<'NOTES'
 ### 引き渡し
@@ -589,7 +741,7 @@ check_format_link improvement-work
 check_format_link improvement-dispatch
 
 # improvement-work 手順 6 の append-notes の例（5 行）が、正本の書式のブロックと一字一句同じこと。
-# 書き手の例と正本がずれると、例どおりに書いた記録が照合で書式不備になる。
+# 書き手の例と正本がずれると、例どおりに書いた記録が照合で書式の崩れとして名指しされる。
 WORK_TEMPLATE="$(awk -v q="'" '
   index($0, "--append-notes " q "### レビュー <巡数> 巡目") && !f {
     f = 1; print substr($0, index($0, q) + 1); next
