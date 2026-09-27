@@ -5,7 +5,8 @@
 # backlog CLI の task list / search / view は .backlog/tasks/ しか見ないため、正本の走査手順は
 # 散文ではなく実際に動く grep でなければ意味が無い。ここでは正本から bash ブロックを抜き出して
 # 使い捨ての .backlog/ 構造に対して実行し、completed / archive 配下が実際に照合と集計に
-# 乗ることを確かめる。あわせて、手順が3スキルに複製されて独立に腐ることを機械的に防ぐ。
+# 乗ることを確かめる。あわせて、3スキルから正本へのリンクが実際に解決できることを確かめる。
+# 参照側の文言は照合しない（言い換えで落ちず、食い違いも捕まえられないため）。
 
 set -uo pipefail
 
@@ -25,14 +26,46 @@ REFERRING_FILES=(
   "claude-code/skills/improvement-scout-major/SKILL.md"
 )
 
-# 3スキルの「既存タスクと照合する」手順に置く、完全に同一であるべき1行。
-# 受入基準「3スキルで照合手順の記述が食い違わない」を機械的に担保する部分なので、
-# 文言を変えるときは3ファイルとこの定数を同時に直すこと。
-# 中のバックティックは Markdown のコード表記であり、コマンド置換ではない（SC2016 は誤検知）。
-# shellcheck disable=SC2016
-REFERENCE_BULLET='- 上の backlog コマンドは `.backlog/tasks/` しか見ない。完了・アーカイブ済みのタスクとの照合手順の正本は [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) にある。ここに複製せず、上のコマンドと併せて必ず実行する。'
+# 参照ファイル中の Markdown リンクのうち、正本のファイル名を指すものを参照ファイルの
+# ディレクトリ起点で解決し、すべて正本の実体に届くことを確認する。配布先では
+# .claude/skills/<スキル名> シンボリックリンクから実体を解決するので、実体のディレクトリ
+# 起点での解決がそのまま配布先での解決になる。リンクの文言や周りの説明は見ない。
+# 認識するのはインライン形式 [text](path) のリンクだけである（タイトル付き・参照形式は拾わず FAIL になる）。
+check_canonical_links() {
+  local rel="$1"
+  local file="$REPO_ROOT/$rel"
+  local canonical_base canonical_real target link_dir resolved
+  local found=0 broken=()
+  canonical_base="$(basename "$CANONICAL_FILE")"
+  canonical_real=""
+  if [ -f "$CANONICAL_FILE" ]; then
+    canonical_real="$(cd "$(dirname "$CANONICAL_FILE")" && pwd -P)/$canonical_base"
+  fi
+  while IFS= read -r target; do
+    target="${target#](}"
+    target="${target%)}"
+    target="${target%%#*}"
+    [ "$(basename "$target")" = "$canonical_base" ] || continue
+    found=1
+    link_dir="$(dirname "$file")/$(dirname "$target")"
+    resolved=""
+    if [ -d "$link_dir" ]; then
+      resolved="$(cd "$link_dir" && pwd -P)/$(basename "$target")"
+    fi
+    if [ -z "$canonical_real" ] || [ ! -f "$resolved" ] || [ "$resolved" != "$canonical_real" ]; then
+      broken+=("$target")
+    fi
+  done < <(grep -oE '\]\([^)]*\)' "$file")
+  if [ "$found" -eq 0 ]; then
+    fail "$rel に正本 ${canonical_base} への Markdown リンクが無い"
+  elif [ "${#broken[@]}" -gt 0 ]; then
+    fail "$rel の正本へのリンクが $CANONICAL_REL に解決できない（${broken[*]}）"
+  else
+    pass "$rel の正本へのリンクがすべて $CANONICAL_REL に解決できる"
+  fi
+}
 
-echo "=== 1. 正本の内容 ==="
+echo "=== 1. 正本の存在 ==="
 
 if [ ! -f "$CANONICAL_FILE" ]; then
   fail "$CANONICAL_REL が存在しない"
@@ -40,80 +73,15 @@ if [ ! -f "$CANONICAL_FILE" ]; then
 fi
 pass "$CANONICAL_REL が存在する"
 
-# CLI から見えなくなる2つの置き場所と、走査に使う変数名が揃っていることを確認する。
-# どれか1つでも欠けると、参照側は正本を読んでも走査対象を決められない。
-CANONICAL_REQUIRED=(
-  "backlog task list"
-  "backlog search"
-  ".backlog/completed/"
-  ".backlog/archive/tasks/"
-  "HIDDEN_DIRS"
-  "viewpoint:"
-)
-missing_elements=()
-for element in "${CANONICAL_REQUIRED[@]}"; do
-  if ! grep -Fq "$element" "$CANONICAL_FILE"; then
-    missing_elements+=("$element")
-  fi
-done
-if [ "${#missing_elements[@]}" -eq 0 ]; then
-  pass "$CANONICAL_REL が走査対象と対象コマンドを列挙している"
-else
-  fail "$CANONICAL_REL に必須の記述が欠けている（${missing_elements[*]}）"
-fi
-
 echo ""
-echo "=== 2. 正本以外に走査手順が複製されていないこと ==="
-
-# 走査手順を自前で書こうとすると、CLI から見えない置き場所か、正本が使う変数名の
-# どちらかをほぼ必ず書くことになるので、この3つを目印に使う。
-DUPLICATION_MARKERS=(
-  ".backlog/completed"
-  "/archive/tasks"
-  "HIDDEN_DIRS"
-)
-duplicated_files=()
-while IFS= read -r found_file; do
-  [ -n "$found_file" ] && duplicated_files+=("$found_file")
-done < <(
-  for marker in "${DUPLICATION_MARKERS[@]}"; do
-    grep -rlF "$marker" "$SOURCE_SKILLS_DIR" "$SOURCE_WORKSPACE_SKILLS_DIR" 2>/dev/null
-  done | sort -u | grep -Fxv "$CANONICAL_FILE"
-)
-if [ "${#duplicated_files[@]}" -eq 0 ]; then
-  pass "claude-code/ 配下で完了・アーカイブ済みの走査手順を書いているのは $CANONICAL_REL だけである"
-else
-  fail "$CANONICAL_REL 以外に走査手順が複製されている（正本へ寄せること）: ${duplicated_files[*]}"
-fi
-
-echo ""
-echo "=== 3. 各スキルからの正本参照 ==="
+echo "=== 2. 各スキルから正本へのリンク ==="
 
 for rel in "${REFERRING_FILES[@]}"; do
-  file="$REPO_ROOT/$rel"
-  if [ ! -f "$file" ]; then
+  if [ ! -f "$REPO_ROOT/$rel" ]; then
     fail "$rel が存在しない"
     continue
   fi
-
-  # リポジトリ相対パス表記と、配布先の .claude/skills/<スキル名> シンボリックリンクから
-  # 実体を解決したときに通る相対リンクの両方があることを確認する。導入先には
-  # claude-code/skills/ が存在しないため、相対リンクが無いと正本に到達できない。
-  if ! grep -Fq "$CANONICAL_REL" "$file"; then
-    fail "$rel が $CANONICAL_REL をリポジトリ相対パスで参照していない"
-  elif ! grep -Fq "(../completed-tasks-lookup.md)" "$file"; then
-    fail "$rel の正本への相対リンクが (../completed-tasks-lookup.md) になっていない（配布先では実体をこの相対パスで解決する）"
-  else
-    pass "$rel が正本 $CANONICAL_REL を参照している"
-  fi
-
-  # 照合手順の1行が3ファイルで完全に一致していること。
-  # 箇条書きの行なのでパターンが "-" 始まりになる。-e を挟まないとオプションとして解釈される。
-  if grep -Fxq -e "$REFERENCE_BULLET" "$file"; then
-    pass "$rel の照合手順の記述が3スキル共通の文言と一致している"
-  else
-    fail "$rel に3スキル共通の照合手順の1行が無い（文言を変えたなら3ファイルとこのテストを同時に直すこと）"
-  fi
+  check_canonical_links "$rel"
 done
 
 # 観点集計が CLI 単独の数え方に戻っていないこと。
@@ -125,7 +93,7 @@ else
 fi
 
 echo ""
-echo "=== 4. 正本のコマンドが completed / archive を実際に拾うこと ==="
+echo "=== 3. 正本のコマンドが completed / archive を実際に拾うこと ==="
 
 # 正本の N 番目の ```bash ブロックの中身を取り出す。
 extract_bash_block() {
@@ -228,48 +196,48 @@ FIXTURE_EOF
     (cd "$FIXTURE_DIR" && bash "$script" 2>&1)
   }
 
-  # 4a. キーワード照合が completed 配下を拾うこと。
+  # 3a. キーワード照合が completed 配下を拾うこと。
   keyword_body="$(printf '%s\n' "$KEYWORD_BLOCK" | sed 's|<キーワード>|一意キーワード_ズィグラト|')"
   keyword_out="$(run_recipe "$keyword_body")"
   if printf '%s\n' "$keyword_out" | grep -Fq "completed/task-2 - done.md"; then
     pass "キーワード照合が .backlog/completed/ のタスクを拾う"
   else
-    fail "キーワード照合が .backlog/completed/ のタスクを拾えない（出力: $keyword_out）"
+    fail "キーワード照合が .backlog/completed/ のタスクを拾えない（出力: ${keyword_out}）"
   fi
 
-  # 4b. パス照合が completed 配下の modified_files を拾い、本文だけの言及は拾わないこと。
+  # 3b. パス照合が completed 配下の modified_files を拾い、本文だけの言及は拾わないこと。
   path_body="$(printf '%s\n' "$PATH_BLOCK" | sed 's|<対象パス>|src/target.txt|')"
   path_out="$(run_recipe "$path_body")"
   if printf '%s\n' "$path_out" | grep -Fq "completed/task-2 - done.md"; then
     pass "パス照合が .backlog/completed/ の modified_files を拾う"
   else
-    fail "パス照合が .backlog/completed/ の modified_files を拾えない（出力: $path_out）"
+    fail "パス照合が .backlog/completed/ の modified_files を拾えない（出力: ${path_out}）"
   fi
   if printf '%s\n' "$path_out" | grep -Fq "completed/task-4 - decoy.md"; then
-    fail "パス照合が本文中の言及だけのタスクまで拾っている（--modified-file 相当にならない。出力: $path_out）"
+    fail "パス照合が本文中の言及だけのタスクまで拾っている（--modified-file 相当にならない。出力: ${path_out}）"
   else
     pass "パス照合が本文中の言及だけのタスクを拾わない"
   fi
 
-  # 4c. 観点集計が tasks + completed + archive の実数を返すこと。
+  # 3c. 観点集計が tasks + completed + archive の実数を返すこと。
   tally_out="$(run_recipe "$TALLY_BLOCK")"
   alpha_count="$(printf '%s\n' "$tally_out" | awk -F'\t' '$1 == "alpha-viewpoint" { print $2 }')"
   beta_count="$(printf '%s\n' "$tally_out" | awk -F'\t' '$1 == "beta-viewpoint" { print $2 }')"
   if [ "$alpha_count" = "3" ]; then
     pass "観点集計が tasks(1) + completed(1) + archive(1) = 3 を返す（tasks だけなら1にとどまる）"
   else
-    fail "観点集計が実数を返さない（alpha-viewpoint に 3 を期待したが '$alpha_count'。出力: $tally_out）"
+    fail "観点集計が実数を返さない（alpha-viewpoint に 3 を期待したが '$alpha_count'。出力: ${tally_out}）"
   fi
   if [ "$beta_count" = "0" ]; then
     pass "起票実績の無い観点は 0 を返す"
   else
-    fail "起票実績の無い観点が 0 にならない（beta-viewpoint に 0 を期待したが '$beta_count'。出力: $tally_out）"
+    fail "起票実績の無い観点が 0 にならない（beta-viewpoint に 0 を期待したが '$beta_count'。出力: ${tally_out}）"
   fi
   gamma_count="$(printf '%s\n' "$tally_out" | awk -F'\t' '$1 == "gamma-viewpoint" { print $2 }')"
   if [ "$gamma_count" = "1" ]; then
     pass "観点集計がタスク ID の接頭辞に依存しない（ID が ISSUE-5 のタスクも数える）"
   else
-    fail "観点集計がタスク ID の接頭辞に依存している（gamma-viewpoint に 1 を期待したが '$gamma_count'。出力: $tally_out）"
+    fail "観点集計がタスク ID の接頭辞に依存している（gamma-viewpoint に 1 を期待したが '$gamma_count'。出力: ${tally_out}）"
   fi
 fi
 
