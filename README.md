@@ -7,7 +7,7 @@ https://creators.bengo4.com/entry/2026/07/22/095159
 
 ## 前提条件
 
-このリポジトリのスキル群・スクリプト群は [Backlog.md](https://backlog.md/)（[GitHub: MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md)）の `backlog` CLI に依存しており、`--add-label` / `--check-ac` / `--final-summary` / `--plan` など多数の非自明なフラグを前提にしている。事前に以下のいずれかの方法で導入しておく。
+このリポジトリのスキル群・スクリプト群は [Backlog.md](https://backlog.md/)（[GitHub: MrLesk/Backlog.md](https://github.com/MrLesk/Backlog.md)）の `backlog` CLI に依存しており、事前に以下のいずれかの方法で導入しておく。
 
 ```sh
 brew install backlog-md
@@ -15,28 +15,26 @@ brew install backlog-md
 npm install -g backlog.md
 ```
 
-動作確認済みの最小バージョンは `1.48.0`（`backlog --version` で確認）。これより古いバージョンでは、上記フラグの一部が使えず、improvement-dispatch/improvement-work 実行中にエラーになる場合がある。`setup-improvement-loop` は `backlog` コマンドの存在確認のみ行い、バージョンまでは確認しない。
+動作確認済みの最小バージョンは `1.48.0`。
 
-このリポジトリは macOS での実行を前提としている。macOS には `/bin/bash` が OS 同梱で入っており、読み取り専用のシステムボリューム上にあるため削除できない。したがって bash が欠けた環境は想定していない。
-
-シェルは zsh と bash の両方を使う。用途が分かれており、一方がもう一方の代わりにはならない。
-
-- zsh: 下記インストール手順1の `install.zsh` の実行に必要。`install.zsh` はシバンが `#!/usr/bin/env zsh` の zsh 専用スクリプトで、`${0:A:h}` など zsh 固有の構文を使う。bash では実行できない。
-- bash: `bin/setup-improvement-loop` と各スキルの `scripts/` 配下のスクリプト、および下記「開発者向け情報」の `tests/run.sh` の実行に必要。これらはシバンが `#!/usr/bin/env bash` で、`BASH_SOURCE` など bash 固有の機能を使う。zsh では実行できない。
-
-対象とする bash のバージョンは macOS 同梱の 3.2 系（`/bin/bash --version` は 3.2.57）である。`declare -A`（連想配列）・`mapfile` / `readarray`・`${var^^}` など bash 4 以降の機能は使えない。既存のスクリプトはこの制約のもとで書かれているので、変更する際も 3.2 の範囲に収める。
+このリポジトリは macOS での実行を前提としている。
 
 ## インストール手順
 
-1. `install.zsh` を実行する。`bin/setup-improvement-loop` を `$HOME/.local/bin` にシンボリックリンクし、パスから使えるようにする。
-2. 対象リポジトリで `setup-improvement-loop [対象リポジトリのパス]` を実行する。以下を冪等に行う。
-   - `backlog init`（`.backlog/config.yml` が未導入の場合のみ）
-   - `.backlog/config.yml` の `statuses` に improvement ループが前提とする6状態（`Proposed` / `To Do` / `In Progress` / `In Review` / `Approved` / `Done`）のうち欠けているものを補う
-   - `claude-code/skills/` 配下の5スキル（improvement-add / improvement-scout / improvement-scout-major / improvement-dispatch / improvement-work）を `.claude/skills/` にシンボリックリンクとして配置する
-   - `backlog-md/config.my.yml`（improvement ループ独自の調整値）を `.backlog/config.my.yml` として配置する
-   - `.backlog/` と配置したスキル群を `.git/info/exclude` に追記し、対象リポジトリを汚染しないようにする
+```sh
+# bin/setup-improvement-loopをパスに追加する
+./install.zsh
 
+cd <対象リポジトリ>
+
+# 内部で backlog init を呼び出し backlog-md を初期化しながら、
+# さらに改善ループ用の独自追加セットアップを行う。
+setup-improvement-loop
 ```
+
+インストール後のフォルダ構成
+
+```txt
 .
 ├── .backlog/
 │   └── config.my.yml
@@ -49,11 +47,11 @@ npm install -g backlog.md
         └── improvement-work/**
 ```
 
-個人でローカルで運用する場合、関連ファイルは全て `.git/info/exclude` に登録されているため、リポジトリを汚染することなく改善ループを行うことができる。
+関連ファイルは全て `.git/info/exclude` に登録されているため、リポジトリを汚染することなく改善ループを行うことができる。
 
 ## 使い方
 
-improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の5スキルが分担して動かす。状態遷移の正本は `claude-code/skills/status-table.md` にある。
+improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の 5 スキルが分担して動かす。状態遷移の正本は `claude-code/skills/status-table.md` にある。
 各スキルの詳細（引数、手順、入出力例）はこの README には書かず、対応する `claude-code/skills/<name>/SKILL.md` を参照すること。
 
 - **improvement-add**: 人間が伝えた改善要望を、そのまま `Proposed` として起票する。
@@ -66,35 +64,49 @@ improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` 
 
 ## ワークスペース対応
 
-複数の git リポジトリを直下（深さ1）にクローンした「ワークスペースディレクトリ」を対象に、improvement ループの dispatch / scout を横断的に走らせることができる。
-**各リポジトリのバックログは独立したまま**であり、ワークスペース全体で1つのタスク一覧を共有する仕組みではない。`improvement-add` / `improvement-work` はワークスペース対応の対象外である。
+複数の git リポジトリを直下（深さ 1）にクローンした「ワークスペースディレクトリ」を対象に、improvement ループの dispatch / scout を横断的に走らせることができる。
+**各リポジトリのバックログは独立したまま**であり、ワークスペース全体で 1 つのタスク一覧を共有する仕組みではない。`improvement-add` / `improvement-work` はワークスペース対応の対象外である。
 各スキルの詳細はこの README には書かず、対応する `claude-code/workspace-skills/<name>/SKILL.md` を参照すること。
 
 - **workspace-dispatch**: opt-in 済みの各リポジトリへ順に `improvement-dispatch` を適用する。
 - **workspace-scout**: opt-in 済みの各リポジトリへ順に `improvement-scout` を適用する。
-- **workspace-scout-major**: opt-in 済みの全リポジトリを横断して1回で調査し、リポジトリをまたぐ改善候補を関与する各リポジトリに起票する。
+- **workspace-scout-major**: opt-in 済みの全リポジトリを横断して 1 回で調査し、リポジトリをまたぐ改善候補を関与する各リポジトリに起票する。
 
 ### セットアップ
 
-1. 対象にしたい各リポジトリで、`setup-improvement-loop <リポジトリのパス>`（`--workspace` フラグ無し）を実行する。これが「そのリポジトリを opt-in させる」操作である。
-2. ワークスペースディレクトリ自体に対して `setup-improvement-loop --workspace [ワークスペースディレクトリのパス]` を実行する（引数を省略した場合は現在のディレクトリを対象とする）。ワークスペースディレクトリが git リポジトリである必要はない。以下を冪等に行う。
-   - `workspace-dispatch` / `workspace-scout` / `workspace-scout-major` の3スキルを `.claude/skills/` にシンボリックリンクとして配置する（`backlog init` や `.backlog/` 配下の配置は一切行わない）
-   - ワークスペースディレクトリ自体が git リポジトリでもある場合に限り、配置したスキルパスを `.git/info/exclude` に追記する（git リポジトリでなければスキップされ、エラーにはならない）
+```sh
+# bin/setup-improvement-loopをパスに追加する
+./install.zsh
+
+# 対象にしたい各リポジトリで opt-in する
+cd <対象リポジトリ>
+setup-improvement-loop
+
+# ワークスペースディレクトリに移動して、ワークスペース向けのスキルをインストールする
+cd ..
+setup-improvement-loop --workspace
+```
+
+インストール後のフォルダ構成
 
 ```
 <ワークスペースディレクトリ>/
-├── repo-a/            # setup-improvement-loop <repo-a> 済み（opt-in）
-│   └── .claude/skills/improvement-dispatch, improvement-scout, improvement-scout-major, ...
-├── repo-b/            # 未 opt-in（workspace-* スキルの対象外）
-└── .claude/
-    └── skills/
-        ├── workspace-dispatch/**
-        ├── workspace-scout/**
-        └── workspace-scout-major/**
+├── .claude/
+│   └── skills/
+│       ├── workspace-dispatch/**
+│       ├── workspace-scout/**
+│       └── workspace-scout-major/**
+├── repo-a/               # setup-improvement-loop 実行済み（opt-in）
+│   ├── .claude/skills/
+│   │   ├── improvement-dispatch
+│   │   ├── improvement-scout
+│   │   ├── improvement-scout-major
+│   │   └── ...
+│   └── .backlog/**
+└── repo-b/               # 未 opt-in（workspace-* スキルの対象外）
 ```
 
-opt-in の判定に使うのは `.claude/skills/improvement-dispatch` 等のシンボリックリンクの有無だけであり、専用のマーカーファイルは無い。opt-in していないリポジトリや git リポジトリでないディレクトリは黙って対象から外れる。
-対象リポジトリの列挙ロジックは `bin/lib/list_opted_in_repos.sh` に一本化されており、各スキルの `scripts/list-target-repos` が薄いラッパーとして呼び出す。
+opt-in の判定に使うのは `.claude/skills/improvement-dispatch` 等のシンボリックリンクの有無だけ。
 
 ## 開発者向け情報
 
@@ -106,11 +118,7 @@ opt-in の判定に使うのは `.claude/skills/improvement-dispatch` 等のシ�
 git config core.hooksPath githooks
 ```
 
-有効化すると、以降このリポジトリで行う `git commit` のたびに `tests/run.sh` が実行され、FAIL があればコミットが中断される。
-`tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash・git・backlog）が欠けている場合は、対象テストが SKIP として報告され、総合サマリーの SKIP 件数に計上される。総合サマリーには PASS/FAIL/SKIP の件数に続けて、テストファイル単位の内訳（実行 / 丸ごとスキップ / 集計不能）も出力される。
-依存不足で全テストファイルがスキップされ、検証が1件も実行されなかった場合は、全件成功した場合と区別できるよう FAIL を1件計上して非ゼロで終了する（pre-commit フックはコミットをブロックする）。終了ステータスしか見ない利用者から両者が区別できないと、1件も検証しないままコミットが通ってしまうためである。
-
-インストール済みでないバージョンの backlog CLI（通常は動作確認済み最小バージョン `1.48.0`）で `tests/run.sh` を手動で実行するときは、次のコマンドを使う。グローバルにインストールした `backlog` は変えずに、指定バージョンの `backlog.md` を npm で repo の外の一時ディレクトリに入れ、その実行ファイルの置き場所を PATH の先頭に置く。Node.js と npm が必要である。pre-commit フックはこの手順とは関係なく、PATH 上の `backlog` で `tests/run.sh` を実行する。
+インストール済みでないバージョンの backlog CLI（通常は動作確認済み最小バージョン `1.48.0`）で `tests/run.sh` を手動で実行するときは、次のコマンドを使う。
 
 ```sh
 BACKLOG_VERSION=1.48.0
@@ -121,20 +129,7 @@ PATH="$BACKLOG_TMP/node_modules/.bin:$PATH" bash tests/run.sh
 rm -rf "$BACKLOG_TMP"
 ```
 
-グローバルにインストールした `backlog` も PATH に残っているので、PATH 上に backlog が2つある状態になる。このため、`tests/test_setup_improvement_loop.sh` の backlog が PATH に無い環境の検証（9g/9h）は SKIP になる。
-
-zsh はテストの共通の依存ではない。zsh を使うのは `install.zsh` を実際に実行する `tests/test_setup_improvement_loop.sh` の1箇所だけで、zsh が無い環境ではその検証だけが SKIP になり、他のテストはそのまま実行される。
-[shellcheck](https://www.shellcheck.net/) は必須依存ではなく任意依存である。無くてもテストは走るが、`tests/test_syntax.sh` の静的検査（`CHECK_SCRIPTS` に挙げた全スクリプトに対する shellcheck の実行）だけが失われる。失われた件数は未導入時の SKIP 行に実数で出る。`bash -n` による構文チェックは shellcheck の有無に関わらず実行される。未導入のまま作業すると SC2086 のような指摘を一度も見ないままコミットでき、shellcheck を持っている人の環境で初めて FAIL するため、このリポジトリを開発するなら `brew install shellcheck` で導入しておくこと。未導入の場合は `tests/run.sh` の総合サマリーの直後に、静的検査が実行されていない旨と導入方法の警告が出る（未導入それ自体はコミットをブロックしない）。
-GitHub Actions 等の CI はこのリポジトリでは対象外とする。
-
-### backlog CLI のバージョンとテストの方針
-
-スクリプトは動作確認済み最小バージョン `1.48.0` と `1.53.0` の挙動の差に対応している（`bin/setup-improvement-loop` の `default_assignee` の扱いは CLI が `defaultAssignee` キーを認識するかと `config.yml` の再シリアライズの違いに、`select-next-task` の依存の読み取りは `task view --plain` の出力形式の違いに対応する）。テストはこの差を次の方針で扱う。この記述時点では、一部の分岐はまだ実行環境の CLI のバージョンによってしか検証されない。スタブやシムによる検証は、方針に沿って順次置き換えている。
-
-- pre-commit は backlog CLI のバージョンを固定しない。PATH 上の `backlog`（`1.48.0` 以上）でそのまま `tests/run.sh` を実行する。フックはネットワークに依存させない。
-- バージョンごとに分かれるスクリプト側の分岐は、PATH の先頭に置いた backlog のスタブやシムで両側とも検証する。インストール済みの CLI がどちらのバージョンでも、両側の分岐が毎回実行されるようにする。スタブに与える出力は実 CLI の出力を写し、取得元のバージョンを書き添える。
-- CLI 自体の振る舞い（`backlog config set` による `config.yml` の再シリアライズ、`task view --plain` の出力形式）はスタブでは確かめられない。そのため、実 CLI を呼んで確かめるテストはスタブに置き換えずに残す。インストール済みのバージョンについては pre-commit で確かめ、もう一方のバージョン（通常は `1.48.0`）については、バージョン依存のコードやスタブの出力を変えたときに、そのバージョンの `backlog` を PATH の先頭に置いて `tests/run.sh` を手動で実行して確かめる。
-- CI を導入する場合は、最小バージョン `1.48.0` と動作確認済みの最新バージョンの2つで実行する。
+グローバルにインストールした `backlog` も PATH に残っているので、PATH 上に backlog が 2 つある状態になる。
 
 ## ライセンス
 
