@@ -700,6 +700,69 @@ else
 $cw_noremote_output"
 fi
 
+# ---- 本体に .backlog がある場合、ワークツリー内の .backlog は本体の .backlog を
+# 指すシンボリックリンクになる（TASK-104）。リンクが無いとワークツリー内の
+# improvement-work が backlog CLI でタスクを読み書きできない。上の「ローカルが先行
+# している場合」で新規ブランチとして作ったワークツリーを使う（既存ブランチを割り当てる
+# 経路は下の branch_behind_default_branch の検証で確かめる） ----
+if [ -L "$CW_AHEAD_WORKTREE/.backlog" ] && \
+   [ "$(readlink "$CW_AHEAD_WORKTREE/.backlog")" = "$CW_AHEAD_REPO/.backlog" ]; then
+  pass "ワークツリー内の .backlog が本体の .backlog を指すシンボリックリンクになっている"
+else
+  fail "ワークツリー内の .backlog が本体の .backlog を指すシンボリックリンクになっていない: $(ls -ld "$CW_AHEAD_WORKTREE/.backlog" 2>&1)"
+fi
+
+if cmp -s "$CW_AHEAD_WORKTREE/.backlog/config.my.yml" "$CW_AHEAD_REPO/.backlog/config.my.yml"; then
+  pass "ワークツリー内の .backlog 越しに本体の config.my.yml が読める"
+else
+  fail "ワークツリー内の .backlog 越しに本体の config.my.yml が読めない"
+fi
+
+# ---- auto_merge_reviewed: true で、再利用した作業ブランチが採用しなかった側の
+# 候補（ここでは origin/main）も含まない場合に branch_behind_default_branch を出す
+# （TASK-104）。候補どうしは包含関係にあるため、この理由はブランチが起点も含まない
+# ときにだけ reused_branch_behind_base と同時に出る ----
+CW_BRANCH_BEHIND_REPO="$(cw_make_remote_repo branch-behind true)"
+CW_BRANCH_BEHIND_TASK_ID="task-104-branch-behind"
+(
+  cd "$CW_BRANCH_BEHIND_REPO" || exit 1
+  git branch "improvement/$CW_BRANCH_BEHIND_TASK_ID"
+  echo "v2-push 済みの成果" > file.txt
+  git add file.txt
+  git commit -qm "B: push 済みの成果"
+  git push -q origin main
+  echo "v3-未 push の成果" > file.txt
+  git add file.txt
+  git commit -qm "C: 未 push の成果"
+) >/dev/null 2>&1
+cw_branch_behind_output="$(cd "$CW_BRANCH_BEHIND_REPO" && "$CREATE_WORKTREE_SCRIPT" "$CW_BRANCH_BEHIND_TASK_ID" 2>/dev/null)"
+
+if printf '%s\n' "$cw_branch_behind_output" | head -1 | grep -Fxq "RESULT: STALE_BASE" && \
+   printf '%s\n' "$cw_branch_behind_output" | grep -Fxq "BASE_REF=main" && \
+   printf '%s\n' "$cw_branch_behind_output" | grep -Fxq "STALE_REASON=reused_branch_behind_base" && \
+   printf '%s\n' "$cw_branch_behind_output" | grep -Fxq "MISSING_COMMITS=main:2"; then
+  pass "再利用した作業ブランチがローカルの main を含まない場合、reused_branch_behind_base と欠けたコミット数を出す"
+else
+  fail "再利用した作業ブランチがローカルの main を含まないときの出力が想定と異なる:
+$cw_branch_behind_output"
+fi
+
+if printf '%s\n' "$cw_branch_behind_output" | grep -Fxq "STALE_REASON=branch_behind_default_branch" && \
+   printf '%s\n' "$cw_branch_behind_output" | grep -Fxq "MISSING_COMMITS=origin/main:1"; then
+  pass "作業ブランチが採用しなかった側のデフォルトブランチ（origin/main）より遅れている場合、STALE_REASON=branch_behind_default_branch と欠けたコミット数を出す"
+else
+  fail "作業ブランチが origin/main より遅れているのに branch_behind_default_branch が出ていない:
+$cw_branch_behind_output"
+fi
+
+CW_BRANCH_BEHIND_WORKTREE="$CW_BRANCH_BEHIND_REPO/.worktree/$(basename "$CW_BRANCH_BEHIND_REPO")/$CW_BRANCH_BEHIND_TASK_ID"
+if [ -L "$CW_BRANCH_BEHIND_WORKTREE/.backlog" ] && \
+   [ "$(readlink "$CW_BRANCH_BEHIND_WORKTREE/.backlog")" = "$CW_BRANCH_BEHIND_REPO/.backlog" ]; then
+  pass "既存ブランチを割り当てて作ったワークツリーでも、.backlog が本体の .backlog を指すシンボリックリンクになっている"
+else
+  fail "既存ブランチを割り当てて作ったワークツリーの .backlog が本体の .backlog を指すシンボリックリンクになっていない: $(ls -ld "$CW_BRANCH_BEHIND_WORKTREE/.backlog" 2>&1)"
+fi
+
 echo ""
 echo "=== 10. claude-code/skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # worktree_base_dir の判定ロジック（リポジトリ内相対パスの解決・.git/info/exclude への
