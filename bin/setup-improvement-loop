@@ -335,23 +335,36 @@ DEFAULT_ASSIGNEE_BOT='@improvement-loop-bot'
 # config.yml の default_assignee 行から、囲みの引用符とインライン配列の角括弧を
 # 取り除いた「アサイニー名そのもの」を標準出力に書く。
 #
-# 剥がすのは次の3形だけである。
-#   "@x"    → @x   正準形。backlog CLI の再シリアライズを往復しても変わらない
-#   ["@x"]  → @x   以前の improvement-loop が直接追記していた形
-#   "[@x]"  → @x   上の形を backlog CLI が再シリアライズして壊した形
+# 引用符と角括弧は、外側から交互に、既定では角括弧2段まで剥がす。想定している形は次の4つで、
+# 2段あれば足りる。それより深い入れ子はどちらの CLI も書かないので、既定値とは名乗らせない。
+#   "@x"       → @x   正準形。1.48.0 の再シリアライズを往復しても変わらず、1.53.0 も正しく読む
+#   ["@x"]     → @x   以前の improvement-loop が直接追記していた形。1.53.0 では CLI 自身が書く形
+#   "[@x]"     → @x   上の形を 1.48.0 が再シリアライズして壊した形
+#   ["[@x]"]   → @x   壊れた "[@x]" を 1.53.0 がさらに再シリアライズした形
+# 最後の形は1段剥がしでは "[@x]" が残り、既定値の破損なのにユーザー値と区別できなくなる。
 #
 # 行末コメントが付いている行では角括弧の対応が取れず、結果はアサイニー名に一致しない。
 # これは意図した振る舞いである。setup-improvement-loop も backlog CLI もその形を書かない
 # ので、書いたのは人間である。判定を凝らして人の書いたコメントを落とす危険を取るより、
 # 収束対象外として無変更で残す方に倒す。
+#
+# 引数: $1 = default_assignee 行, $2 = 角括弧を剥がす最大段数（省略時は 2。
+# ensure_default_assignee が警告文を選ぶときに、囲みの引用符だけを剥がした値を見るには 0、
+# 角括弧を1段だけ剥がした値を見るには 1 を渡す）。
 default_assignee_core_value() {
   local raw="$1"
+  local max_depth="${2:-2}"
 
   local value="${raw#default_assignee:}"
   value="$(trim_and_unquote "$value")"
-  if [ "${#value}" -ge 2 ] && [ "${value:0:1}" = "[" ] && [ "${value:${#value}-1}" = "]" ]; then
+  local depth=0
+  while [ "$depth" -lt "$max_depth" ]; do
+    if [ "${#value}" -lt 2 ] || [ "${value:0:1}" != "[" ] || [ "${value:${#value}-1}" != "]" ]; then
+      break
+    fi
     value="$(trim_and_unquote "${value:1:${#value}-2}")"
-  fi
+    depth=$((depth + 1))
+  done
   printf '%s' "$value"
 }
 
@@ -379,25 +392,57 @@ replace_default_assignee_line() {
   rm -f "$tmp_file"
 }
 
+# backlog CLI に defaultAssignee を読ませ、読めた場合は値をグローバル変数
+# CLI_DEFAULT_ASSIGNEE に入れ、CLI_DEFAULT_ASSIGNEE_READ を true にして 0 を返す（キーを認識する
+# 1.53.0 系）。読めなかった場合は CLI_DEFAULT_ASSIGNEE を空、CLI_DEFAULT_ASSIGNEE_READ を false に
+# して非 0 を返す。READ は、呼び出し側が警告文を選ぶときに、読めたが値が違ったのか、
+# 読めなかったのかを区別するためにある。読めなかった理由は区別しない。1.48.0 がキーを
+# 知らず "Unknown config key" で失敗する場合も、それ以外の理由で失敗する場合も同じに扱う。
+# なお 1.53.0 は config.yml が YAML として読めないと起動自体を拒むので、その場合は setup が
+# この関数より前の backlog 呼び出し（ensure_remote_operations_disabled 等）で止まり、ここへは来ない。どちらも「CLI がこのキーを読めると確認できなかった」として
+# 1.48.0 と同じ扱いに倒す。その経路の収束先であるスカラー正準形は 1.53.0 でも正しく
+# 読まれるので、取り違えても壊れた値を生まない。
+read_cli_default_assignee() {
+  local target_repo_root="$1"
+  CLI_DEFAULT_ASSIGNEE_READ=false
+  CLI_DEFAULT_ASSIGNEE="$(cd "$target_repo_root" && backlog config get defaultAssignee 2>/dev/null)" || {
+    CLI_DEFAULT_ASSIGNEE=""
+    return 1
+  }
+  CLI_DEFAULT_ASSIGNEE_READ=true
+  return 0
+}
+
 # タスクの起票者を improvement-loop-bot に統一する既定アサイニー設定。
 # backlog CLI 1.48.0（README.md 記載の動作確認済み最小バージョン）にはこのキーが
 # 無く `backlog config set defaultAssignee` は "Unknown config key" で失敗するため、
 # CLI が対応していれば正規の手段で設定し、対応していなければ config.yml へ直接
 # 追記する（将来 CLI が読めるようになった時点で有効になる）。
 #
-# 書き込む形はダブルクォート付きスカラー（default_assignee: "@improvement-loop-bot"）
-# でなければならない。backlog CLI はこのキーを知らないまま、"backlog config set <他の
-# キー>" のたびに config.yml を丸ごと再シリアライズし、値をスカラー文字列として読み直す。
-# インライン配列（["@improvement-loop-bot"]）で書いてあると角括弧ごと値に取り込まれ、
-# "[@improvement-loop-bot]" という別のアサイニー名に変わってしまう。スカラー形式は
-# この往復で変化しないことを実機（1.48.0）で確認している（TASK-90）。
+# default_assignee の健全な書式は CLI のバージョンで違い、両方に対応する（TASK-100）。
+# - 1.48.0 はこのキーを知らないまま、"backlog config set <他のキー>" のたびに config.yml を
+#   丸ごと再シリアライズし、値をスカラー文字列として読み直す。インライン配列
+#   （["@improvement-loop-bot"]）は角括弧ごと値に取り込まれ、"[@improvement-loop-bot]" と
+#   いう別のアサイニー名に変わる。往復に耐えるのはダブルクォート付きスカラー
+#   （default_assignee: "@improvement-loop-bot"）だけである（TASK-90 で実機確認）。
+# - 1.53.0 はこのキーを認識し、再シリアライズのたびにスカラーもインライン配列として書き直す。
+#   インライン配列は CLI 自身の正規の表現であり、壊れた形ではない（実機確認）。
+# どちらの CLI かは、`backlog config get defaultAssignee` が成功するか（キーを認識するか）で
+# 判定する（read_cli_default_assignee）。収束先はどちらの場合もスカラー正準形にする。
+# 1.48.0 では往復に耐え、1.53.0 でも CLI が正しく読むからである（1.53.0 では次の
+# backlog config set でインライン配列に書き直されるが、それも健全な形としてスキップされる）。
 #
 # 既に default_assignee がある場合の扱いは値で分かれる。
 # - 値が @improvement-loop-bot 以外なら、ユーザーが決めた値なので一切触らない。
-# - 値が @improvement-loop-bot で正準形なら、何もしない。
-# - 値が @improvement-loop-bot だが正準形でない（旧いインライン配列、または CLI が
-#   壊した "[@improvement-loop-bot]"）なら、improvement-loop 自身が書いた既定値が
-#   機械的に壊れた状態だと判別できるので、警告を出したうえで正準形へ収束させる。
+# - 値が @improvement-loop-bot で、健全な形なら何もしない。健全とは、CLI がキーを
+#   認識する場合は CLI が読んだ値が @improvement-loop-bot であること（書式は問わない）、
+#   認識しない場合は正準形スカラーであることを指す。健全かどうかは、いま入っている CLI に
+#   とっての判定である。1.53.0 で健全としてスキップした書式（インライン配列、シングル
+#   クォート等）は、CLI を 1.48.0 へ戻した後の次の実行で改めて警告のうえ収束させる。
+# - 値が @improvement-loop-bot だが健全でない（1.48.0 での旧いインライン配列、または
+#   CLI が壊した "[@improvement-loop-bot]" やそれをさらに往復させた形）なら、
+#   improvement-loop 自身が書いた既定値が機械的に壊れた状態だと判別できるので、
+#   警告を出したうえで正準形へ収束させる。
 #   config.my.yml の説明コメントのズレ（warn_config_my_yml_comment_drift）を書き換えず
 #   警告にとどめるのは「テンプレート由来かユーザー加筆か原理的に区別できない」ためだが、
 #   ここにその曖昧さは無い。値そのものが improvement-loop の既定値だと名乗っている。
@@ -419,27 +464,41 @@ ensure_default_assignee() {
       return 0
     fi
 
-    if [ "$existing_line" = "$canonical_line" ]; then
+    # 正準形スカラーはどちらの CLI でも健全なので、CLI を起動せずに判定を済ませる。
+    if [ "$existing_line" = "$canonical_line" ] \
+      || { read_cli_default_assignee "$target_repo_root" && [ "$CLI_DEFAULT_ASSIGNEE" = "$DEFAULT_ASSIGNEE_BOT" ]; }; then
       log "[skip] .backlog/config.yml に default_assignee は既に設定されている。"
       SKIPPED+=(".backlog/config.yml default_assignee (既に設定済み)")
       return 0
     fi
 
-    # 角括弧が引用符の外にあるか（まだ配列＝これから壊れる）、内側に取り込まれているか
-    # （既に壊れた後）で、人間に伝えるべき事実が違う。
-    if [[ "$existing_line" =~ ^default_assignee:[[:space:]]*\[ ]]; then
+    # 角括弧が引用符の外にあって中身がそのまま既定値か（まだ配列＝1.48.0 ではこれから
+    # 壊れる）、角括弧が値の一部として取り込まれた後か、それ以外の非正準形かで、人間に
+    # 伝えるべき事実が違う。1つ目に当たるのは、通常は CLI がこのキーを読めなかった場合
+    # である（1.53.0 は読めればこの形を @improvement-loop-bot と読むので上でスキップ済み）。
+    # 読めたのに値が違った場合（将来の CLI が別の表記で出力する等）も、その事実を示して区別する。
+    local one_level
+    one_level="$(default_assignee_core_value "$existing_line" 1)"
+    if [[ "$existing_line" =~ ^default_assignee:[[:space:]]*\[ ]] && [ "$one_level" = "$DEFAULT_ASSIGNEE_BOT" ]; then
       log "[warn] .backlog/config.yml の default_assignee が、backlog CLI の再シリアライズに耐えない形（インライン配列）で書かれている: $existing_line"
-      log "       backlog CLI はこのキーを知らないまま config.yml を書き戻すので、次に backlog config set を実行した時点で"
-      log "       角括弧ごと文字列に取り込まれ、[$DEFAULT_ASSIGNEE_BOT] という別のアサイニー名に変わる。"
-    else
+      if [ "$CLI_DEFAULT_ASSIGNEE_READ" = true ]; then
+        log "       backlog config get defaultAssignee はこの値を '$CLI_DEFAULT_ASSIGNEE' と読み、$DEFAULT_ASSIGNEE_BOT と一致しなかった。"
+      else
+        log "       backlog config get defaultAssignee が失敗した（キーを知らない古い CLI の可能性が高い）。"
+      fi
+      log "       キーを知らない CLI（1.48.0 等）は、次に backlog config set を実行した時点で角括弧ごと文字列に取り込み、"
+      log "       [$DEFAULT_ASSIGNEE_BOT] という別のアサイニー名に変える。"
+    elif [[ "$(default_assignee_core_value "$existing_line" 0)" == *'['* ]]; then
       log "[warn] .backlog/config.yml の default_assignee が、backlog CLI の再シリアライズで既に壊れている: $existing_line"
       log "       角括弧が値の一部として文字列に取り込まれており、このままでは $DEFAULT_ASSIGNEE_BOT ではなく"
       log "       [$DEFAULT_ASSIGNEE_BOT] という別のアサイニー名として読まれる。"
+    else
+      log "[warn] .backlog/config.yml の default_assignee が、正準形（${canonical_line}）でなく、backlog CLI が読めると確認できない形で書かれている: $existing_line"
     fi
     log "       この値は improvement-loop 自身が書いた既定値なので、往復に耐える形へ収束させる。"
     replace_default_assignee_line "$config_file" "$canonical_line"
     log "[fix]  .backlog/config.yml の default_assignee を書き換えた: $canonical_line"
-    CREATED+=(".backlog/config.yml default_assignee (backlog CLI の再シリアライズで壊れる形だったため正準形へ収束)")
+    CREATED+=(".backlog/config.yml default_assignee (backlog CLI が既定値として読めると確認できない形だったため正準形へ収束)")
     return 0
   fi
 
