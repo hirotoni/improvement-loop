@@ -2,9 +2,10 @@
 
 backlog CLI から見えなくなったタスク（完了済み・アーカイブ済み）を、起票前の重複照合と
 観点ラベルの件数集計に乗せるための手順の正本。
-`improvement-scout` / `improvement-scout-major` / `improvement-add` の各 `SKILL.md` は、
+`improvement-scout` / `improvement-scout-major` / `improvement-add` / `workspace-scout-major` の各 `SKILL.md` は、
 この手順を手元に複製せず、このファイルを単一情報源として参照する。
-3ファイルを直接編集する前に必ずこのファイルを更新すること。
+`workspace-scout-major` は対象の各リポジトリへ `cd` したうえで、手順 1・2 を実行する。
+4ファイルを直接編集する前に必ずこのファイルを更新すること。
 
 ## なぜ必要か
 

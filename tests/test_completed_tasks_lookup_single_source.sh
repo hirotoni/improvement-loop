@@ -24,6 +24,7 @@ REFERRING_FILES=(
   "claude-code/skills/improvement-scout/SKILL.md"
   "claude-code/skills/improvement-add/SKILL.md"
   "claude-code/skills/improvement-scout-major/SKILL.md"
+  "claude-code/workspace-skills/workspace-scout-major/SKILL.md"
 )
 
 # 参照ファイル中の Markdown リンクのうち、正本のファイル名を指すものを参照ファイルの
@@ -127,6 +128,7 @@ if [ "$blocks_ok" -eq 1 ]; then
   mkdir -p "$FIXTURE_DIR/.backlog/tasks" \
            "$FIXTURE_DIR/.backlog/completed" \
            "$FIXTURE_DIR/.backlog/archive/tasks" \
+           "$FIXTURE_DIR/.backlog/archive/milestones" \
            "$FIXTURE_DIR/.claude/skills/improvement-scout"
 
   # 観点リストは見出しから読まれるので、実物と同じ形で2観点だけ置く。
@@ -189,6 +191,15 @@ labels:
 ---
 FIXTURE_EOF
 
+  # archive/milestones/ 配下（milestone list から消える）に1件。workspace-scout-major の照合は
+  # milestone の重複も見るので、アーカイブ済み milestone もキーワード照合で拾えなければならない。
+  cat > "$FIXTURE_DIR/.backlog/archive/milestones/m-1 - archived milestone.md" <<'FIXTURE_EOF'
+---
+id: m-1
+title: "一意キーワード_ズィグラト の再編"
+---
+FIXTURE_EOF
+
   run_recipe() {
     local body="$1"
     local script="$FIXTURE_DIR/_recipe.sh"
@@ -203,6 +214,11 @@ FIXTURE_EOF
     pass "キーワード照合が .backlog/completed/ のタスクを拾う"
   else
     fail "キーワード照合が .backlog/completed/ のタスクを拾えない（出力: ${keyword_out}）"
+  fi
+  if printf '%s\n' "$keyword_out" | grep -Fq "archive/milestones/m-1 - archived milestone.md"; then
+    pass "キーワード照合が .backlog/archive/milestones/ の milestone を拾う"
+  else
+    fail "キーワード照合が .backlog/archive/milestones/ の milestone を拾えない（出力: ${keyword_out}）"
   fi
 
   # 3b. パス照合が completed 配下の modified_files を拾い、本文だけの言及は拾わないこと。

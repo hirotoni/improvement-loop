@@ -97,6 +97,11 @@ backlog search "<キーワード>" --plain
 backlog search --modified-file <対象パス> --plain
 ```
 
+- `backlog search` は `.backlog/tasks/` しか見ず、`backlog milestone list` はアーカイブ済みの milestone を出さない。
+  完了・アーカイブ済みのタスクと、アーカイブ済みの milestone との照合手順の正本は
+  [`claude-code/skills/completed-tasks-lookup.md`](../../skills/completed-tasks-lookup.md) にある。ここに複製せず、
+  上のコマンドと併せて必ず実行する。リポジトリへの `cd` と正本の前置き・照合コマンドは 1 回の Bash 呼び出しに
+  まとめる（ワークスペースルートには `.backlog` が無く、`cd` が外れると走査対象が空になって何も拾わない）。
 - `backlog task list --labels` はラベル文字列の完全一致でしか絞り込めない（`cross-repo` のような
   接頭辞では該当タスクが1件も返らない）ため、この時点ではまだ確定していない相関スラッグを前提にした
   絞り込みには使わない。上記のキーワード検索・`--modified-file` 検索と milestone 一覧の目視で
