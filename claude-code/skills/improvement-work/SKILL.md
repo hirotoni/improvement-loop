@@ -1,7 +1,7 @@
 ---
 name: improvement-work
 description: improvement-dispatch から引き渡された Backlog.md タスクを、interview-dev-loop の型で遂行する。サブエージェントとして起動される前提のため人間に質問できず、曖昧さは repo の根拠から自分で解決し、判断が必要な点だけ中断して差し戻す。作業ブランチ上で実装・検証・コミットし、タスクを In Review にして報告する。単独のタスク実装依頼で、人間と対話できる場合は interview-dev-loop を直接使う。
-model: Sonnet 5
+model: sonnet
 ---
 
 # improvement-work
