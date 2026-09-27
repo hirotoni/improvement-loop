@@ -196,6 +196,12 @@ echo "=== 1c. SKILL.md 埋め込み bash ブロックの構文チェック ==="
 # 閉じ忘れのような本物の構文エラーは検出できる。置換パターンが `<(` を除外しているのは、
 # `<(cmd1) <(cmd2) > out` のような行で2つ目のプロセス置換と実際のリダイレクトを1つの
 # プレースホルダとして誤って飲み込まないようにするためである。
+#
+# 開始フェンスの正規表現は、下の対象列挙と check_skill_bash_blocks の両方が使う。
+# 列挙側と抽出側で判定がずれると、ブロックを持つのに対象から漏れるファイルが出るため
+# 1か所で持つ。
+SKILL_BASH_OPEN_RE='^[[:space:]]*```bash[[:space:]]*$'
+
 check_skill_bash_blocks() {
   local skill_file="$1"
   local label="$2"
@@ -205,7 +211,7 @@ check_skill_bash_blocks() {
     return
   fi
 
-  local open_re='^[[:space:]]*```bash[[:space:]]*$'
+  local open_re="$SKILL_BASH_OPEN_RE"
   local close_re='^[[:space:]]*```[[:space:]]*$'
 
   # 抽出ループとは独立に開始フェンスの総数を数え、ループ側の処理件数と突き合わせる。
@@ -274,12 +280,32 @@ check_skill_bash_blocks() {
   fi
 }
 
-check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-dispatch/SKILL.md" "improvement-dispatch/SKILL.md"
-check_skill_bash_blocks "$SOURCE_SKILLS_DIR/improvement-work/SKILL.md" "improvement-work/SKILL.md"
-check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-dispatch/SKILL.md" "workspace-dispatch/SKILL.md"
-check_skill_bash_blocks "$SOURCE_WORKSPACE_SKILLS_DIR/workspace-scout/SKILL.md" "workspace-scout/SKILL.md"
-# SKILL.md ではないが、起票系3スキルが実行する bash を持つ正本なので同じ検査に乗せる。
-check_skill_bash_blocks "$SOURCE_SKILLS_DIR/completed-tasks-lookup.md" "completed-tasks-lookup.md"
+# ---- 対象を claude-code/ 配下の実体から列挙する ----
+# 以前は対象ファイルを固定で並べていたため、スキルの追加や既存スキルへの bash ブロック
+# 追加のたびに登録が要り、登録を忘れたブロックは一度も検査されなかった（TASK-102）。
+# SKILL.md に限らず、claude-code/ 配下で開始フェンスを1つでも持つ .md をすべて対象に
+# する（completed-tasks-lookup.md のように、スキルが実行する bash を持つ SKILL.md 以外の
+# 正本もあるため）。開始フェンスを持たない .md は対象外なので、関数側の「ブロックが
+# 1つも見つからない」FAIL には当たらない。
+# 並び順を固定するのは、出力の差分を環境によらず比較できるようにするためである。
+SKILL_MD_RELPATHS=()
+while IFS= read -r skill_md_path; do
+  [ -n "$skill_md_path" ] || continue
+  if grep -Eq "$SKILL_BASH_OPEN_RE" "$skill_md_path"; then
+    SKILL_MD_RELPATHS+=("${skill_md_path#"$REPO_ROOT"/}")
+  fi
+done < <(find "$REPO_ROOT/claude-code" -type f -name '*.md' | LC_ALL=C sort)
+
+# 列挙そのものが壊れていないかを検査する。0件のまま静かに通ると、埋め込み bash
+# ブロックが1つも検査されない状態へ無音で戻ってしまう。
+if [ "${#SKILL_MD_RELPATHS[@]}" -eq 0 ]; then
+  fail "claude-code/ 配下に \`\`\`bash ブロックを持つ .md が1件も見つからない（列挙条件の不具合の可能性がある）"
+else
+  pass "claude-code/ 配下で \`\`\`bash ブロックを持つ .md ${#SKILL_MD_RELPATHS[@]}件を実体から列挙した"
+  for skill_md_rel in "${SKILL_MD_RELPATHS[@]}"; do
+    check_skill_bash_blocks "$REPO_ROOT/$skill_md_rel" "${skill_md_rel#claude-code/}"
+  done
+fi
 
 echo ""
 echo "=== 1d. tests/ 配下の一時パスの後片付け作法 ==="
