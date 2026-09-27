@@ -1920,4 +1920,93 @@ $no_backlog_no_flag_output"
   fi
 fi
 
+echo "=== 10. 使い方の表示と引数の誤りの検出 ==="
+# --help/-h は使い方を出して何もせず成功し、未知のオプションと 2 つ目以降の位置引数は
+# 何も変更せずに失敗することを確かめる。「何も変更しない」は、対象ディレクトリ配下の
+# ファイル一覧と .git/info/exclude の内容を実行の前後で比べて判定する。
+
+# 対象ディレクトリ配下の状態（ファイル一覧と .git/info/exclude の内容）を標準出力に書く。
+snapshot_dir_state() {
+  local dir="$1"
+  (cd "$dir" && find . | LC_ALL=C sort)
+  if [ -f "$dir/.git/info/exclude" ]; then
+    cat "$dir/.git/info/exclude"
+  fi
+}
+
+TMP_ARGS_REPO_A="$(mktemp -d)"
+register_tmp_cleanup "$TMP_ARGS_REPO_A"
+(cd "$TMP_ARGS_REPO_A" && git init -q)
+TMP_ARGS_REPO_B="$(mktemp -d)"
+register_tmp_cleanup "$TMP_ARGS_REPO_B"
+(cd "$TMP_ARGS_REPO_B" && git init -q)
+args_state_a_before="$(snapshot_dir_state "$TMP_ARGS_REPO_A")"
+args_state_b_before="$(snapshot_dir_state "$TMP_ARGS_REPO_B")"
+
+# 対象ディレクトリ A・B が実行前の状態のままかを判定する。
+# 引数: 検査項目の接頭辞
+assert_args_repos_unchanged() {
+  local label="$1"
+  if [ "$(snapshot_dir_state "$TMP_ARGS_REPO_A")" = "$args_state_a_before" ] &&
+    [ "$(snapshot_dir_state "$TMP_ARGS_REPO_B")" = "$args_state_b_before" ]; then
+    pass "$label: 対象ディレクトリに何も作らない"
+  else
+    fail "$label: 対象ディレクトリの状態が変わった"
+  fi
+}
+
+# ---- 10a. --help と -h ----
+for help_flag in --help -h; do
+  help_stdout="$(cd "$TMP_ARGS_REPO_A" && "$SETUP_SCRIPT" "$help_flag" 2>/dev/null)"
+  help_exit=$?
+  if [ "$help_exit" -eq 0 ] && grep -Fq "使い方:" <<<"$help_stdout" && grep -Fq -- "--workspace" <<<"$help_stdout"; then
+    pass "10a: $help_flag は使い方（--workspace の説明を含む）を標準出力に出して exit 0 で終わる"
+  else
+    fail "10a: $help_flag の結果が想定と異なる（exit ${help_exit}）:
+$help_stdout"
+  fi
+  "$SETUP_SCRIPT" "$help_flag" "$TMP_ARGS_REPO_A" >/dev/null 2>&1
+  help_with_path_exit=$?
+  if [ "$help_with_path_exit" -eq 0 ]; then
+    pass "10a: 対象パスと併せて $help_flag を渡しても exit 0 で終わる"
+  else
+    fail "10a: 対象パスと併せて $help_flag を渡すと exit ${help_with_path_exit} になった"
+  fi
+  assert_args_repos_unchanged "10a: $help_flag"
+done
+
+# ---- 10b. 未知のオプション ----
+unknown_opt_output="$("$SETUP_SCRIPT" --worksapce "$TMP_ARGS_REPO_A" 2>&1)"
+unknown_opt_exit=$?
+if [ "$unknown_opt_exit" -ne 0 ] && grep -Fq "認識しないオプション: --worksapce" <<<"$unknown_opt_output" &&
+  grep -Fq "使い方:" <<<"$unknown_opt_output"; then
+  pass "10b: 未知のオプションはその名前と使い方を示して非 0 で終わる"
+else
+  fail "10b: 未知のオプションの扱いが想定と異なる（exit ${unknown_opt_exit}）:
+$unknown_opt_output"
+fi
+assert_args_repos_unchanged "10b"
+
+# ---- 10c. 位置引数が 2 つ ----
+extra_pos_output="$("$SETUP_SCRIPT" "$TMP_ARGS_REPO_A" "$TMP_ARGS_REPO_B" 2>&1)"
+extra_pos_exit=$?
+if [ "$extra_pos_exit" -ne 0 ] && grep -Fq "受け付けなかった引数: $TMP_ARGS_REPO_B" <<<"$extra_pos_output" &&
+  grep -Fq "使い方:" <<<"$extra_pos_output"; then
+  pass "10c: 位置引数が 2 つあると、受け付けなかった引数と使い方を示して非 0 で終わる"
+else
+  fail "10c: 位置引数が 2 つのときの扱いが想定と異なる（exit ${extra_pos_exit}）:
+$extra_pos_output"
+fi
+assert_args_repos_unchanged "10c"
+
+extra_pos_ws_output="$("$SETUP_SCRIPT" --workspace "$TMP_ARGS_REPO_A" "$TMP_ARGS_REPO_B" 2>&1)"
+extra_pos_ws_exit=$?
+if [ "$extra_pos_ws_exit" -ne 0 ]; then
+  pass "10c: --workspace でも位置引数が 2 つあると非 0 で終わる"
+else
+  fail "10c: --workspace で位置引数が 2 つのときに成功してしまった:
+$extra_pos_ws_output"
+fi
+assert_args_repos_unchanged "10c: --workspace"
+
 finish_tests

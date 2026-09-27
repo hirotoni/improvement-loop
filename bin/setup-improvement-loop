@@ -5,6 +5,7 @@
 # 使い方:
 #   setup-improvement-loop [対象リポジトリのパス]
 #   setup-improvement-loop --workspace [対象ワークスペースディレクトリのパス]
+#   setup-improvement-loop --help | -h
 # 引数を省略した場合はカレントディレクトリを対象とする。
 #
 # --workspace は、対象を単一リポジトリではなくワークスペースディレクトリとして扱い、
@@ -40,6 +41,25 @@ log() {
 
 err() {
   printf 'エラー: %s\n' "$*" >&2
+}
+
+# 使い方を標準出力に書く。--help/-h では標準出力に、引数の誤りでは標準エラーに
+# リダイレクトして使う。内容はファイル冒頭コメントの「使い方」と揃えること。
+usage() {
+  cat <<'USAGE'
+使い方:
+  setup-improvement-loop [対象リポジトリのパス]
+  setup-improvement-loop --workspace [対象ワークスペースディレクトリのパス]
+  setup-improvement-loop --help | -h
+
+引数を省略した場合はカレントディレクトリを対象とする。対象のパスは 1 つだけ渡す。
+
+オプション:
+  --workspace  対象を単一リポジトリではなくワークスペースディレクトリとして扱い、
+               ワークスペース用のスキル一式だけを配置する。backlog init も
+               .backlog/ 配下の配置も行わず、対象が git リポジトリである必要も無い。
+  -h, --help   この使い方を表示して終了する（何も変更しない）。
+USAGE
 }
 
 # $1 が残りの引数リストに含まれていれば真を返す。
@@ -923,18 +943,36 @@ fi
 # 対象パスとする。ここではフラグの切り分けだけを行い、対象パスの存在確認のような
 # ファイルシステムを触る処理はしない（前提コマンドの確認を対象パスの解決より先に
 # 行う順序を保つため）。
+# 使い方の誤り（未知のオプション、2 つ目以降の位置引数）は、何も変更しないうちに
+# 使い方を添えて終了コード 2 で止める。黙って無視すると、綴りを誤ったフラグが
+# 「対象ディレクトリが存在しない」と報告されたり、2 つ目のリポジトリが未導入の
+# まま成功扱いになったりする。
 WORKSPACE_MODE=false
 POSITIONAL_ARGS=()
 for arg in "$@"; do
   case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
     --workspace)
       WORKSPACE_MODE=true
+      ;;
+    -*)
+      err "認識しないオプション: $arg"
+      usage >&2
+      exit 2
       ;;
     *)
       POSITIONAL_ARGS+=("$arg")
       ;;
   esac
 done
+if [ "${#POSITIONAL_ARGS[@]}" -gt 1 ]; then
+  err "対象のパスは 1 つだけ渡すこと。受け付けなかった引数: ${POSITIONAL_ARGS[*]:1}"
+  usage >&2
+  exit 2
+fi
 
 # ---- 2. 前提コマンドの確認 ----
 # 存在確認のみでバージョンは見ない。backlog CLI の動作確認済み最小バージョンは
