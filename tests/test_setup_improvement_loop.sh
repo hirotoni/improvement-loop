@@ -2023,7 +2023,7 @@ STRIPPED_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fxv "$BACKLOG_BIN_DIR
 STRIPPED_PATH="${STRIPPED_PATH%:}"
 
 if PATH="$STRIPPED_PATH" command -v backlog >/dev/null 2>&1; then
-  skip "9g/9h: PATH から backlog の解決元ディレクトリ（$BACKLOG_BIN_DIR）を除いても backlog が別の場所から解決できてしまうため、backlog 不在環境の検証をスキップした"
+  skip "9g/9h: PATH から backlog の解決元ディレクトリ（${BACKLOG_BIN_DIR}）を除いても backlog が別の場所から解決できてしまうため、backlog 不在環境の検証をスキップした"
 elif ! PATH="$STRIPPED_PATH" command -v git >/dev/null 2>&1; then
   skip "9g/9h: backlog の解決元ディレクトリを PATH から除くと git も解決できなくなるため、backlog 不在環境の検証をスキップした"
 else
