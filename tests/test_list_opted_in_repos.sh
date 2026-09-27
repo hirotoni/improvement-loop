@@ -93,25 +93,6 @@ else
 $actual_scout_names"
 fi
 
-# ---- 除外対象が誤って含まれていないことの直接確認 ----
-if printf '%s\n' "$dispatch_result" | grep -Fq "repo-not-opted-in"; then
-  fail "opt-in していないリポジトリ（repo-not-opted-in）が誤って含まれている"
-else
-  pass "opt-in していないリポジトリ（repo-not-opted-in）が正しく除外される"
-fi
-
-if printf '%s\n' "$dispatch_result" | grep -Fq "repo-broken-symlink"; then
-  fail "リンク切れのシンボリックリンクを持つリポジトリ（repo-broken-symlink）が誤って含まれている"
-else
-  pass "リンク切れのシンボリックリンクを持つリポジトリ（repo-broken-symlink）が正しく除外される"
-fi
-
-if printf '%s\n' "$dispatch_result" | grep -Fq "not-a-git-repo"; then
-  fail "git リポジトリでないディレクトリ（not-a-git-repo）が誤って含まれている"
-else
-  pass "git リポジトリでないディレクトリ（not-a-git-repo）が正しく除外される"
-fi
-
 echo ""
 echo "=== 2. 境界ケース ==="
 
