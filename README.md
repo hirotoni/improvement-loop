@@ -109,6 +109,20 @@ git config core.hooksPath githooks
 有効化すると、以降このリポジトリで行う `git commit` のたびに `tests/run.sh` が実行され、FAIL があればコミットが中断される。
 `tests/run.sh` は依存ゼロの最小テストランナーで、`tests/` 配下の `test_*.sh` を順に実行し、各ファイルのサマリー行を合算して全体の PASS/FAIL/SKIP を報告する。依存（bash・git・backlog）が欠けている場合は、対象テストが SKIP として報告され、総合サマリーの SKIP 件数に計上される。総合サマリーには PASS/FAIL/SKIP の件数に続けて、テストファイル単位の内訳（実行 / 丸ごとスキップ / 集計不能）も出力される。
 依存不足で全テストファイルがスキップされ、検証が1件も実行されなかった場合は、全件成功した場合と区別できるよう FAIL を1件計上して非ゼロで終了する（pre-commit フックはコミットをブロックする）。終了ステータスしか見ない利用者から両者が区別できないと、1件も検証しないままコミットが通ってしまうためである。
+
+インストール済みでないバージョンの backlog CLI（通常は動作確認済み最小バージョン `1.48.0`）で `tests/run.sh` を手動で実行するときは、次のコマンドを使う。グローバルにインストールした `backlog` は変えずに、指定バージョンの `backlog.md` を npm で repo の外の一時ディレクトリに入れ、その実行ファイルの置き場所を PATH の先頭に置く。Node.js と npm が必要である。pre-commit フックはこの手順とは関係なく、これまでどおり PATH 上の `backlog` で `tests/run.sh` を実行する。
+
+```sh
+BACKLOG_VERSION=1.48.0
+BACKLOG_TMP="$(mktemp -d)"
+npm install --prefix "$BACKLOG_TMP" "backlog.md@$BACKLOG_VERSION"
+PATH="$BACKLOG_TMP/node_modules/.bin:$PATH" backlog --version  # BACKLOG_VERSION と同じ値が出ることを確かめる
+PATH="$BACKLOG_TMP/node_modules/.bin:$PATH" bash tests/run.sh
+rm -rf "$BACKLOG_TMP"
+```
+
+グローバルにインストールした `backlog` も PATH に残っているので、PATH 上に backlog が2つある状態になる。このため、`tests/test_setup_improvement_loop.sh` の backlog が PATH に無い環境の検証（9g/9h）は SKIP になる。
+
 zsh はテストの共通の依存ではない。zsh を使うのは `install.zsh` を実際に実行する `tests/test_setup_improvement_loop.sh` の1箇所だけで、zsh が無い環境ではその検証だけが SKIP になり、他のテストはそのまま実行される。
 [shellcheck](https://www.shellcheck.net/) は必須依存ではなく任意依存である。無くてもテストは走るが、`tests/test_syntax.sh` の静的検査（`CHECK_SCRIPTS` に挙げた全スクリプトに対する shellcheck の実行。この記述時点で32件で、対象が増えれば増える）だけが失われる。失われた件数は未導入時の SKIP 行に実数で出る。`bash -n` による構文チェックは shellcheck の有無に関わらず実行される。未導入のまま作業すると SC2086 のような指摘を一度も見ないままコミットでき、shellcheck を持っている人の環境で初めて FAIL するため、このリポジトリを開発するなら `brew install shellcheck` で導入しておくこと。未導入の場合は `tests/run.sh` の総合サマリーの末尾に「未導入の任意依存」として、失われた検査と導入方法が再掲される（未導入それ自体はコミットをブロックしない）。
 GitHub Actions 等の CI はこのリポジトリでは対象外とする。
