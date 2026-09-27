@@ -194,4 +194,112 @@ else
 $select_out"
 fi
 
+echo ""
+echo "=== 9. 複数依存・存在しない依存の扱い（TASK-99） ==="
+# backlog CLI 1.53.0 の task view --plain は "Dependencies:" 行を出さず、
+# "Dependency Graph:" の "Depends on" 木で依存を表す。依存の一部だけが Done の場合、
+# 推移的依存を持つ場合、存在しない依存を持つ場合に、直接依存を正しく読み取って
+# 判定できることを確かめる。1.48.0 の "Dependencies:" 行の形式でも同じ結果になる
+# （PATH に 1.48.0 の backlog を置いてこのファイルを実行すると確かめられる）。
+
+TMP_REPO_DEPS_SELECT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_DEPS_SELECT"
+
+(cd "$TMP_REPO_DEPS_SELECT" && git init -q)
+mkdir -p "$TMP_REPO_DEPS_SELECT/.backlog"
+cat > "$TMP_REPO_DEPS_SELECT/.backlog/config.yml" <<'YAML'
+project_name: "deps-select-test"
+default_status: "To Do"
+statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "task"
+YAML
+
+# 依存先として TASK-1（Done）、TASK-2（In Review。未完了）、TASK-3（Done）を用意する。
+# 木の中で未完了の依存が "├─" 側・"└─" 側のどちらに来ても除外できることを確かめるため、
+# TASK-4 は TASK-2（未完了）・TASK-3（Done）の順、TASK-5 は TASK-1（Done）・TASK-2（未完了）の順に依存させる。
+# TASK-6 は Done の TASK-1・TASK-3 だけに依存させる。
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Dep done A" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Dep open" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Dep done B" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Open dep first" --priority high --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Open dep last" --priority high --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "All deps done" --priority medium --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-1 -s "Done" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-2 -s "In Review" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-3 -s "Done" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-4 --dep task-2,task-3 --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-5 --dep task-1,task-2 --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-6 --dep task-1,task-3 --plain >/dev/null)
+
+# --- 9a. 依存の一部だけが未完了のタスク（TASK-4・TASK-5）は並び順によらず除外され、全依存 Done の TASK-6 が選ばれる ---
+select_out="$(cd "$TMP_REPO_DEPS_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-6'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 未完了の依存（TASK-2）が先頭でも末尾でも TASK-4・TASK-5 を除外し、全依存 Done の TASK-6 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 一部未完了の依存を持つタスクの除外結果が期待と異なる（TASK-6 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 9b. 判定は直接依存だけで行う。直接依存（TASK-7）が Done なら、その先の推移的依存（TASK-2）が未完了でも TASK-8 は選ばれる ---
+# 従来の "Dependencies:" 行（1.48.0）も直接依存だけを列挙していたので、その挙動に揃える。
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-4 -s "Proposed" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-5 -s "Proposed" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-6 -s "Proposed" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Done with open dep" --dep task-2 --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-7 -s "Done" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Needs TASK-7" --priority low --dep task-7 --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_DEPS_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-8'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 直接依存（TASK-7）が Done なら、推移的依存（TASK-2）が未完了でも TASK-8 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 推移的依存を持つタスクの結果が期待と異なる（TASK-8 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 9c. 存在しない依存を持つタスクは ERROR にならず、未完了扱いで除外される ---
+# backlog CLI は存在しない ID を --dep で受け付けないため、依存先タスクが後から
+# 消えた状況をタスクファイルの frontmatter を直接書き換えて再現する（一時リポジトリ内のみ）。
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-8 -s "Proposed" --plain >/dev/null)
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task edit TASK-6 -s "To Do" --plain >/dev/null)
+dep_task_file="$(ls "$TMP_REPO_DEPS_SELECT"/.backlog/tasks/task-6\ -*.md)"
+# テストの依存を bash・git・backlog に限るため、perl や sed -i（GNU/BSD で書式が違う）は使わない。
+awk '{ print } $0 == "  - TASK-3" { print "  - TASK-77" }' "$dep_task_file" > "$dep_task_file.tmp" \
+  && mv "$dep_task_file.tmp" "$dep_task_file"
+select_out="$(cd "$TMP_REPO_DEPS_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 2 ] && printf '%s\n' "$select_out" | grep -Fxq 'RESULT: NO_CANDIDATE'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 存在しない依存（TASK-77）を持つ TASK-6 を未完了扱いで除外し NO_CANDIDATE を返す"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 存在しない依存を持つタスクの結果が期待と異なる（NO_CANDIDATE を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 9d. 説明文に依存表記と同じ見た目の行があっても依存として読まない ---
+# 自由記述の説明文（例: 不具合報告に CLI 出力を貼ったもの）の "Dependencies:" 行や
+# "Depends on" 木を依存と誤読すると、存在しない ID の view が失敗して RESULT: ERROR になる。
+(cd "$TMP_REPO_DEPS_SELECT" && backlog task create "Quotes CLI output" --priority high \
+  -d $'Dependencies: see notes\nDependency Graph:\n--------------------------------------------------\nDepends on (1 direct, 1 total):\n└─ foo - fake' \
+  --plain >/dev/null)
+select_out="$(cd "$TMP_REPO_DEPS_SELECT" && "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-9'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 説明文中の依存表記に似た行を無視し、依存の無い TASK-9 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 説明文中の依存表記に似た行を依存として読んだ（TASK-9 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
 finish_tests

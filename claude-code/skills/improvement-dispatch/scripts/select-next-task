@@ -11,8 +11,10 @@
 # 選定の順序:
 #   1. In Progress・In Review がそれぞれ上限以上なら選定せず GATED で終わる。
 #   2. To Do のうち blocked:needs-decision ラベルが付いたものを除外する。
-#   3. Dependencies の依存タスクが1つでも Done でないものを除外する
+#   3. 直接依存のタスクが1つでも Done でないものを除外する
 #      （依存タスクが見つからない場合も安全側に倒して未完了扱い）。
+#      依存は backlog CLI 1.48.0 の "Dependencies:" 行と 1.53.0 の
+#      "Dependency Graph:" の木の両形式から読む（list_direct_dependencies）。
 #   4. 残りを優先度（High→Medium→Low→未設定）→数値ID昇順で並べ先頭を選ぶ。
 #      backlog CLI の --sort（未文書化の tie-break に依存する）には頼らない。
 #
@@ -163,34 +165,85 @@ is_blocked() {
   return 1
 }
 
+# $1 = task view --plain の出力。直接依存を1行1件で標準出力へ書く。
+# 存在しない・一意に決まらない依存は "?<ID>" の形で書く（呼び出し側が未完了扱いにする）。
+# backlog CLI のバージョンで出力形式が違うため、次の2形式の両方を読む。
+#   - 1.48.0（README.md 記載の動作確認済み最小バージョン）: "Dependencies: TASK-1, TASK-2" の1行。
+#   - 1.53.0: "Dependency Graph:" セクション内の "Depends on (N direct, M total):" 見出しに
+#     続く木。行頭が "├─ " / "└─ " の行が直接依存、インデント付きの行は推移的依存で読まない。
+#     見出しの後、空行か次の見出し（"Dependents (...)" 等）で木が終わる。
+#     木の各行の "[<状態>]" 表記（Done は "[completed]"）は使わず、完了判定は個別 view で行う。
+#     存在しない依存は "└─ TASK-77 - unknown task ID"、同じ ID のファイルが複数ある依存は
+#     "ambiguous task ID" と表示される（どちらも個別 view は exit 1 になる）。
+#   どちらの形式も "Description:" 見出しより前（メタデータ部）に出る。説明文などの自由記述に
+#   同じ見た目の行があっても拾わないよう、最初の "Description:" 行より前だけを読む。
+list_direct_dependencies() {
+  local view_output="$1"
+  local header
+  header="$(printf '%s\n' "$view_output" | awk '/^Description:$/ { exit } { print }')"
+  local dep_line
+  dep_line="$(printf '%s\n' "$header" | grep -m1 '^Dependencies:' || true)"
+  if [ -n "$dep_line" ]; then
+    local deps_str="${dep_line#Dependencies:}"
+    local dep_list=()
+    IFS=',' read -ra dep_list <<< "$deps_str"
+    local dep
+    for dep in "${dep_list[@]+"${dep_list[@]}"}"; do
+      dep="$(printf '%s' "$dep" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+      if [ -n "$dep" ]; then
+        printf '%s\n' "$dep"
+      fi
+    done
+  fi
+  # 木は最初の "Dependency Graph:" から次のセクション見出し（括弧を含まない "<英字>:" 行）
+  # までに限り、そこで読むのをやめる。
+  printf '%s\n' "$header" | awk '
+    !in_graph && /^Dependency Graph:$/ { in_graph = 1; next }
+    in_graph && /^[A-Za-z][A-Za-z ]*:$/ { exit }
+    !in_graph { next }
+    /^Depends on \(.*\):$/ { in_tree = 1; next }
+    in_tree && /^(├─|└─) / {
+      entry = $0
+      sub(/^(├─|└─) /, "", entry)
+      id = entry
+      sub(/ .*/, "", id)
+      if (id == "") { next }
+      if (entry ~ / - (unknown|ambiguous) task ID$/) { print "?" id } else { print id }
+      next
+    }
+    in_tree && /^[│ ]/ { next }
+    in_tree { in_tree = 0 }
+  '
+}
+
 # $1 = タスクID。依存タスクが1つでも Done でなければ真を返す（依存無しなら偽）。
 # Status 行はグリフ付きだが、末尾が "Done" で終わるのは Done だけなので行末一致で
-# 判定する。依存タスクが見つからない場合（Status 行自体が無い。この場合も
-# backlog task view は exit 0 で返す）も安全側に倒して未完了扱いにする。
+# 判定する。依存タスクが見つからない場合は安全側に倒して未完了扱いにする。
+# 1.53.0 は木に "unknown task ID"（一意に決まらなければ "ambiguous task ID"）と出すので
+# それで判定し（個別 view は exit 1 になる）、
+# 1.48.0 は個別 view が Status 行を持たない出力を exit 0 で返すのでそれで判定する。
 # view 自体の非ゼロ終了は上のコメントの通り set -e では検知できないため、
 # result_error で明示的に ERROR へ倒す。
 has_incomplete_dependency() {
   local task_id="$1"
   local view_output
-  if ! view_output="$(backlog task view "$task_id" --plain)"; then
+  if ! view_output="$(backlog task view "$task_id" --plain </dev/null)"; then
     result_error "backlog task view \"$task_id\" --plain が失敗した"
   fi
-  local dep_line
-  dep_line="$(printf '%s\n' "$view_output" | grep -m1 '^Dependencies:' || true)"
-  if [ -z "$dep_line" ]; then
-    return 1
-  fi
-  local deps_str="${dep_line#Dependencies:}"
-  local dep_list=()
-  IFS=',' read -ra dep_list <<< "$deps_str"
+  local deps
+  deps="$(list_direct_dependencies "$view_output")"
   local dep
-  for dep in "${dep_list[@]+"${dep_list[@]}"}"; do
-    dep="$(printf '%s' "$dep" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  while IFS= read -r dep; do
     if [ -z "$dep" ]; then
       continue
     fi
+    case "$dep" in
+      '?'*) return 0 ;;
+    esac
     local dep_view
-    if ! dep_view="$(backlog task view "$dep" --plain)"; then
+    # この関数は候補一覧・依存一覧の here-string を標準入力とするループの中で呼ばれる。
+    # backlog に読ませて残りを読み飛ばさないよう、view の標準入力は塞ぐ（上の view も同じ）。
+    if ! dep_view="$(backlog task view "$dep" --plain </dev/null)"; then
       result_error "backlog task view \"$dep\" --plain が失敗した"
     fi
     local dep_status_line
@@ -199,7 +252,7 @@ has_incomplete_dependency() {
       *Done) : ;;
       *) return 0 ;;
     esac
-  done
+  done <<< "$deps"
   return 1
 }
 
