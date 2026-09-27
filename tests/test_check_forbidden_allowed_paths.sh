@@ -12,8 +12,8 @@ check_test_dependencies
 
 echo "=== 14. claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths の動作確認 ==="
 # forbidden_paths / allowed_paths と変更ファイル一覧を突き合わせる判定ロジックを、
-# 一時 git リポジトリに対して実際に実行して検証する。各ケースの内容は本文中の
-# セクション見出し（14a 以降）を参照。
+# 一時 git リポジトリに対して実際に実行して検証する。各ケースの内容は cfa_case の
+# ラベル（14a 以降）を参照。
 
 TMP_CFA_REPO="$(mktemp -d)"
 # macOS の mktemp -d はシンボリックリンク経由のパスを返し、スクリプト内部の
@@ -54,250 +54,83 @@ write_cfa_config_multiline() {
   } >"$CFA_CONFIG"
 }
 
-echo ""
-echo "--- 14a. forbidden_paths に前方一致する変更ファイルがあるとき、VIOLATION（非0終了コード）になる（AC#1） ---"
+# cfa_case <ラベル> <期待する終了コード> <完全一致で含むべき行（; 区切り）> [変更ファイル...]
+# CFA_DIR（既定は TMP_CFA_REPO）で check-forbidden-allowed-paths を実行し、終了コードと
+# 出力行をまとめて1件の検証として数える。各ケースは「設定を書く → cfa_case を並べる」の
+# 表として読めるように書く。変更ファイルを渡さず "-" を1つだけ渡すと、実行せずに直前の
+# 結果を検証する（同じ実行に2件の検証を書くとき）。
+CFA_DIR="$TMP_CFA_REPO"
+cfa_case() {
+  local label="$1" code="$2" expected=()
+  IFS=';' read -r -a expected <<<"$3"
+  shift 3
+  if [ "$#" -ne 1 ] || [ "$1" != "-" ]; then
+    run_in "$CFA_DIR" "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "$@"
+  fi
+  assert "$label" run_result "$code" ${expected[@]+"${expected[@]}"}
+}
+
+V='RESULT: VIOLATION'
+OK='RESULT: OK'
+
+# 14a/14b: forbidden_paths（インライン配列・ダブルクォート）
 write_cfa_config '["secrets/", "vendor/"]' '[]'
-cfa_out_a="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
-cfa_exit_a=$?
-if [ "$cfa_exit_a" -ne 0 ] && printf '%s\n' "$cfa_out_a" | grep -Fxq 'RESULT: VIOLATION'; then
-  pass "14a: forbidden_paths に前方一致する変更ファイルがあるとき、RESULT: VIOLATION（非0終了コード）（AC#1）"
-else
-  fail "14a: 期待した結果と異なる（exit ${cfa_exit_a}）:
-$cfa_out_a"
-fi
-if printf '%s\n' "$cfa_out_a" | grep -Fxq 'secrets/token.txt' \
-    && printf '%s\n' "$cfa_out_a" | grep -Fxq 'VIOLATION_COUNT: 1'; then
-  pass "14a: 違反ファイルパスと件数が出力に含まれる"
-else
-  fail "14a: 違反ファイルパス/件数の出力が期待と異なる:
-$cfa_out_a"
-fi
+cfa_case "14a: forbidden_paths に前方一致する変更ファイルがあるとき、RESULT: VIOLATION（exit 1）（AC#1）" 1 "$V" src/a.txt secrets/token.txt
+cfa_case "14a: 違反ファイルパスと件数が出力に含まれる" 1 "secrets/token.txt;VIOLATION_COUNT: 1" -
+cfa_case "14b: forbidden_paths に一致する変更ファイルが無いとき、RESULT: OK（exit 0）" 0 "$OK" src/a.txt docs/readme.md
 
-echo ""
-echo "--- 14b. forbidden_paths が設定されていても該当ファイルが無いとき、OK（exit 0）になる ---"
-cfa_out_b="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
-cfa_exit_b=$?
-if [ "$cfa_exit_b" -eq 0 ] && printf '%s\n' "$cfa_out_b" | grep -Fxq 'RESULT: OK'; then
-  pass "14b: forbidden_paths に一致する変更ファイルが無いとき、RESULT: OK（exit 0）"
-else
-  fail "14b: 期待した結果と異なる（exit ${cfa_exit_b}）:
-$cfa_out_b"
-fi
-
-echo ""
-echo "--- 14c. allowed_paths の範囲外の変更ファイルがあるとき、VIOLATION（非0終了コード）になる（AC#2） ---"
+# 14c/14d: allowed_paths（インライン配列）
 write_cfa_config '[]' '["src/", "tests/"]'
-cfa_out_c="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
-cfa_exit_c=$?
-if [ "$cfa_exit_c" -ne 0 ] && printf '%s\n' "$cfa_out_c" | grep -Fxq 'RESULT: VIOLATION'; then
-  pass "14c: allowed_paths の範囲外の変更ファイルがあるとき、RESULT: VIOLATION（非0終了コード）（AC#2）"
-else
-  fail "14c: 期待した結果と異なる（exit ${cfa_exit_c}）:
-$cfa_out_c"
-fi
-if printf '%s\n' "$cfa_out_c" | grep -Fxq 'docs/readme.md'; then
-  pass "14c: 範囲外の違反ファイルパスが出力に含まれる"
-else
-  fail "14c: 範囲外の違反ファイルパスが出力に含まれていない:
-$cfa_out_c"
-fi
+cfa_case "14c: allowed_paths の範囲外の変更ファイルがあるとき、RESULT: VIOLATION（exit 1）（AC#2）" 1 "$V" src/a.txt docs/readme.md
+cfa_case "14c: 範囲外の違反ファイルパスが出力に含まれる" 1 "docs/readme.md" -
+cfa_case "14d: allowed_paths の範囲内のみのとき、RESULT: OK（exit 0）" 0 "$OK" src/a.txt tests/b.txt
 
-echo ""
-echo "--- 14d. allowed_paths の範囲内の変更ファイルのみのとき、OK（exit 0）になる ---"
-cfa_out_d="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "tests/b.txt" 2>&1)"
-cfa_exit_d=$?
-if [ "$cfa_exit_d" -eq 0 ] && printf '%s\n' "$cfa_out_d" | grep -Fxq 'RESULT: OK'; then
-  pass "14d: allowed_paths の範囲内のみのとき、RESULT: OK（exit 0）"
-else
-  fail "14d: 期待した結果と異なる（exit ${cfa_exit_d}）:
-$cfa_out_d"
-fi
-
-echo ""
-echo "--- 14e. forbidden_paths/allowed_paths が両方とも空配列のとき、常に OK（exit 0）になる（AC#3） ---"
+# 14e/14f: 制限なし
 write_cfa_config '[]' '[]'
-cfa_out_e="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "secrets/x.txt" "anything/y.txt" 2>&1)"
-cfa_exit_e=$?
-if [ "$cfa_exit_e" -eq 0 ] && printf '%s\n' "$cfa_out_e" | grep -Fxq 'RESULT: OK'; then
-  pass "14e: forbidden_paths/allowed_paths が両方空配列のとき、常に RESULT: OK（exit 0）（AC#3）"
-else
-  fail "14e: 期待した結果と異なる（exit ${cfa_exit_e}）:
-$cfa_out_e"
-fi
-
-echo ""
-echo "--- 14f. .backlog/config.my.yml 自体が無いとき、常に OK（exit 0）になる（AC#3） ---"
+cfa_case "14e: forbidden_paths/allowed_paths が両方空配列のとき、常に RESULT: OK（exit 0）（AC#3）" 0 "$OK" secrets/x.txt anything/y.txt
 mv "$CFA_CONFIG" "${CFA_CONFIG}.bak"
-cfa_out_f="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "secrets/x.txt" 2>&1)"
-cfa_exit_f=$?
-if [ "$cfa_exit_f" -eq 0 ] && printf '%s\n' "$cfa_out_f" | grep -Fxq 'RESULT: OK'; then
-  pass "14f: config.my.yml 自体が無いとき、常に RESULT: OK（exit 0）（AC#3）"
-else
-  fail "14f: 期待した結果と異なる（exit ${cfa_exit_f}）:
-$cfa_out_f"
-fi
+cfa_case "14f: config.my.yml 自体が無いとき、常に RESULT: OK（exit 0）（AC#3）" 0 "$OK" secrets/x.txt
 mv "${CFA_CONFIG}.bak" "$CFA_CONFIG"
 
-echo ""
-echo "--- 14g. 両方設定されている場合、allowed_paths の範囲内でも forbidden_paths に一致すれば違反になる ---"
+# 14g/14h: 両方設定・引数なし
 write_cfa_config '["src/secret.txt"]' '["src/"]'
-cfa_out_g="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "src/secret.txt" 2>&1)"
-cfa_exit_g=$?
-if [ "$cfa_exit_g" -ne 0 ] && printf '%s\n' "$cfa_out_g" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_g" | grep -Fxq 'VIOLATION_COUNT: 1' \
-    && printf '%s\n' "$cfa_out_g" | grep -Fxq 'src/secret.txt'; then
-  pass "14g: allowed範囲内でもforbiddenに一致するファイルだけが違反として検知され、allowed範囲内の他ファイルは違反にならない"
-else
-  fail "14g: 期待した結果と異なる（exit ${cfa_exit_g}）:
-$cfa_out_g"
-fi
+cfa_case "14g: allowed範囲内でもforbiddenに一致するファイルだけが違反として検知され、allowed範囲内の他ファイルは違反にならない" 1 "$V;VIOLATION_COUNT: 1;src/secret.txt" src/a.txt src/secret.txt
+cfa_case "14h: 変更ファイルを1件も渡さないとき、RESULT: OK（exit 0）" 0 "$OK"
 
-echo ""
-echo "--- 14h. 変更ファイルを1件も渡さないとき、OK（exit 0）になる ---"
-cfa_out_h="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" 2>&1)"
-cfa_exit_h=$?
-if [ "$cfa_exit_h" -eq 0 ] && printf '%s\n' "$cfa_out_h" | grep -Fxq 'RESULT: OK'; then
-  pass "14h: 変更ファイルを1件も渡さないとき、RESULT: OK（exit 0）"
-else
-  fail "14h: 期待した結果と異なる（exit ${cfa_exit_h}）:
-$cfa_out_h"
-fi
-
-echo ""
-echo "--- 14i. 対象リポジトリの外（gitリポジトリでない場所）で実行すると ERROR（exit 2）になる ---"
+# 14i: git リポジトリの外
 TMP_CFA_NONREPO="$(mktemp -d)"
 register_tmp_cleanup "$TMP_CFA_NONREPO"
-cfa_out_i="$(cd "$TMP_CFA_NONREPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "a.txt" 2>&1)"
-cfa_exit_i=$?
-if [ "$cfa_exit_i" -eq 2 ] && printf '%s\n' "$cfa_out_i" | grep -Fxq 'RESULT: ERROR'; then
-  pass "14i: gitリポジトリでない場所で実行すると、RESULT: ERROR（exit 2）"
-else
-  fail "14i: 期待した結果と異なる（exit ${cfa_exit_i}）:
-$cfa_out_i"
-fi
+CFA_DIR="$TMP_CFA_NONREPO"
+cfa_case "14i: gitリポジトリでない場所で実行すると、RESULT: ERROR（exit 2）" 2 "RESULT: ERROR" a.txt
+CFA_DIR="$TMP_CFA_REPO"
 
-echo ""
-echo "--- 14j. forbidden_paths を複数行YAMLリスト形式で書いた場合、インライン配列形式と同じ判定結果（VIOLATION）になる（TASK-56 AC#1） ---"
+# 14j/14k: 複数行YAMLリスト形式（TASK-56 AC#1）
 write_cfa_config_multiline "$(printf 'secrets/\nvendor/')" ""
-cfa_out_j="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
-cfa_exit_j=$?
-if [ "$cfa_exit_j" -eq 1 ] && printf '%s\n' "$cfa_out_j" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_j" | grep -Fxq 'VIOLATION_COUNT: 1' \
-    && printf '%s\n' "$cfa_out_j" | grep -Fxq 'secrets/token.txt'; then
-  pass "14j: forbidden_paths を複数行YAMLリスト形式で書いた場合も、インライン配列形式と同じ RESULT: VIOLATION（TASK-56 AC#1）"
-else
-  fail "14j: 期待した結果と異なる（exit ${cfa_exit_j}）:
-$cfa_out_j"
-fi
-cfa_out_j2="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
-cfa_exit_j2=$?
-if [ "$cfa_exit_j2" -eq 0 ] && printf '%s\n' "$cfa_out_j2" | grep -Fxq 'RESULT: OK'; then
-  pass "14j: 複数行YAMLリスト形式の forbidden_paths に一致しない変更ファイルのときは RESULT: OK"
-else
-  fail "14j: 期待した結果と異なる（exit ${cfa_exit_j2}）:
-$cfa_out_j2"
-fi
-
-echo ""
-echo "--- 14k. allowed_paths を複数行YAMLリスト形式で書いた場合、インライン配列形式と同じ判定結果になる（TASK-56 AC#1） ---"
+cfa_case "14j: forbidden_paths を複数行YAMLリスト形式で書いた場合も、インライン配列形式と同じ RESULT: VIOLATION（TASK-56 AC#1）" 1 "$V;VIOLATION_COUNT: 1;secrets/token.txt" src/a.txt secrets/token.txt
+cfa_case "14j: 複数行YAMLリスト形式の forbidden_paths に一致しない変更ファイルのときは RESULT: OK" 0 "$OK" src/a.txt docs/readme.md
 write_cfa_config_multiline "" "$(printf 'src/\ntests/')"
-cfa_out_k1="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
-cfa_exit_k1=$?
-if [ "$cfa_exit_k1" -eq 1 ] && printf '%s\n' "$cfa_out_k1" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_k1" | grep -Fxq 'docs/readme.md'; then
-  pass "14k: 複数行YAMLリスト形式の allowed_paths の範囲外の変更ファイルがあるとき、RESULT: VIOLATION"
-else
-  fail "14k: 期待した結果と異なる（exit ${cfa_exit_k1}）:
-$cfa_out_k1"
-fi
-cfa_out_k2="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "tests/b.txt" 2>&1)"
-cfa_exit_k2=$?
-if [ "$cfa_exit_k2" -eq 0 ] && printf '%s\n' "$cfa_out_k2" | grep -Fxq 'RESULT: OK'; then
-  pass "14k: 複数行YAMLリスト形式の allowed_paths の範囲内のみのとき、RESULT: OK"
-else
-  fail "14k: 期待した結果と異なる（exit ${cfa_exit_k2}）:
-$cfa_out_k2"
-fi
+cfa_case "14k: 複数行YAMLリスト形式の allowed_paths の範囲外の変更ファイルがあるとき、RESULT: VIOLATION" 1 "$V;docs/readme.md" src/a.txt docs/readme.md
+cfa_case "14k: 複数行YAMLリスト形式の allowed_paths の範囲内のみのとき、RESULT: OK" 0 "$OK" src/a.txt tests/b.txt
 
-echo ""
-echo "--- 14l. forbidden_paths が複数行YAMLリスト形式かつ空（次行に \"-\" 項目が続かない）のとき、制限なし（OK）になる ---"
-cat >"$CFA_CONFIG" <<'EOF'
-improvement_loop:
-  forbidden_paths:
-  allowed_paths: []
-EOF
-cfa_out_l="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "secrets/x.txt" 2>&1)"
-cfa_exit_l=$?
-if [ "$cfa_exit_l" -eq 0 ] && printf '%s\n' "$cfa_out_l" | grep -Fxq 'RESULT: OK'; then
-  pass "14l: forbidden_paths: の後に複数行リスト項目が続かないとき、キー自体が無い場合と同様に RESULT: OK"
-else
-  fail "14l: 期待した結果と異なる（exit ${cfa_exit_l}）:
-$cfa_out_l"
-fi
+# 14l: 複数行形式で項目が続かない空のキー
+printf 'improvement_loop:\n  forbidden_paths:\n  allowed_paths: []\n' >"$CFA_CONFIG"
+cfa_case "14l: forbidden_paths: の後に複数行リスト項目が続かないとき、キー自体が無い場合と同様に RESULT: OK" 0 "$OK" secrets/x.txt
 
-echo ""
-echo "--- 14m. forbidden_paths の値が配列でもスカラーでもない壊れたYAML/サポート対象外の記法のとき、RESULT: ERROR（exit 2）になる（TASK-56 AC#3） ---"
-cat >"$CFA_CONFIG" <<'EOF'
-improvement_loop:
-  forbidden_paths: secrets/
-  allowed_paths: []
-EOF
-cfa_out_m="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "secrets/x.txt" 2>&1)"
-cfa_exit_m=$?
-if [ "$cfa_exit_m" -eq 2 ] && printf '%s\n' "$cfa_out_m" | grep -Fxq 'RESULT: ERROR'; then
-  pass "14m: forbidden_paths がサポート対象外の記法（インライン配列でも複数行YAMLリストでもない）のとき、RESULT: ERROR（exit 2）（TASK-56 AC#3）"
-else
-  fail "14m: 期待した結果と異なる（exit ${cfa_exit_m}）:
-$cfa_out_m"
-fi
+# 14m: サポート対象外の記法（TASK-56 AC#3）
+printf 'improvement_loop:\n  forbidden_paths: secrets/\n  allowed_paths: []\n' >"$CFA_CONFIG"
+cfa_case "14m: forbidden_paths がサポート対象外の記法（インライン配列でも複数行YAMLリストでもない）のとき、RESULT: ERROR（exit 2）（TASK-56 AC#3）" 2 "RESULT: ERROR" secrets/x.txt
 
-echo ""
-echo "--- 14n. forbidden_paths をシングルクォートのインライン配列で書いた場合、ダブルクォート版と同じ判定結果になる（TASK-62 AC#2） ---"
+# 14n/14o: シングルクォート（TASK-62 AC#2）
 write_cfa_config "['secrets/', 'vendor/']" '[]'
-cfa_out_n1="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
-cfa_exit_n1=$?
-if [ "$cfa_exit_n1" -eq 1 ] && printf '%s\n' "$cfa_out_n1" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_n1" | grep -Fxq 'VIOLATION_COUNT: 1' \
-    && printf '%s\n' "$cfa_out_n1" | grep -Fxq 'secrets/token.txt'; then
-  pass "14n: シングルクォートのインライン配列の forbidden_paths でも、ダブルクォート版（14a）と同じ RESULT: VIOLATION（TASK-62 AC#2）"
-else
-  fail "14n: 期待した結果と異なる（exit ${cfa_exit_n1}）:
-$cfa_out_n1"
-fi
-cfa_out_n2="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "docs/readme.md" 2>&1)"
-cfa_exit_n2=$?
-if [ "$cfa_exit_n2" -eq 0 ] && printf '%s\n' "$cfa_out_n2" | grep -Fxq 'RESULT: OK'; then
-  pass "14n: シングルクォートのインライン配列の forbidden_paths に一致しない変更ファイルのときは RESULT: OK"
-else
-  fail "14n: 期待した結果と異なる（exit ${cfa_exit_n2}）:
-$cfa_out_n2"
-fi
+cfa_case "14n: シングルクォートのインライン配列の forbidden_paths でも、ダブルクォート版（14a）と同じ RESULT: VIOLATION（TASK-62 AC#2）" 1 "$V;VIOLATION_COUNT: 1;secrets/token.txt" src/a.txt secrets/token.txt
+cfa_case "14n: シングルクォートのインライン配列の forbidden_paths に一致しない変更ファイルのときは RESULT: OK" 0 "$OK" src/a.txt docs/readme.md
+printf "improvement_loop:\n  forbidden_paths:\n    - 'secrets/'\n    - 'vendor/'\n  allowed_paths: []\n" >"$CFA_CONFIG"
+cfa_case "14o: シングルクォートの複数行YAMLリストの forbidden_paths でも、ダブルクォート版（14j）と同じ RESULT: VIOLATION（TASK-62 AC#2）" 1 "$V;VIOLATION_COUNT: 1;secrets/token.txt" src/a.txt secrets/token.txt
 
-echo ""
-echo "--- 14o. forbidden_paths をシングルクォートの複数行YAMLリストで書いた場合、ダブルクォート版と同じ判定結果になる（TASK-62 AC#2） ---"
-cat >"$CFA_CONFIG" <<'EOF'
-improvement_loop:
-  forbidden_paths:
-    - 'secrets/'
-    - 'vendor/'
-  allowed_paths: []
-EOF
-cfa_out_o="$(cd "$TMP_CFA_REPO" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" "src/a.txt" "secrets/token.txt" 2>&1)"
-cfa_exit_o=$?
-if [ "$cfa_exit_o" -eq 1 ] && printf '%s\n' "$cfa_out_o" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_o" | grep -Fxq 'VIOLATION_COUNT: 1' \
-    && printf '%s\n' "$cfa_out_o" | grep -Fxq 'secrets/token.txt'; then
-  pass "14o: シングルクォートの複数行YAMLリストの forbidden_paths でも、ダブルクォート版（14j）と同じ RESULT: VIOLATION（TASK-62 AC#2）"
-else
-  fail "14o: 期待した結果と異なる（exit ${cfa_exit_o}）:
-$cfa_out_o"
-fi
-
-echo ""
-echo "--- 14p. git 管理外（.git/info/exclude で除外）の .backlog/ 配下でも、引数で明示すれば判定される（TASK-69 AC#1） ---"
+# 14p/14q: git 管理外（.git/info/exclude で除外）のパスも、引数で明示すれば判定される（TASK-69）。
 # bin/setup-improvement-loop が .backlog と .claude/skills/<スキル名> を
 # .git/info/exclude に登録するので、この2つは git 管理外になる。スクリプト自身はパスの
-# 追跡状態を見ず、引数で渡されさえすれば判定する。その振る舞いをこの2ケースで固定する。
+# 追跡状態を見ず、引数で渡されさえすれば判定する。
 TMP_CFA_IGNORED="$(mktemp -d)"
 TMP_CFA_IGNORED="$(cd "$TMP_CFA_IGNORED" && pwd -P)"
 register_tmp_cleanup "$TMP_CFA_IGNORED"
@@ -307,35 +140,13 @@ register_tmp_cleanup "$TMP_CFA_IGNORED"
   git commit -q --allow-empty -m init
   printf '.backlog\n.claude/skills/improvement-dispatch\n' >> .git/info/exclude
   mkdir -p .backlog .claude/skills/improvement-dispatch/scripts
-  cat > .backlog/config.my.yml <<'CFG'
-improvement_loop:
-  forbidden_paths: [".backlog/", ".claude/"]
-  allowed_paths: []
-CFG
+  printf 'improvement_loop:\n  forbidden_paths: [".backlog/", ".claude/"]\n  allowed_paths: []\n' > .backlog/config.my.yml
   printf 'changed\n' > .claude/skills/improvement-dispatch/scripts/create-worktree
 ) >/dev/null 2>&1
-
-cfa_out_p="$(cd "$TMP_CFA_IGNORED" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" ".backlog/config.my.yml" 2>&1)"
-cfa_exit_p=$?
-if [ "$cfa_exit_p" -eq 1 ] && printf '%s\n' "$cfa_out_p" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_p" | grep -Fxq '.backlog/config.my.yml'; then
-  pass "14p: git 管理外の .backlog/config.my.yml を引数で明示的に渡せば RESULT: VIOLATION（スクリプトはパスの追跡状態を見ない）"
-else
-  fail "14p: 期待した結果と異なる（exit ${cfa_exit_p}）:
-$cfa_out_p"
-fi
-
-echo ""
-echo "--- 14q. git 管理外の .claude/skills/<スキル名> 配下も、引数で明示すれば判定される（TASK-69 AC#2） ---"
-cfa_out_q="$(cd "$TMP_CFA_IGNORED" && "$CHECK_FORBIDDEN_ALLOWED_SCRIPT" ".claude/skills/improvement-dispatch/scripts/create-worktree" 2>&1)"
-cfa_exit_q=$?
-if [ "$cfa_exit_q" -eq 1 ] && printf '%s\n' "$cfa_out_q" | grep -Fxq 'RESULT: VIOLATION' \
-    && printf '%s\n' "$cfa_out_q" | grep -Fxq '.claude/skills/improvement-dispatch/scripts/create-worktree'; then
-  pass "14q: .claude/skills/<スキル名> 配下のパスを引数で明示的に渡せば RESULT: VIOLATION"
-else
-  fail "14q: 期待した結果と異なる（exit ${cfa_exit_q}）:
-$cfa_out_q"
-fi
+CFA_DIR="$TMP_CFA_IGNORED"
+cfa_case "14p: git 管理外の .backlog/config.my.yml を引数で明示的に渡せば RESULT: VIOLATION（スクリプトはパスの追跡状態を見ない）（TASK-69 AC#1）" 1 "$V;.backlog/config.my.yml" .backlog/config.my.yml
+cfa_case "14q: .claude/skills/<スキル名> 配下のパスを引数で明示的に渡せば RESULT: VIOLATION（TASK-69 AC#2）" 1 "$V;.claude/skills/improvement-dispatch/scripts/create-worktree" .claude/skills/improvement-dispatch/scripts/create-worktree
+CFA_DIR="$TMP_CFA_REPO"
 
 # 後片付け: 以降にテストが追加された場合の事故を防ぐため、インライン配列形式に戻す。
 write_cfa_config '[]' '[]'

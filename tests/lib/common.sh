@@ -7,6 +7,8 @@
 # - check_test_dependencies(): 必須依存が無い環境でのスキップ判定
 # - register_tmp_cleanup()/cleanup_registered_tmp_paths(): 一時ディレクトリの後片付け
 # - finish_tests(): 各テストファイル末尾で呼ぶサマリー出力・exit判定
+# - run_in()/run_result()/run_result_text()/has_line()/has_text()/first_line_is()/
+#   last_lines_are()/assert()/assert_not(): 1件の検証を1行で書くためのヘルパー
 
 COMMON_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$COMMON_LIB_DIR/../.." && pwd)"
@@ -51,6 +53,101 @@ fail() {
 skip() {
   SKIP_COUNT=$((SKIP_COUNT + 1))
   printf 'SKIP: %s\n' "$1"
+}
+
+# ---- 1件の検証を1行で書くためのヘルパー ----
+# if/pass/fail の6〜7行を、assert "<ラベル>" <条件コマンド...> の1行で書くためのもの。
+# 条件コマンドには has_line・has_text・run_result・[ ... ] などを1つだけ渡す。
+# `assert ラベル [ ... ] && has_line ...` と書くと && の右辺は assert の外で評価され、
+# 検証に含まれない。複数の条件は run_result にまとめるか、assert を分ける。
+#
+# run_in <ディレクトリ> <コマンド...>
+#   ディレクトリへ cd してコマンドを実行し、標準出力と標準エラーを RUN_OUT に、
+#   終了コードを RUN_EXIT に入れる。FAIL 時に添える ASSERT_DETAIL も更新する。
+RUN_OUT=""
+RUN_EXIT=0
+ASSERT_DETAIL=""
+run_in() {
+  local dir="$1"
+  shift
+  RUN_OUT="$(cd "$dir" && "$@" 2>&1)"
+  RUN_EXIT=$?
+  ASSERT_DETAIL="exit ${RUN_EXIT}:
+$RUN_OUT"
+}
+
+# has_line <テキスト> <行>: テキストに行と完全一致する行があれば真。
+# パイプではなくヒアストリングで渡す。pipefail の下で grep -q が早く終わると、
+# 大きな出力では printf 側が SIGPIPE で失敗し、一致していても偽になるためである。
+has_line() {
+  grep -Fxq -- "$2" <<<"$1"
+}
+
+# has_text <テキスト> <部分文字列>: テキストに部分文字列が含まれれば真。
+has_text() {
+  grep -Fq -- "$2" <<<"$1"
+}
+
+# run_result <期待する終了コード|nz> [行...]: 直近の run_in の終了コードが期待どおり
+# （nz は 0 以外）で、RUN_OUT に各行と完全一致する行があれば真。
+run_result() {
+  local code="$1" line
+  shift
+  if [ "$code" = "nz" ]; then
+    [ "$RUN_EXIT" -ne 0 ] || return 1
+  else
+    [ "$RUN_EXIT" -eq "$code" ] || return 1
+  fi
+  for line in "$@"; do
+    has_line "$RUN_OUT" "$line" || return 1
+  done
+  return 0
+}
+
+# run_result_text <期待する終了コード|nz> [部分文字列...]: run_result の部分一致版。
+run_result_text() {
+  local code="$1" text
+  shift
+  run_result "$code" || return 1
+  for text in "$@"; do
+    has_text "$RUN_OUT" "$text" || return 1
+  done
+  return 0
+}
+
+# first_line_is <行>: RUN_OUT の1行目が行と一致すれば真。
+first_line_is() {
+  [ "$(printf '%s\n' "$RUN_OUT" | head -1)" = "$1" ]
+}
+
+# last_lines_are <行...>: RUN_OUT の末尾の行が引数の並び（先頭の引数が上の行）と一致すれば真。
+last_lines_are() {
+  [ "$(printf '%s\n' "$RUN_OUT" | tail -n "$#")" = "$(printf '%s\n' "$@")" ]
+}
+
+# assert <ラベル> <条件コマンド...>: 条件が真なら PASS、偽なら FAIL を1件計上する。
+# FAIL 時は ASSERT_DETAIL（直近の run_in の終了コードと出力）を添える。
+assert() {
+  local label="$1"
+  shift
+  if "$@"; then
+    pass "$label"
+  else
+    fail "$label${ASSERT_DETAIL:+
+$ASSERT_DETAIL}"
+  fi
+}
+
+# assert_not <ラベル> <条件コマンド...>: 条件が偽なら PASS、真なら FAIL を1件計上する。
+assert_not() {
+  local label="$1"
+  shift
+  if "$@"; then
+    fail "$label${ASSERT_DETAIL:+
+$ASSERT_DETAIL}"
+  else
+    pass "$label"
+  fi
 }
 
 # 必須依存（git・backlog・bash）が無ければ SKIP を1件計上して finish_tests() で
