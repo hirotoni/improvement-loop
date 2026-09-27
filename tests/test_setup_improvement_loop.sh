@@ -1550,7 +1550,7 @@ exec $(printf '%q' "$REAL_BACKLOG_BIN") "\$@"
 SHIM
 chmod +x "$LEGACY_BACKLOG_SHIM_DIR/backlog"
 
-# 8j-1. インライン配列は壊れる予約として [warn] のうえ正準形へ収束する（AC#2 の保護が 1.53.0 環境でも検証される）。
+# 8j-1. インライン配列は壊れる予約として [warn] のうえ正準形へ収束する（AC#2 の保護を、実行環境の CLI のバージョンによらず検証する唯一の箇所）。
 TMP_REPO_SHIM_LEGACY="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SHIM_LEGACY"
 init_repo_with_backlog_config "$TMP_REPO_SHIM_LEGACY" "shim-legacy-test" \
@@ -1569,7 +1569,7 @@ if grep -F '[warn]' <<<"$shim_legacy_output" | grep -Fq 'インライン配列' 
   && grep -Fq 'backlog config get defaultAssignee が失敗した' <<<"$shim_legacy_output"; then
   pass "8j(AC#2): defaultAssignee を知らない CLI では、インライン配列形式が CLI の読み取り失敗を示す [warn] で報告される"
 else
-  fail "8j(AC#2): defaultAssignee を知らない CLI で、インライン配列形式の [warn] が出なかった:
+  fail "8j(AC#2): defaultAssignee を知らない CLI で、インライン配列形式に CLI の読み取り失敗を示す [warn] が出なかった:
 $shim_legacy_output"
 fi
 
