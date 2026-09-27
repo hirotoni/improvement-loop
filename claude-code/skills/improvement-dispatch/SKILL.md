@@ -284,6 +284,8 @@ STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexistin
 
 `RESULT: STALE_BASE` でも `create-worktree` 自体は 0 で終了する（`&&` は切れず、後続の `backlog task edit` は実行される）。引き渡すかどうかの判断は上の表のとおり dispatch の責務であり、引き渡さないと判断した場合は `backlog task edit TASK-<n> -s "To Do" --comment '<STALE_BASE の内容>' --comment-author @dispatch --plain` で `To Do` に戻す。
 
+`create-worktree` は `.backlog` シンボリックリンクを置いた後、共有の `.backlog/config.yml` の引き渡し時点の複製を `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml` に保存する（TASK-117。実体は `.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot save`）。ワークツリーの `.backlog` は共有の実体へのリンクなので、サブエージェントがワークツリー直下で config.yml を書き換えると本体と全ワークツリーに及ぶ。複製は手順 6 の改変検知と、壊れたときの復元の基準になる。`.git` の中に置くので `.git/info/exclude` は変えず、ワークツリーを片付けた後も残る。同じ task-id で再実行（再引き渡し）したとき、既存の複製と内容が違えば複製を上書きせず残し、差分を標準エラーに出す（`RESULT: KEPT_EXISTING`）。再引き渡しは前のサブエージェントが止まった後に起き、そのサブエージェントについて手順 6 の検知が走っていないので、その時点の config.yml が壊れている可能性があるためである。この場合、手順 6 の検知が `CHANGED` を返し続ける。このとき `create-worktree` は標準出力の `WORKTREE_DIR` の手前に `BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING` の行を出す。**引き渡しはそのまま進め**、この行と標準エラーの差分を手順 7 の報告の「人間に必要な行動」に載せる（意図した変更なら人間が `backlog-config-snapshot accept <task-id>`、意図しない改変なら `restore <task-id>` を実行する）。人間の意図した変更でもこの行は出る（誤検知）。見逃しより誤検知を選んでいるのは、壊れた内容を複製にすると以後の検知も復元もできなくなるためである。保存の結果は標準エラーに出す（標準出力に出すのは上の `BACKLOG_CONFIG_SNAPSHOT=` の1行だけで、`WORKTREE_DIR` と `BRANCH` が最後の2行である契約は変わらない）。保存に失敗してもワークツリー作成は止めない（このタスクの既存の複製が無ければ、手順 6 の検知が `NO_SNAPSHOT` になるだけである）。
+
 `$WORKTREE_DIR` にあたるパスが git worktree としてではなく通常のディレクトリやファイルとして既に存在している場合（手作業での汚染など）、`create-worktree` はエラーを報告して非ゼロで終了する。内容を確認し、不要と判断できる場合のみ削除するか、人間に判断を委ねて別のタスクを処理する。
 
 引き渡しはサブエージェント（`Agent`、`subagent_type: general-purpose`）に対して行う。背景実行のままにする。完了時に通知が返るので、待ち合わせのための短い間隔での起動は入れない。
@@ -296,8 +298,9 @@ STALE_EXCLUDE=<残っている除外行>:<added_by_improvement_loop | preexistin
 - ブランチ名（`$BRANCH`）。参考情報として伝えるが、サブエージェントは自分でブランチを切り替えたり新しく作ったりしない。ワークツリーは引き渡し時点で既にそのブランチを checkout 済みである。
 - リポジトリの規約（`CLAUDE.md` の場所、backlog CLI 経由の原則、実行すべき検証コマンド）。
 - 手順 1 で読んだ `improvement_loop.forbidden_paths` / `allowed_paths` のいずれかに 1 件以上の値がある場合、それぞれ「変更してはいけないパス」「変更してよいパス」として明記する。あわせて、この制限が improvement-work の手順 8（コミット直前）と dispatch の手順 6（完了検証）で `check-forbidden-allowed-paths` により機械的に照合され、違反すればコミットも完了検証も通らない旨を伝える。git 管理外のパスは `git diff` に現れないため機械的には止まらないが、指示としては同じく守ること（検知されないことを守らなくてよい理由にしないこと）も添える。両方とも空、またはキー自体が無い場合はこの指示を省略する（従来どおり制限なし）。
+- 共有の `.backlog/config.yml` を守る指示。ワークツリー直下（`.backlog` シンボリックリンク経由）で `.backlog/config.yml` を書き換えたり `backlog config set` を実行したりしないこと、CLI の挙動の確認は `mktemp -d` の一時リポジトリ（実ディレクトリの `.backlog` を置く）の中で行い、その `cd` は失敗したら止まる形（`cd <dir> || exit 1`）にすること（improvement-work 手順 1 に同じ規定がある）。
 - 非目標。タスクの受入基準の外に手を広げないこと。
-- 完了時に返すべき内容：変更ファイル、実行した検証とその結果、残るリスク、受入基準を満たせたか、人間の判断が必要な未解決点。
+- 完了時に返すべき内容：変更ファイル、実行した検証とその結果、残るリスク、受入基準を満たせたか、人間の判断が必要な未解決点、共有 `.backlog/config.yml` の確認結果（improvement-work 手順 8）。
 
 引き渡した内容の要点（ワークツリーのパスとブランチ名）は次のように notes に残す。
 
@@ -337,6 +340,23 @@ git diff <デフォルトブランチ>...<作業ブランチ> --stat
   変更ファイル一覧は改行区切りで配列 `CHANGED_FILES` に読み込んでから `"${CHANGED_FILES[@]}"` として展開する。`$(git diff ...)` をクォート無しで直接展開すると、ファイル名中の半角スペースでも単語分割され、1つのパスが複数の偽の引数に壊れる。
 
   終了ステータスと標準出力の `RESULT: <値>` の行で判別する（0=OK, 1=VIOLATION, 2=ERROR）。`forbidden_paths`/`allowed_paths` が両方空、キー自体が無い、または `.backlog/config.my.yml` 自体が無い場合、このスクリプトは常に `RESULT: OK` で終わる（スクリプト自身の仕様）。そのため未設定のときはこの検証を実行しても判定は常に無違反となり、既存の手順6の実行フローに変化は生じない。`RESULT: VIOLATION` のときは標準出力の `VIOLATING_FILES` に違反ファイルが列挙される。`RESULT: ERROR` のときは標準エラー出力を確認し、環境不備（対象リポジトリでない等）を解消したうえで手順6をやり直す。backlog タスクの状態はこのスクリプト自体では変更しない。
+- 共有の `.backlog/config.yml` の改変検知（TASK-117）。手順 5 で保存した引き渡し時点の複製と、メインの作業木の `.backlog/config.yml` を比べる。`.backlog/` は git 管理外なので、ここでの改変は上の `git diff` にもバックストップ検証にも現れない。
+
+  ```bash
+  .claude/skills/improvement-dispatch/scripts/backlog-config-snapshot check task-<n>-<英小文字のスラッグ>
+  ```
+
+  task-id は手順 5 で `create-worktree` に渡したもの（作業ブランチ名から `improvement/` を除いたもの）である。スクリプトの実体が無く実行できない場合（終了ステータス 126・127。TASK-117 より前の版で導入した先など）は `ERROR` と同じに扱う。このスクリプトは読むだけで何も書き込まない。最終行の `RESULT:` と終了ステータスで判別する。
+
+  | `RESULT` | 終了ステータス | dispatch が行うこと |
+  | --- | --- | --- |
+  | `OK` | 0 | 何もしない。 |
+  | `CHANGED` | 1 | 共有 config.yml が引き渡し時点から変わっている（消えている場合を含む）。標準エラーの差分と、標準出力の `RESTORE_COMMAND=` を手順 7 の報告の「人間に必要な行動」に載せる。dispatch は自分で `restore` しない。変更が人間の意図的な設定変更かどうかを区別できないためである。タスクの完了判定（下の「満たしていない場合の扱い」）はこの結果では変えない。改変は作業ブランチの差分とは別の問題だからである。ただし config.yml の `statuses` が壊れていると以降の `backlog task edit` が失敗しうるので、この結果を見たら他の手順より先に報告に回す。 |
+  | `NO_SNAPSHOT` | 3 | 複製が無く比較できない（TASK-117 以前に作られたワークツリー、引き渡し時点で config.yml が無かった場合等。後者では、後から作られた config.yml も検知されない）。その旨を報告に書き、先へ進む。 |
+  | `ERROR` | 2 | 標準エラーを確認し、環境不備として報告する。 |
+
+  並行して複数のタスクが走っている場合、1 件の改変はその間に引き渡された全タスクの `check` で `CHANGED` になる。どのタスクが原因かはこの結果だけでは分からない。報告には、`CHANGED` になったタスクをすべて並べる。
+
 - 報告に挙がった検証コマンドを 1 つ選び、自分で実行して結果が一致するか確かめる。
 - improvement-work 手順 6 のレビューパスの記録。`backlog task view TASK-<n> --plain` の notes に残った `### レビュー <巡数> 巡目` の見出しを読んで照合する。記録の書式と条件の正本は improvement-work/SKILL.md 手順 6 にあり、ここでは照合だけを行う。
 
@@ -370,6 +390,8 @@ git diff <デフォルトブランチ>...<作業ブランチ> --stat
     - `auto_merge_reviewed: true` の場合：次の起動で dispatch が main にマージし `Done` にする。
     - `auto_merge_reviewed: false`（既定）の場合：dispatch はマージしない。人間が作業ブランチから PR を作成し、レビュー・CI を経て main にマージした後、`backlog task edit TASK-<n> -s "Done"` で `Done` にする。対応するワークツリーの片付けも人間が行う。
   - main のプッシュ（`auto_merge_reviewed: true` でマージした場合のみ該当。dispatch は行わない）
+  - 手順 6 で共有 `.backlog/config.yml` が `CHANGED` だった場合の判断：差分を見て、意図しない改変なら `RESTORE_COMMAND` の値（`backlog-config-snapshot restore <task-id>`）を実行して引き渡し時点の内容へ戻す。上書き前の内容は `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml.before-restore.<UTC時刻>.<PID>` に退避される（`BACKUP=` の行に出る）。意図した変更なら `backlog-config-snapshot accept <task-id>` で複製を現在の内容に取り直す（取り直さないと、そのタスクの検知は `CHANGED` を返し続ける）。
+    - 複数のタスクが `CHANGED` になった場合、戻す基準には最も早く引き渡されたタスクの複製を使う。改変の後に引き渡されたタスクの複製は改変後の内容を写しており、そのタスクの `check` は `OK` になり、その `restore` は壊れた内容のままにする。迷ったら `<git-common-dir>/improvement-loop/backlog-config-snapshots/` の各複製を `diff` で見比べてから選ぶ。複製と `.before-restore` は自動では消えない。
   - `blocked:needs-decision` の判断：コメントに書かれた選択肢に答え、`backlog task edit TASK-<n> --remove-label 'blocked:needs-decision'` でループに戻す
 - 作業ブランチ名とワークツリーのパスの一覧（レビュー対象）。
 

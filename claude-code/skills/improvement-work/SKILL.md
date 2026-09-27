@@ -55,6 +55,10 @@ echo "HANDOFF_EXIT=$HANDOFF_EXIT"
 - `check-handoff` が非 0 で終了した場合（`$HANDOFF_EXIT` が 0 以外。作業ディレクトリが存在しない、`.backlog/` が見当たらない・シンボリックリンクになっていない等）は、dispatch の引き渡しが不完全なので、標準エラーの内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側（自分自身）が行う。
 - `check-handoff` はこの 3 条件のみを機械的に確認する。ワークツリー自体が `git worktree list` に登録されているか（worktree の管理情報が壊れているケース等）は範囲外なので、疑わしい場合は別途 `git worktree list` で確認すること。
 - `.backlog/` は git 管理外である（`.git/info/exclude` で除外され、コミットされない）。そのため通常の `git worktree add` では作業ディレクトリに `.backlog/` は作られない。dispatch が引き渡し時に `$WORKTREE_DIR/.backlog` をメインの作業木の `.backlog/` へのシンボリックリンクとして用意している。これにより `backlog task edit` 等はこのワークツリーから実行しても、メインの作業木・他のワークツリーと同じタスクデータを共有して読み書きする。このシンボリックリンクを削除したり、実体のディレクトリに置き換えたりしない。
+- **共有の `.backlog/config.yml` を書き換えない。** 上のシンボリックリンクがあるので、ワークツリー直下で `.backlog/config.yml` へ書き込む（`>`・`>>`・`cp`・`mv`・`sed -i` 等）と、メインの作業木と全ワークツリーが共有する config.yml がそのまま書き換わる。`backlog config set` も同じである。ワークツリー直下ではどちらも実行しない（TASK-117）。2026-09-27 に、実 CLI の挙動を確かめる即席のコマンドが `cd` の失敗で止まらずワークツリー直下で走り、共有 config.yml をフィクスチャの値で上書きした。その結果、全タスクのステータス変更が失敗してループが止まった。
+  - backlog CLI の挙動や config.yml の読み方を確かめたいときは、`mktemp -d` で作った一時ディレクトリを git リポジトリにし、その中に実ディレクトリの `.backlog` を置いて行う（シンボリックリンクにしない）。
+  - その一時ディレクトリへの `cd` は、失敗したら止まる形で書く（例: `cd "$TMP_REPO" || exit 1`）。`cd <dir>; <コマンド>` や、`cd` の成否を見ないループにしない。`cd` が失敗すると、後続のコマンドがカレントディレクトリ（ワークツリー直下）で走るためである。
+  - 仕組みでも見張っている。dispatch は引き渡し時点の config.yml を複製しておき、手順 8 のコミット前の確認と dispatch の完了検証で改変を検知する。ただし検知できるのは壊れた後である。規定を守ることが先である。
 - このディレクトリはメインの作業木（人間が普段作業する場所）とは別の独立したワークツリーである。メインの作業木のファイルには一切触れない。
 - **重要:** このハーネスは Bash 呼び出しごとにカレントディレクトリをリセットする。一度 `cd` しても次の Bash 呼び出しには引き継がれない。したがって、これ以降タスクが終わるまでの**すべての** Bash 呼び出しで、各コマンドの前に必ずこの作業ディレクトリへ `cd` してから続きを実行する（例: `cd "<作業ディレクトリ>" && git status --porcelain`、あるいは 1 回の呼び出し内に複数行の一連の作業をまとめて書く）。以降の手順の bash 例ではこの `cd` を省略して書くが、実行時には必ず補うこと。
 - 自分を担当者にする：`backlog task edit TASK-<n> -a @improvement-work --plain`。status は既に `In Progress` になっている。
@@ -281,9 +285,9 @@ echo "CHECK_EXIT=$CHECK_EXIT"
 - 重複を残す代わりに、手順 1 と手順 8 の探索ブロックが対象スクリプト名を除いて同一であることを `tests/test_skill_script_lookup.sh` が機械的に検査する。片方だけを変更すると `bash tests/run.sh` が FAIL する。探索順を変えるときは、両方の bash ブロックを同時に直すこと。
 - `forbidden_paths`/`allowed_paths` が両方空、またはキー自体が無い場合、このスクリプトは常に `RESULT: OK`・終了コード `0` で終わる。したがってこの手順を追加しても、両方未設定の既存タスクの実行フローは変化しない（そのまま `git commit` に進むだけである）。
 - `$CHECK_EXIT` の値で分岐する。
-  - `0`（`RESULT: OK`）：違反なし。そのまま `git commit` する。
+  - `0`（`RESULT: OK`）：違反なし。下の「共有の `.backlog/config.yml` が書き換わっていないか確かめる」を経て `git commit` する。
   - `1`（`RESULT: VIOLATION`）：コミットしない。次の二段で対応する。
-    1. **自己修正を試みる**：`CHECK_OUTPUT` の `VIOLATING_FILES:` に列挙されたファイルのうち、受入基準の達成に必要ない変更は `git restore --staged --worktree -- <file>` で取り消す。取り消し後、`git add` からやり直して同じチェックを再実行する。再チェックが `RESULT: OK` になれば、そのまま `git commit` する。
+    1. **自己修正を試みる**：`CHECK_OUTPUT` の `VIOLATING_FILES:` に列挙されたファイルのうち、受入基準の達成に必要ない変更は `git restore --staged --worktree -- <file>` で取り消す。取り消し後、`git add` からやり直して同じチェックを再実行する。再チェックが `RESULT: OK` になれば、`0` の場合と同じく下の確認を経て `git commit` する。
     2. **自己修正できない場合**：違反ファイルへの変更が受入基準の達成に不可欠で取り消せない場合（＝受入基準の範囲そのものが `forbidden_paths`/`allowed_paths` と矛盾している）は、手順 3「中断する条件」の「受入基準どうしが矛盾している」に準じて扱う。コミットせず、手順 3 と同じ差し戻し手順を実行する。
        ```bash
        backlog task edit TASK-<n> \
@@ -294,6 +298,45 @@ echo "CHECK_EXIT=$CHECK_EXIT"
        ```
        報告に `blocked` である旨と違反内容を書いて終える。
   - `2`（`RESULT: ERROR`、または上記の探索でスクリプトの実体が見つからず `CHECK_EXIT=2` とした場合）：スクリプトが対象リポジトリを認識できない、実体が見つからない等の環境不備。コミットしない。これは製品判断ではなく環境不備なので `blocked:needs-decision` は付けず、手順 1 の `check-handoff` が非 0 終了したときと同じ扱い（`CHECK_OUTPUT` の内容をそのまま報告して止まる。停止の判断・backlog タスクの編集はこのスクリプトの責務外であり、呼び出し側である自分が行う）にする。
+
+### 共有の `.backlog/config.yml` が書き換わっていないか確かめる
+
+`git commit` の前に（上の `check-forbidden-allowed-paths` の後に続けて）、共有の `.backlog/config.yml` が引き渡し時点から変わっていないかを確かめる（TASK-117）。`.backlog/` は git 管理外なので、ここでの改変は `git diff` にも `check-forbidden-allowed-paths` にも現れない。
+
+```bash
+MAIN_WORKTREE_ROOT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+SNAPSHOT_SCRIPT=""
+for candidate in \
+  "claude-code/skills/improvement-dispatch/scripts/backlog-config-snapshot" \
+  "$MAIN_WORKTREE_ROOT/.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot"; do
+  if [ -x "$candidate" ]; then
+    SNAPSHOT_SCRIPT="$candidate"
+    break
+  fi
+done
+TASK_SLUG="$(git rev-parse --abbrev-ref HEAD | sed 's#^improvement/##')"
+if [ -n "$SNAPSHOT_SCRIPT" ]; then
+  "$SNAPSHOT_SCRIPT" check "$TASK_SLUG"
+  SNAPSHOT_EXIT=$?
+else
+  echo "RESULT: ERROR (backlog-config-snapshot の実体が見つからない)"
+  SNAPSHOT_EXIT=2
+fi
+echo "SNAPSHOT_EXIT=$SNAPSHOT_EXIT"
+```
+
+- 参照パスの 2 候補探索は手順 5 の `touch-occupancy` と同じ形（`MAIN_WORKTREE_ROOT` を先に求める）にしている。`tests/test_skill_script_lookup.sh` が一致を検査するのは手順 1 と手順 8 冒頭の 2 ブロックだけである。
+- このスクリプトは読むだけで、何も書き込まない。比較対象はワークツリーの `.backlog` ではなく、メインの作業木の `.backlog/config.yml` である。複製は dispatch の `create-worktree` が引き渡し時に `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml` へ保存している。
+- `$SNAPSHOT_EXIT` の値で分岐する。
+  - `0`（`RESULT: OK`）：変わっていない。そのまま進む。
+  - `1`（`RESULT: CHANGED`）：共有 config.yml が引き渡し時点から変わっている。標準エラーに差分が、標準出力に `RESTORE_COMMAND=` が出る。**自分で戻さない**（`restore` を実行しない、手で書き戻さない）。変更が人間の意図的な設定変更かどうかを区別できないためである。次の 2 つを行い、コミットと手順 9 はそのまま進める（コミット内容は config.yml と無関係なので止める理由にならない。ただし config.yml の `statuses` が壊れていると手順 9 のステータス変更が失敗しうる。失敗したらその旨も報告に書く）。
+    1. `backlog task edit TASK-<n> --comment '共有 .backlog/config.yml が引き渡し時点から変わっている。差分: <差分の要約>。戻すなら人間が次を実行する: <RESTORE_COMMAND の値>' --comment-author @improvement-work --plain` でタスクに残す。
+    2. 手順 9 の報告の「人間の判断が必要な未解決点」に、差分の要約と `RESTORE_COMMAND` の値を書く。自分の作業中のコマンドが原因だと分かっている場合は、それも書く。
+  - `3`（`RESULT: NO_SNAPSHOT`）：複製が無く比較できない（この仕組みの導入前に作られたワークツリー、引き渡し時点で config.yml が無かった場合等。後者では、後から作られた config.yml も検知されない）。止めずに進み、手順 9 の報告に「共有 config.yml の改変検知は複製が無く実施できなかった」と書く。
+  - `2`（`RESULT: ERROR`）：環境不備。止めずに進み、出力をそのまま手順 9 の報告に書く。この確認は検知のための補助であり、`check-forbidden-allowed-paths` のようなコミットの門番ではないためである。
+
+### コミットの作法
+
 - 作業ディレクトリ（ワークツリー）内でコミットする。このディレクトリのブランチはこのタスクのために作られている。メインの作業木には一切コミットしない。
 - コミットメッセージはリポジトリの既存の書式に合わせる。ハーネスがトレーラを要求している場合はそれに従う。
 - `push` しない。`merge` しない。PR を作らない。リモートに触らない。`git worktree remove` もしない。ワークツリーの片付けは dispatch がマージ後に行う。
@@ -324,6 +367,7 @@ backlog task edit TASK-<n> -s "In Review" --plain
 7. 残るリスク。
 8. 範囲外で見つけた改善候補。
 9. 人間の判断が必要な未解決点（あれば `blocked` と明示）。
+10. 手順 8 の共有 `.backlog/config.yml` の確認結果（`OK` / `CHANGED` / `NO_SNAPSHOT` / `ERROR`）。`CHANGED` なら差分の要約と `RESTORE_COMMAND` の値。
 
 言語は引き渡し時の会話言語に合わせる。既存タスクの記述言語がそれと異なる場合はタスクの言語に合わせる。
 
@@ -336,4 +380,5 @@ backlog task edit TASK-<n> -s "In Review" --plain
 - 人間に質問して待たない。答えを得られないので、解決するか差し戻すかの二択にする。
 - `docs/plans/*.md` のような計画ファイルを repo に残さない。計画は backlog タスクに記録する。
 - `.backlog/` 配下の md を直接編集しない。すべて `backlog` CLI 経由で行う。
+- ワークツリー直下で `.backlog/config.yml` を書き換えない。`backlog config set` を実行しない。CLI の挙動の確認は一時リポジトリの中で行い、その `cd` は失敗したら止まる形（`cd <dir> || exit 1`）にする（手順 1）。
 - 検証していない結果を報告に書かない。実行していないなら実行していないと書く。

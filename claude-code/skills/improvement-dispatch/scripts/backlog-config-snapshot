@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# 共有の .backlog/config.yml を、引き渡し時点の複製と突き合わせて改変を検知し、
+# 必要なら複製の内容へ戻す（TASK-117）。
+#
+# 背景: ワークツリーの .backlog はメインの作業木の .backlog へのシンボリックリンク
+# であり、ワークツリー直下で .backlog/config.yml へ書き込むと本体と全ワークツリーが
+# 共有する config.yml が書き換わる。.backlog は git 管理外なので、壊れると元の内容の
+# 記録がどこにも無い。そこで引き渡し時点の内容を git の管理領域の中に複製しておく。
+#
+# 使い方: backlog-config-snapshot <save|check|restore|accept> <task-id>
+#   task-id  task-<番号>-<英小文字のスラッグ>（create-worktree に渡すものと同じ）
+#
+#   save     共有 config.yml を複製として保存する。create-worktree がワークツリーを
+#            作る（再利用する）たびに呼ぶ。既に複製があり内容が違う場合は上書きしない
+#            （RESULT: KEPT_EXISTING）。再引き渡しは前のサブエージェントが止まった後に
+#            起きるので、その時点の config.yml が壊れている可能性があり、上書きすると
+#            正常な複製を失って以後の check が改変を見逃すためである。
+#   check    共有 config.yml が複製と一致するかを確かめる。書き込みは一切しない。
+#            improvement-work 手順8（コミット前）と improvement-dispatch 手順6
+#            （完了検証）が呼ぶ。差分は標準エラーへ出す。
+#   restore  共有 config.yml を複製の内容へ戻す。上書き前の内容は
+#            <複製>.before-restore.<UTC時刻>.<PID> に退避する。人間が判断したうえで実行する経路であり、
+#            dispatch・improvement-work は自分から呼ばない（config.yml の変更が
+#            人間の意図的な設定変更である可能性を機械的に区別できないため）。
+#   accept   現在の共有 config.yml を正として複製を上書きする。check の CHANGED が
+#            人間の意図した変更だった場合に、人間が実行する経路である。
+#
+# 対象の決め方:
+#   共有 config.yml = <メインの作業木>/.backlog/config.yml。メインの作業木は
+#     `git worktree list --porcelain` の1行目から取る。ワークツリーの .backlog を
+#     経由しないので、リンクが実ディレクトリに置き換わっていても共有の実体を見る。
+#   複製 = <git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml。
+#     .git の中は git の追跡対象外なので .git/info/exclude を変えずに済み、
+#     ワークツリーを片付けた後も残り、.backlog 経由の書き込みも届かない。
+#     複製と .before-restore は自動では消さない（1ファイル数百バイト程度）。
+#
+# 出力: 標準出力に CONFIG=・SNAPSHOT= の行と、最終行に RESULT を出す。
+#   save:    RESULT: SAVED（exit 0。既に同じ内容の複製があった場合も含む） /
+#            RESULT: KEPT_EXISTING（内容の違う既存の複製を残した。exit 0。差分は標準エラー） /
+#            RESULT: NO_CONFIG（共有 config.yml が無く、何も保存しなかった。exit 0）
+#   accept:  RESULT: SAVED（exit 0） / RESULT: NO_CONFIG（exit 0）
+#   check:   RESULT: OK（一致。exit 0） / RESULT: CHANGED（不一致、または config.yml が
+#            消えている。exit 1。RESTORE_COMMAND= に戻すためのコマンドを出す） /
+#            RESULT: NO_SNAPSHOT（複製が無く比較できない。exit 3）
+#   restore: RESULT: RESTORED（exit 0。BACKUP= に退避先） / RESULT: OK（既に一致して
+#            おり何もしなかった。exit 0） / RESULT: NO_SNAPSHOT（exit 3）
+#   共通:    RESULT: ERROR（引数不正・対象リポジトリでない等。exit 2。詳細は標準エラー）
+#
+# 責務外: backlog タスクの状態変更、検知結果に基づく判断（報告・差し戻し）。
+
+set -uo pipefail
+
+err() {
+  printf 'エラー: %s\n' "$*" >&2
+}
+
+# 処理は正常に終えたが、人間の判断が要ることを知らせる。err() と接頭辞を分けるのは、
+# 失敗と読み違えられないためである。
+warn() {
+  printf '警告: %s\n' "$*" >&2
+}
+
+result_error() {
+  err "$1"
+  printf 'RESULT: ERROR\n'
+  exit 2
+}
+
+usage="使い方: $(basename "$0") <save|check|restore|accept> <task-id>"
+
+if [ "$#" -ne 2 ]; then
+  result_error "$usage"
+fi
+
+MODE="$1"
+TASK_ID="$2"
+
+case "$MODE" in
+  save|check|restore|accept) : ;;
+  *) result_error "不明なサブコマンド: $MODE ($usage)" ;;
+esac
+
+if ! [[ "$TASK_ID" =~ ^task-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+  result_error "task-id の形式が不正: $TASK_ID (期待する形式: task-<番号>-<英小文字のスラッグ>)"
+fi
+
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  result_error "カレントディレクトリが git リポジトリの中ではない"
+fi
+
+MAIN_WORKTREE_ROOT="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+if [ -z "$MAIN_WORKTREE_ROOT" ] || [ ! -d "$MAIN_WORKTREE_ROOT" ]; then
+  result_error "メインの作業木を特定できない（git worktree list --porcelain の1行目: ${MAIN_WORKTREE_ROOT:-空}）"
+fi
+
+# git-common-dir は cwd 相対のパスを返すことがあるため、絶対パスへ正規化する。
+GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null)"
+if [ -z "$GIT_COMMON_DIR" ]; then
+  result_error "git-common-dir を取得できない"
+fi
+case "$GIT_COMMON_DIR" in
+  /*) : ;;
+  *) GIT_COMMON_DIR="$(pwd)/$GIT_COMMON_DIR" ;;
+esac
+
+CONFIG_FILE="$MAIN_WORKTREE_ROOT/.backlog/config.yml"
+SNAPSHOT_DIR="$GIT_COMMON_DIR/improvement-loop/backlog-config-snapshots"
+SNAPSHOT_FILE="$SNAPSHOT_DIR/$TASK_ID.yml"
+
+printf 'CONFIG=%s\n' "$CONFIG_FILE"
+printf 'SNAPSHOT=%s\n' "$SNAPSHOT_FILE"
+
+case "$MODE" in
+  save|accept)
+    if [ ! -f "$CONFIG_FILE" ]; then
+      printf 'RESULT: NO_CONFIG\n'
+      exit 0
+    fi
+    if [ "$MODE" = "save" ] && [ -f "$SNAPSHOT_FILE" ]; then
+      if cmp -s "$SNAPSHOT_FILE" "$CONFIG_FILE"; then
+        printf 'RESULT: SAVED\n'
+        exit 0
+      fi
+      warn "既存の複製と共有の config.yml の内容が違うため、複製を上書きしなかった（左: 既存の複製、右: 現在の内容）:"
+      diff "$SNAPSHOT_FILE" "$CONFIG_FILE" >&2
+      warn "意図した変更なら '$(basename "$0") accept $TASK_ID'、意図しない改変なら '$(basename "$0") restore $TASK_ID' を人間が実行する。"
+      printf 'RESULT: KEPT_EXISTING\n'
+      exit 0
+    fi
+    mkdir -p "$SNAPSHOT_DIR" || result_error "複製の保存先を作れない: $SNAPSHOT_DIR"
+    # 途中まで書いた複製が残らないよう、一時ファイルに書いてから置き換える。
+    tmp_file="$(mktemp "$SNAPSHOT_DIR/.$TASK_ID.XXXXXX")" || result_error "一時ファイルを作れない: $SNAPSHOT_DIR"
+    if ! cp "$CONFIG_FILE" "$tmp_file" || ! mv "$tmp_file" "$SNAPSHOT_FILE"; then
+      rm -f "$tmp_file"
+      result_error "複製の保存に失敗した: $SNAPSHOT_FILE"
+    fi
+    printf 'RESULT: SAVED\n'
+    exit 0
+    ;;
+  check)
+    if [ ! -f "$SNAPSHOT_FILE" ]; then
+      err "引き渡し時点の複製が無いため比較できない（この仕組みの導入前に作られたワークツリー等）: $SNAPSHOT_FILE"
+      printf 'RESULT: NO_SNAPSHOT\n'
+      exit 3
+    fi
+    if [ -f "$CONFIG_FILE" ] && cmp -s "$SNAPSHOT_FILE" "$CONFIG_FILE"; then
+      printf 'RESULT: OK\n'
+      exit 0
+    fi
+    if [ -f "$CONFIG_FILE" ]; then
+      err "共有の config.yml が引き渡し時点の複製と一致しない（左: 複製、右: 現在の内容）:"
+      diff "$SNAPSHOT_FILE" "$CONFIG_FILE" >&2
+    else
+      err "共有の config.yml が消えている: $CONFIG_FILE"
+    fi
+    # 戻すコマンドはどのディレクトリからでもそのまま貼って実行できる形で出す。
+    # メインの作業木の .claude/skills 経由の実体を優先する。自分がタスクのワークツリー内の
+    # 実体として呼ばれていると、そのパスはマージ後のワークツリー片付けで消えるためである。
+    self_path="$MAIN_WORKTREE_ROOT/.claude/skills/improvement-dispatch/scripts/backlog-config-snapshot"
+    if [ ! -x "$self_path" ]; then
+      self_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    fi
+    printf 'RESTORE_COMMAND=cd %q && %q restore %q\n' "$MAIN_WORKTREE_ROOT" "$self_path" "$TASK_ID"
+    printf 'RESULT: CHANGED\n'
+    exit 1
+    ;;
+  restore)
+    if [ ! -f "$SNAPSHOT_FILE" ]; then
+      err "戻す元になる複製が無い: $SNAPSHOT_FILE"
+      printf 'RESULT: NO_SNAPSHOT\n'
+      exit 3
+    fi
+    if [ -f "$CONFIG_FILE" ] && cmp -s "$SNAPSHOT_FILE" "$CONFIG_FILE"; then
+      printf 'RESULT: OK\n'
+      exit 0
+    fi
+    # restore を繰り返しても前の退避を消さないよう、時刻とプロセス番号で名前を分ける。
+    BACKUP_FILE="$SNAPSHOT_FILE.before-restore.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    if [ -f "$CONFIG_FILE" ]; then
+      cp "$CONFIG_FILE" "$BACKUP_FILE" || result_error "上書き前の内容を退避できない: $BACKUP_FILE"
+      # mv や cp -p で置き換えず中身だけを書き戻す。共有物である config.yml の
+      # inode・パーミッションを変えないためである。
+      cat "$SNAPSHOT_FILE" > "$CONFIG_FILE" || result_error "config.yml への書き戻しに失敗した: $CONFIG_FILE"
+      printf 'BACKUP=%s\n' "$BACKUP_FILE"
+    else
+      mkdir -p "$(dirname "$CONFIG_FILE")" || result_error "書き戻し先を作れない: $(dirname "$CONFIG_FILE")"
+      cp "$SNAPSHOT_FILE" "$CONFIG_FILE" || result_error "config.yml への書き戻しに失敗した: $CONFIG_FILE"
+    fi
+    printf 'RESULT: RESTORED\n'
+    exit 0
+    ;;
+esac

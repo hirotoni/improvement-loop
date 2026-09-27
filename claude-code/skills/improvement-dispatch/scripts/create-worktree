@@ -366,6 +366,28 @@ fi
 # ワークツリー内の git status が常に汚れて見える。スラッシュ無しは両方にマッチする。
 grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE_FILE"
 
+# ---- 共有 config.yml の引き渡し時点の複製 ----
+# 上のリンク越しに共有の .backlog/config.yml が書き換えられた場合に、検知と復元の
+# 基準にする（TASK-117）。保存先・検知・復元は backlog-config-snapshot に任せる。
+# 複製に失敗してもワークツリー作成は止めない（検知ができなくなるだけで、引き渡し自体の
+# 妥当性には影響しない）。標準出力は出力契約専用なので、結果は標準エラーへ出す。
+# 標準エラーへ回す行には接頭辞を付け、正常に保存できたときは何も出さない。スクリプトの
+# 出力（RESULT: 行など）が create-worktree 自身の RESULT: 行と紛れないようにするためである。
+snapshot_ok=1
+if ! snapshot_output="$(cd "$REPO_ROOT" && "$SCRIPT_DIR/backlog-config-snapshot" save "$TASK_ID" 2>&1)"; then
+  snapshot_ok=0
+  warn "共有 .backlog/config.yml の複製を保存できなかった（このタスクの既存の複製が無ければ、完了検証での改変検知が NO_SNAPSHOT になる）:"
+fi
+if [ "$snapshot_ok" -eq 0 ] || ! printf '%s\n' "$snapshot_output" | grep -Fxq 'RESULT: SAVED'; then
+  printf '%s\n' "$snapshot_output" | sed 's/^/[backlog-config-snapshot] /' >&2
+fi
+# 既存の複製を残した（再引き渡しの時点で config.yml が引き渡し時点から変わっている）ことは
+# dispatch が判断に使うので、診断行として標準出力にも出す（下の WORKTREE_DIR/BRANCH より前）。
+SNAPSHOT_STATUS_LINES=()
+if printf '%s\n' "$snapshot_output" | grep -Fxq 'RESULT: KEPT_EXISTING'; then
+  SNAPSHOT_STATUS_LINES+=("BACKLOG_CONFIG_SNAPSHOT=KEPT_EXISTING")
+fi
+
 # ---- 占有記録 ----
 # このワークツリーが「いつ・どのタスクに割り当てられたか」を記録する。新規作成・再利用の
 # どちらの経路でも通るため、実行のたびに丸ごと上書きする（追記しない）。書き込み自体は
@@ -438,6 +460,12 @@ fi
 # 成立しうるので、RESULT: の値には載せない。
 if [ "${#STALE_EXCLUDE_LINES[@]}" -gt 0 ]; then
   printf '%s\n' "${STALE_EXCLUDE_LINES[@]}"
+fi
+
+# 共有 config.yml の複製を残したことの報告。引き渡しを止める理由にはならないので
+# RESULT: の値には載せない（STALE_EXCLUDE と同じ扱い）。
+if [ "${#SNAPSHOT_STATUS_LINES[@]}" -gt 0 ]; then
+  printf '%s\n' "${SNAPSHOT_STATUS_LINES[@]}"
 fi
 
 echo "WORKTREE_DIR=$WORKTREE_DIR"
