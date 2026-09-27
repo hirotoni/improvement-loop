@@ -1525,12 +1525,26 @@ else
   fail "8d: default_assignee が重複している（${custom_assignee_count} 件）"
 fi
 
-# ---- 8e. 新規セットアップが書いた default_assignee が backlog config set の往復に耐える（TASK-90 AC#1）----
-# backlog CLI は default_assignee というキーを知らないまま、backlog config set のたびに
-# config.yml を丸ごと再シリアライズする。インライン配列で書いてあると角括弧ごと値に
-# 取り込まれて "[@improvement-loop-bot]" という別のアサイニー名に変わる。
-# ここでは setup が実際に書いた値に対して、その再シリアライズを1回起こして確かめる。
+# ---- 8e. 新規セットアップが書いた default_assignee が backlog config set の往復に耐える（TASK-90 AC#1 / TASK-100 AC#1）----
+# backlog config set はそのたびに config.yml を丸ごと再シリアライズする。ここでは setup が
+# 実際に書いた値に対して、その再シリアライズを1回起こして確かめる。
+# 期待する書式は CLI のバージョンで違う（setup-improvement-loop の ensure_default_assignee の
+# コメント参照）。
+# - defaultAssignee キーを知らない CLI（1.48.0）: インライン配列で書いてあると角括弧ごと値に
+#   取り込まれて "[@improvement-loop-bot]" に壊れる。正準形スカラーのまま残ることを見る。
+# - キーを認識する CLI（1.53.0）: CLI 自身がインライン配列へ書き直す。書式ではなく、CLI が
+#   読む値が @improvement-loop-bot であることを見る。
+# どちらでも、往復後の config.yml への setup の再実行が書き換えも [warn] も無くスキップに
+# なること（冪等）を直接見る。
 # FIXTURE_FRESH は書き換えないという契約なので、複製に対して実行する。
+# 判定は終了コードで行う。1.53.0 は config.yml が無いディレクトリでも exit 0 を返すので、
+# 必ず config.yml のある FIXTURE_FRESH_REPO で問い合わせる（setup 側の判定と同じ前提）。
+if (cd "$FIXTURE_FRESH_REPO" && backlog config get defaultAssignee) >/dev/null 2>&1; then
+  BACKLOG_KNOWS_DEFAULT_ASSIGNEE=true
+else
+  BACKLOG_KNOWS_DEFAULT_ASSIGNEE=false
+fi
+
 TMP_REPO_ROUNDTRIP="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_ROUNDTRIP"
 cp -a "$FIXTURE_FRESH_REPO/." "$TMP_REPO_ROUNDTRIP/"
@@ -1539,18 +1553,44 @@ roundtrip_before="$(grep -m1 '^default_assignee:' "$roundtrip_config" || true)"
 (cd "$TMP_REPO_ROUNDTRIP" && backlog config set autoCommit false) >/dev/null 2>&1
 roundtrip_after="$(grep -m1 '^default_assignee:' "$roundtrip_config" || true)"
 
-if [ "$roundtrip_after" = "$roundtrip_before" ]; then
-  pass "8e(AC#1): 新規セットアップが書いた default_assignee が backlog config set の再シリアライズで変化しない（${roundtrip_after}）"
+if [ "$BACKLOG_KNOWS_DEFAULT_ASSIGNEE" = true ]; then
+  roundtrip_cli_value="$(cd "$TMP_REPO_ROUNDTRIP" && backlog config get defaultAssignee 2>/dev/null || true)"
+  if [ "$roundtrip_cli_value" = "@improvement-loop-bot" ]; then
+    pass "8e(AC#1): defaultAssignee を認識する backlog CLI で、往復後も CLI が @improvement-loop-bot と読む（${roundtrip_after}）"
+  else
+    fail "8e(AC#1): defaultAssignee を認識する backlog CLI で、往復後の値が @improvement-loop-bot でない（CLI の読み: '${roundtrip_cli_value}'、行: ${roundtrip_after}）"
+  fi
 else
-  fail "8e(AC#1): 新規セットアップが書いた default_assignee が backlog config set で変化した（${roundtrip_before} → ${roundtrip_after}）"
+  if [ "$roundtrip_after" = "$roundtrip_before" ]; then
+    pass "8e(AC#1): 新規セットアップが書いた default_assignee が backlog config set の再シリアライズで変化しない（${roundtrip_after}）"
+  else
+    fail "8e(AC#1): 新規セットアップが書いた default_assignee が backlog config set で変化した（${roundtrip_before} → ${roundtrip_after}）"
+  fi
+  # 「変化しない」だけでなく、値そのものが壊れた形になっていないことも直接見る。
+  # 上のアサーションは、前後がどちらも壊れた形であれば通ってしまう。
+  if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$roundtrip_config"; then
+    pass "8e(AC#1): 往復後の default_assignee が正準形のまま残っている"
+  else
+    fail "8e(AC#1): 往復後の default_assignee が正準形でない: $roundtrip_after"
+  fi
 fi
 
-# 「変化しない」だけでなく、値そのものが壊れた形になっていないことも直接見る。
-# 上のアサーションは、前後がどちらも壊れた形であれば通ってしまう。
-if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$roundtrip_config"; then
-  pass "8e(AC#1): 往復後の default_assignee が正準形のまま残っている"
+roundtrip_rerun_output="$("$SETUP_SCRIPT" "$TMP_REPO_ROUNDTRIP" 2>&1)"
+roundtrip_rerun_exit=$?
+roundtrip_rerun_line="$(grep -m1 '^default_assignee:' "$roundtrip_config" || true)"
+if [ "$roundtrip_rerun_exit" -eq 0 ] \
+  && grep -Fq 'default_assignee は既に設定されている' <<<"$roundtrip_rerun_output" \
+  && [ "$roundtrip_rerun_line" = "$roundtrip_after" ]; then
+  pass "8e(AC#1): 往復後の config.yml への再実行で default_assignee は書き換えられずスキップと報告される（${roundtrip_rerun_line}）"
 else
-  fail "8e(AC#1): 往復後の default_assignee が正準形でない: $roundtrip_after"
+  fail "8e(AC#1): 往復後の config.yml への再実行が冪等でない（exit ${roundtrip_rerun_exit}、${roundtrip_after} → ${roundtrip_rerun_line}）:
+$roundtrip_rerun_output"
+fi
+if grep -F '[warn]' <<<"$roundtrip_rerun_output" | grep -Fq 'default_assignee'; then
+  fail "8e(AC#1): 往復後の健全な default_assignee に対して [warn] が出た:
+$roundtrip_rerun_output"
+else
+  pass "8e(AC#1): 往復後の健全な default_assignee に対して [warn] が出ない"
 fi
 
 # ---- 8f. backlog CLI に壊された値が再実行で収束し、無音のスキップにならない（TASK-90 AC#2）----
@@ -1634,10 +1674,13 @@ else
 $broken_rerun_output"
 fi
 
-# ---- 8g. 以前の setup が書いたインライン配列形式も収束対象である（TASK-90 AC#2）----
+# ---- 8g. インライン配列形式の扱いは CLI が defaultAssignee を認識するかで分かれる（TASK-90 AC#2 / TASK-100 AC#1）----
 # 8f の "[@improvement-loop-bot]" は既に壊れた後の形だが、まだ backlog config set を
 # 一度も通っていない導入済みリポジトリは ["@improvement-loop-bot"] のまま残っている。
-# これは次の backlog config set で壊れる予約済みの状態なので、同じく収束させる。
+# キーを知らない CLI（1.48.0）ではこれは次の backlog config set で壊れる予約済みの状態なので、
+# 同じく収束させる。キーを認識する CLI（1.53.0）では CLI 自身が書く正規の形なので、書き換えも
+# [warn] もせずスキップする。キーを知らない CLI の経路は、実行環境の CLI が 1.53.0 でも
+# 8j で模擬して検証する。
 TMP_REPO_LEGACY_ASSIGNEE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_LEGACY_ASSIGNEE"
 (cd "$TMP_REPO_LEGACY_ASSIGNEE" && git init -q)
@@ -1657,16 +1700,33 @@ else
   fail "8g: 旧インライン配列形式の config.yml に対する実行が失敗した（exit ${legacy_assignee_exit}）:
 $legacy_assignee_output"
 fi
-if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$legacy_assignee_config"; then
-  pass "8g(AC#2): 旧インライン配列形式 [\"@improvement-loop-bot\"] が正準形へ収束する"
-else
-  fail "8g(AC#2): 旧インライン配列形式が収束しなかった: $(grep -m1 '^default_assignee:' "$legacy_assignee_config")"
-fi
-if grep -F '[warn]' <<<"$legacy_assignee_output" | grep -Fq 'default_assignee'; then
-  pass "8g(AC#2): 旧インライン配列形式も [warn] として人間に読める形で報告される"
-else
-  fail "8g(AC#2): 旧インライン配列形式が [warn] として報告されなかった:
+if [ "$BACKLOG_KNOWS_DEFAULT_ASSIGNEE" = true ]; then
+  if grep -Fxq 'default_assignee: ["@improvement-loop-bot"]' "$legacy_assignee_config"; then
+    pass "8g(AC#1): defaultAssignee を認識する backlog CLI では、インライン配列形式を書き換えない"
+  else
+    fail "8g(AC#1): defaultAssignee を認識する backlog CLI で、インライン配列形式が書き換えられた: $(grep -m1 '^default_assignee:' "$legacy_assignee_config")"
+  fi
+  if grep -F '[warn]' <<<"$legacy_assignee_output" | grep -Fq 'default_assignee'; then
+    fail "8g(AC#1): defaultAssignee を認識する backlog CLI で、インライン配列形式に [warn] が出た:
 $legacy_assignee_output"
+  elif grep -Fq 'default_assignee は既に設定されている' <<<"$legacy_assignee_output"; then
+    pass "8g(AC#1): defaultAssignee を認識する backlog CLI では、インライン配列形式が [warn] 無しでスキップと報告される"
+  else
+    fail "8g(AC#1): defaultAssignee を認識する backlog CLI で、インライン配列形式のスキップ報告が出なかった:
+$legacy_assignee_output"
+  fi
+else
+  if grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$legacy_assignee_config"; then
+    pass "8g(AC#2): 旧インライン配列形式 [\"@improvement-loop-bot\"] が正準形へ収束する"
+  else
+    fail "8g(AC#2): 旧インライン配列形式が収束しなかった: $(grep -m1 '^default_assignee:' "$legacy_assignee_config")"
+  fi
+  if grep -F '[warn]' <<<"$legacy_assignee_output" | grep -Fq 'default_assignee'; then
+    pass "8g(AC#2): 旧インライン配列形式も [warn] として人間に読める形で報告される"
+  else
+    fail "8g(AC#2): 旧インライン配列形式が [warn] として報告されなかった:
+$legacy_assignee_output"
+  fi
 fi
 
 # ---- 8h. ユーザー独自の値は壊れた形であっても収束対象にしない（TASK-90 AC#3）----
@@ -1701,6 +1761,165 @@ if grep -Fq '@improvement-loop-bot' "$custom_broken_config"; then
   fail "8h(AC#3): ユーザー独自値の config.yml に @improvement-loop-bot が書き込まれた: $(grep -m1 '^default_assignee:' "$custom_broken_config")"
 else
   pass "8h(AC#3): ユーザー独自値の config.yml に既定アサイニーが追記されない"
+fi
+
+# ---- 8i. 壊れた値を 1.53.0 がさらに往復させた形も収束対象である（TASK-100 AC#2）----
+# defaultAssignee を認識する CLI は、壊れた "[@improvement-loop-bot]" を次の backlog config set で
+# ["[@improvement-loop-bot]"] に書き直す。角括弧と引用符を1段剥がしただけでは "[@improvement-loop-bot]"
+# が残り、既定値の破損なのにユーザー値として素通りしてしまう。どちらの CLI でも収束することを見る。
+TMP_REPO_DOUBLE_BROKEN="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_DOUBLE_BROKEN"
+(cd "$TMP_REPO_DOUBLE_BROKEN" && git init -q)
+write_settled_backlog_config "$TMP_REPO_DOUBLE_BROKEN/.backlog/config.yml" "double-broken-test"
+double_broken_config="$TMP_REPO_DOUBLE_BROKEN/.backlog/config.yml"
+double_broken_tmp="$(mktemp)"
+register_tmp_cleanup "$double_broken_tmp"
+sed 's/^default_assignee:.*$/default_assignee: ["[@improvement-loop-bot]"]/' "$double_broken_config" > "$double_broken_tmp"
+cat "$double_broken_tmp" > "$double_broken_config"
+
+double_broken_output="$("$SETUP_SCRIPT" "$TMP_REPO_DOUBLE_BROKEN" 2>&1)"
+double_broken_exit=$?
+if [ "$double_broken_exit" -eq 0 ] && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$double_broken_config"; then
+  pass "8i(AC#2): 壊れた値を往復させた [\"[@improvement-loop-bot]\"] が正準形へ収束する"
+else
+  fail "8i(AC#2): [\"[@improvement-loop-bot]\"] が収束しなかった（exit ${double_broken_exit}、$(grep -m1 '^default_assignee:' "$double_broken_config")）:
+$double_broken_output"
+fi
+if grep -F '[warn]' <<<"$double_broken_output" | grep -Fq '既に壊れている'; then
+  pass "8i(AC#2): 既に壊れた値として [warn] で報告される"
+else
+  fail "8i(AC#2): 既に壊れた値としての [warn] が出なかった:
+$double_broken_output"
+fi
+
+# ---- 8j. defaultAssignee を知らない backlog CLI（1.48.0 相当）の経路（TASK-100 AC#1・AC#2）----
+# 実行環境の CLI が defaultAssignee を認識する場合でも、キーを知らない CLI の経路を検証できるよう、
+# `backlog config get/set defaultAssignee` だけを "Unknown config key" で失敗させ、それ以外は本物へ
+# 委ねるシムを PATH の先頭に置く。1.48.0 の再シリアライズの壊し方そのものは模擬しない
+# （それは 8e で、実行環境の CLI が 1.48.0 のときに実機で検証される）。ここで見るのは setup 側の分岐である。
+# シムは defaultAssignee 以外の backlog config set を本物へ通すので、実行環境の CLI が 1.53.0 なら
+# その時点で default_assignee が配列形式へ書き直され、1.48.0 の前提が崩れる。各前状態を
+# write_settled_backlog_config（remote_operations: false 済み）で作り、setup が default_assignee の
+# 判定より前に backlog config set を実行しないようにしているのはそのためである。
+REAL_BACKLOG_BIN="$(command -v backlog)"
+LEGACY_BACKLOG_SHIM_DIR="$(mktemp -d)"
+register_tmp_cleanup "$LEGACY_BACKLOG_SHIM_DIR"
+cat > "$LEGACY_BACKLOG_SHIM_DIR/backlog" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = config ] && { [ "\${2:-}" = get ] || [ "\${2:-}" = set ]; } && [ "\${3:-}" = defaultAssignee ]; then
+  echo "Unknown config key: defaultAssignee" >&2
+  exit 1
+fi
+exec $(printf '%q' "$REAL_BACKLOG_BIN") "\$@"
+SHIM
+chmod +x "$LEGACY_BACKLOG_SHIM_DIR/backlog"
+
+# 8j-1. インライン配列は壊れる予約として [warn] のうえ正準形へ収束する（AC#2 の保護が 1.53.0 環境でも検証される）。
+TMP_REPO_SHIM_LEGACY="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_SHIM_LEGACY"
+(cd "$TMP_REPO_SHIM_LEGACY" && git init -q)
+write_settled_backlog_config "$TMP_REPO_SHIM_LEGACY/.backlog/config.yml" "shim-legacy-test"
+shim_legacy_config="$TMP_REPO_SHIM_LEGACY/.backlog/config.yml"
+shim_legacy_tmp="$(mktemp)"
+register_tmp_cleanup "$shim_legacy_tmp"
+sed 's/^default_assignee:.*$/default_assignee: ["@improvement-loop-bot"]/' "$shim_legacy_config" > "$shim_legacy_tmp"
+cat "$shim_legacy_tmp" > "$shim_legacy_config"
+shim_legacy_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_LEGACY" 2>&1)"
+shim_legacy_exit=$?
+if [ "$shim_legacy_exit" -eq 0 ] && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$shim_legacy_config"; then
+  pass "8j(AC#2): defaultAssignee を知らない CLI では、インライン配列形式が正準形へ収束する"
+else
+  fail "8j(AC#2): defaultAssignee を知らない CLI で、インライン配列形式が収束しなかった（exit ${shim_legacy_exit}、$(grep -m1 '^default_assignee:' "$shim_legacy_config")）:
+$shim_legacy_output"
+fi
+if grep -F '[warn]' <<<"$shim_legacy_output" | grep -Fq 'インライン配列'; then
+  pass "8j(AC#2): defaultAssignee を知らない CLI では、インライン配列形式が [warn] で報告される"
+else
+  fail "8j(AC#2): defaultAssignee を知らない CLI で、インライン配列形式の [warn] が出なかった:
+$shim_legacy_output"
+fi
+
+# 8j-2. 収束後の再実行は、キーを知らない CLI でもスキップになる（冪等）。
+shim_legacy_rerun_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_LEGACY" 2>&1)"
+shim_legacy_rerun_exit=$?
+if [ "$shim_legacy_rerun_exit" -eq 0 ] \
+  && grep -Fq 'default_assignee は既に設定されている' <<<"$shim_legacy_rerun_output" \
+  && ! { grep -F '[warn]' <<<"$shim_legacy_rerun_output" | grep -Fq 'default_assignee'; } \
+  && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$shim_legacy_config"; then
+  pass "8j(AC#1): defaultAssignee を知らない CLI でも、正準形への再実行は [warn] 無しでスキップになる"
+else
+  fail "8j(AC#1): defaultAssignee を知らない CLI で、正準形への再実行がスキップにならなかった:
+$shim_legacy_rerun_output"
+fi
+
+# 8j-3. 角括弧を含まない非正準形（シングルクォート）も、キーを知らない CLI では正準形へ収束する。
+# 警告文は角括弧の取り込みではなく、正準形でないことを伝えるものになる。
+TMP_REPO_SHIM_QUOTED="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_SHIM_QUOTED"
+(cd "$TMP_REPO_SHIM_QUOTED" && git init -q)
+write_settled_backlog_config "$TMP_REPO_SHIM_QUOTED/.backlog/config.yml" "shim-quoted-test"
+shim_quoted_config="$TMP_REPO_SHIM_QUOTED/.backlog/config.yml"
+shim_quoted_tmp="$(mktemp)"
+register_tmp_cleanup "$shim_quoted_tmp"
+sed "s/^default_assignee:.*\$/default_assignee: '@improvement-loop-bot'/" "$shim_quoted_config" > "$shim_quoted_tmp"
+cat "$shim_quoted_tmp" > "$shim_quoted_config"
+shim_quoted_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_QUOTED" 2>&1)"
+shim_quoted_exit=$?
+if [ "$shim_quoted_exit" -eq 0 ] && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$shim_quoted_config" \
+  && grep -F '[warn]' <<<"$shim_quoted_output" | grep -Fq '正準形'; then
+  pass "8j(AC#2): defaultAssignee を知らない CLI では、シングルクォートの非正準形が正準形を名指す [warn] のうえ収束する"
+else
+  fail "8j(AC#2): シングルクォートの非正準形の扱いが期待どおりでない（exit ${shim_quoted_exit}、$(grep -m1 '^default_assignee:' "$shim_quoted_config")）:
+$shim_quoted_output"
+fi
+
+# 8j-4. default_assignee が無い config.yml には、config set が失敗するので正準形を直接追記する。
+TMP_REPO_SHIM_MISSING="$(mktemp -d)"
+register_tmp_cleanup "$TMP_REPO_SHIM_MISSING"
+(cd "$TMP_REPO_SHIM_MISSING" && git init -q)
+write_settled_backlog_config "$TMP_REPO_SHIM_MISSING/.backlog/config.yml" "shim-missing-test"
+shim_missing_config="$TMP_REPO_SHIM_MISSING/.backlog/config.yml"
+shim_missing_tmp="$(mktemp)"
+register_tmp_cleanup "$shim_missing_tmp"
+grep -v '^default_assignee:' "$shim_missing_config" > "$shim_missing_tmp"
+cat "$shim_missing_tmp" > "$shim_missing_config"
+shim_missing_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_MISSING" 2>&1)"
+shim_missing_exit=$?
+if [ "$shim_missing_exit" -eq 0 ] \
+  && [ "$(grep -c '^default_assignee:' "$shim_missing_config")" = "1" ] \
+  && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$shim_missing_config"; then
+  pass "8j: defaultAssignee を知らない CLI では、正準形を1行だけ直接追記する"
+else
+  fail "8j: defaultAssignee を知らない CLI で、直接追記が期待どおりでない（exit ${shim_missing_exit}、$(grep '^default_assignee:' "$shim_missing_config" | tr '\n' ' ')）:
+$shim_missing_output"
+fi
+
+# ---- 8k. defaultAssignee を認識する CLI では、CLI が既定値と読む非正準形もスキップする（TASK-100 AC#1）----
+# 健全かどうかは CLI の読みで決める。シングルクォートのスカラーは 1.53.0 が @improvement-loop-bot と
+# 読むので、書き換えも [warn] もしない。キーを知らない CLI での扱い（収束）は 8j-3 で見る。
+if [ "$BACKLOG_KNOWS_DEFAULT_ASSIGNEE" = true ]; then
+  TMP_REPO_QUOTED_KNOWN="$(mktemp -d)"
+  register_tmp_cleanup "$TMP_REPO_QUOTED_KNOWN"
+  (cd "$TMP_REPO_QUOTED_KNOWN" && git init -q)
+  write_settled_backlog_config "$TMP_REPO_QUOTED_KNOWN/.backlog/config.yml" "quoted-known-test"
+  quoted_known_config="$TMP_REPO_QUOTED_KNOWN/.backlog/config.yml"
+  quoted_known_tmp="$(mktemp)"
+  register_tmp_cleanup "$quoted_known_tmp"
+  sed "s/^default_assignee:.*\$/default_assignee: '@improvement-loop-bot'/" "$quoted_known_config" > "$quoted_known_tmp"
+  cat "$quoted_known_tmp" > "$quoted_known_config"
+  quoted_known_output="$("$SETUP_SCRIPT" "$TMP_REPO_QUOTED_KNOWN" 2>&1)"
+  quoted_known_exit=$?
+  if [ "$quoted_known_exit" -eq 0 ] \
+    && grep -Fxq "default_assignee: '@improvement-loop-bot'" "$quoted_known_config" \
+    && grep -Fq 'default_assignee は既に設定されている' <<<"$quoted_known_output" \
+    && ! { grep -F '[warn]' <<<"$quoted_known_output" | grep -Fq 'default_assignee'; }; then
+    pass "8k(AC#1): defaultAssignee を認識する CLI では、シングルクォートのスカラーも書き換えず [warn] 無しでスキップする"
+  else
+    fail "8k(AC#1): defaultAssignee を認識する CLI で、シングルクォートのスカラーの扱いが期待どおりでない（exit ${quoted_known_exit}、$(grep -m1 '^default_assignee:' "$quoted_known_config")）:
+$quoted_known_output"
+  fi
+else
+  skip "8k: 実行環境の backlog CLI が defaultAssignee を認識しないため、認識する CLI でのスキップ判定の検証をスキップした"
 fi
 
 echo ""
