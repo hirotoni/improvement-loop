@@ -158,10 +158,9 @@ $ASSERT_DETAIL}"
 # ここで finish_tests() を通すのは、サマリー行（PASS: x, FAIL: y, SKIP: z）を必ず
 # 出力させるためである。tests/run.sh はこの行だけを見て各ファイルの結果を合算する
 # ので、サマリー行を出さずに exit 0 すると、そのファイルは PASS にも FAIL にも
-# SKIP にも計上されない。以前はここが printf + exit 0 だったため、backlog が
-# PATH に無い環境では全ファイルがこの経路に入り、総合サマリーが
-# PASS: 0, FAIL: 0, SKIP: 0 かつ exit 0 という「全件成功」と区別できない出力に
-# なっていた（TASK-91）。
+# SKIP にも計上されない。依存が無い環境では全ファイルがこの経路に入るので、
+# 総合サマリーが PASS: 0, FAIL: 0, SKIP: 0 かつ exit 0 になり「全件成功」と
+# 区別できなくなる（TASK-91）。
 #
 # bash は zsh で代替できる依存ではなく単独の必須依存である。run.sh は各テスト
 # ファイルを bash で起動し、テスト本体も BASH_SOURCE・BASH_REMATCH・shopt など

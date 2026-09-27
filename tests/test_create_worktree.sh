@@ -58,7 +58,7 @@ cw_run_stdout() {
 $RUN_OUT"
 }
 
-echo "=== 9. claude-code/skills/improvement-dispatch/scripts/create-worktree の動作確認 ==="
+echo "=== 1. claude-code/skills/improvement-dispatch/scripts/create-worktree の動作確認 ==="
 # 一時 git リポジトリに対して実際に実行して検証する。git init の既定ブランチ名は
 # init.defaultBranch によって異なりうるため main を明示して作成し、create-worktree の
 # デフォルトブランチ判定（フェッチ不可時に main へフォールバック）と整合させる。
@@ -171,7 +171,7 @@ check_cw_rejects_args "引数無し" "使い方: "
 check_cw_rejects_args "不正な形式の task-id（Invalid_Task_ID!）" "task-id の形式が不正: " "Invalid_Task_ID!"
 
 echo ""
-echo "=== 9b. BASE_REF 起因の worktree add 失敗（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
+echo "=== 1b. BASE_REF 起因の worktree add 失敗（リモート未設定・デフォルトブランチが main 以外）の動作確認（TASK-38） ==="
 # リモート未設定かつローカルのデフォルトブランチが "main" 以外のリポジトリでは、
 # フォールバックにより BASE_REF="main" になるが、その "main" は実在しない。この場合に
 # 生の git エラーで異常終了せず、err() 形式の診断と明示的な exit code（1）で終わることを
@@ -186,9 +186,9 @@ assert "ワークツリー作成に失敗した場合、想定パスにディレ
   [ ! -d "$(cw_worktree_dir "$TMP_CW_NOMAIN_REPO" "$CW_NOMAIN_TASK_ID")" ]
 
 echo ""
-echo "=== 9b-2. BASE_REF 以外の理由による worktree add 失敗の動作確認（TASK-87） ==="
-# 9b と対になるセクション。BASE_REF（ここでは実在する main）は解決できるのに worktree add が
-# 失敗するケースでは、9b と同じ「BASE_REF の解決に失敗した」という断定ではなく、git 自身が
+echo "=== 1b-2. BASE_REF 以外の理由による worktree add 失敗の動作確認（TASK-87） ==="
+# 1b と対になるセクション。BASE_REF（ここでは実在する main）は解決できるのに worktree add が
+# 失敗するケースでは、1b と同じ「BASE_REF の解決に失敗した」という断定ではなく、git 自身が
 # 出した実際の失敗理由が利用者に届く必要がある。
 #
 # 再現手段: 冪等性ガードは `[ -d "$WORKTREE_DIR" ]` で既存ディレクトリだけを見るので、
@@ -203,11 +203,11 @@ cw_run "$TMP_CW_COLLIDE_REPO" "$CW_COLLIDE_TASK_ID"
 assert "BASE_REF 以外の理由で worktree add が失敗した場合も、明示的な exit code（1）で終了する（AC#1 の扱いを保つ）" run_result 1
 assert "BASE_REF 以外の失敗でも err() 形式の診断メッセージが出る" has_text "$RUN_OUT" "エラー: "
 assert "git 自身が出した実際の失敗理由（\"already exists\"）が出力に残る（AC#2）" has_text "$RUN_OUT" "already exists"
-assert_not "BASE_REF 起因と断定する診断（9b 用のメッセージ）が出ていない（AC#3: 2つの失敗を区別している）" \
+assert_not "BASE_REF 起因と断定する診断（1b 用のメッセージ）が出ていない（AC#3: 2つの失敗を区別している）" \
   has_text "$RUN_OUT" "の解決に失敗し"
 
 echo ""
-echo "=== 9c. git コマンドが PATH に無い環境での動作確認（TASK-58） ==="
+echo "=== 1c. git コマンドが PATH に無い環境での動作確認（TASK-58） ==="
 # create-worktree の REPO_ROOT="$(git rev-parse --show-toplevel)" が保護されていないと、
 # git が PATH に無い環境で生の "command not found"（exit 127）になり、err() 経由の診断も
 # 定義済みの終了コードも出ない。git を含まない最小 PATH で実行し、err() 形式の診断と
@@ -229,8 +229,8 @@ assert "git が PATH に無い場合、想定パスにワークツリーディ�
   [ ! -d "$(cw_worktree_dir "$TMP_CW_NOGIT_REPO" "$CW_NOGIT_TASK_ID")" ]
 
 echo ""
-echo "=== 9d. 起点（BASE_REF）の決定と鮮度検査（TASK-75） ==="
-# 9/9b/9c の一時リポジトリはリモート未設定なので `git fetch origin` が必ず失敗し、
+echo "=== 1d. 起点（BASE_REF）の決定と鮮度検査（TASK-75） ==="
+# 1/1b/1c の一時リポジトリはリモート未設定なので `git fetch origin` が必ず失敗し、
 # origin 起点の経路が一度も実行されない。ここでは疑似 origin（同じ一時ディレクトリ内の
 # bare リポジトリ）を持つリポジトリを組み立て、auto_merge_reviewed の値とローカル/origin の
 # 包含関係の組み合わせごとに、起点の選択と STALE_BASE の検知を確認する。
@@ -366,7 +366,7 @@ cw_run_stdout "$CW_DEFAULT_REPO" task-75-default-mode
 assert "auto_merge_reviewed のキーが無い場合も既定（false）として origin/main 起点になる（AC#4）" \
   has_line "$RUN_OUT" "BASE_REF=origin/main"
 
-# ---- リモート未設定（9/9b/9c と同じ構成）でも RESULT 行が出ることの確認 ----
+# ---- リモート未設定（1/1b/1c と同じ構成）でも RESULT 行が出ることの確認 ----
 cw_new_repo TMP_CW_NOREMOTE_REPO
 cw_run_stdout "$TMP_CW_NOREMOTE_REPO" task-75-no-remote
 assert "リモート未設定のリポジトリでも main 起点で RESULT: OK を出す（既存経路の維持）" \
@@ -432,7 +432,7 @@ assert "既存ブランチを割り当てて作ったワークツリーでも、
   [ "$(readlink "$CW_BRANCH_BEHIND_WORKTREE/.backlog")" = "$CW_BRANCH_BEHIND_REPO/.backlog" ]
 
 echo ""
-echo "=== 10. claude-code/skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
+echo "=== 2. claude-code/skills/improvement-dispatch/scripts/create-worktree の worktree_base_dir カスタム設定での動作確認 ==="
 # worktree_base_dir の判定ロジック（リポジトリ内相対パスの解決・.git/info/exclude への
 # 追記）を確認する。
 
@@ -453,7 +453,7 @@ assert "リポジトリ内を指す worktree_base_dir が .git/info/exclude に�
   grep -Fxq ".worktree-custom" "$TMP_CW_BASEDIR_REPO/.git/info/exclude"
 
 echo ""
-echo "=== 10b. 失効した worktree_base_dir 除外行の検知（TASK-79） ==="
+echo "=== 2b. 失効した worktree_base_dir 除外行の検知（TASK-79） ==="
 # .git/info/exclude への追記は追記専用なので、worktree_base_dir を変更すると古い値の
 # 除外行が残り続ける。create-worktree はマーカーコメント1行で管理対象を記録し、失効を
 # 検知して報告する（削除・書き換えはしない）。その検知と、共有物である
@@ -493,7 +493,7 @@ cp "$CW_STALE_EXCLUDE_FILE" "$TMP_CW_STALE_REPO/exclude.after1"
 cw_run_stdout "$TMP_CW_STALE_REPO" task-79-first
 assert "worktree_base_dir を変えない再実行では .git/info/exclude が1バイトも変わらない（AC#3）" \
   cmp -s "$TMP_CW_STALE_REPO/exclude.after1" "$CW_STALE_EXCLUDE_FILE"
-assert "worktree_base_dir を変えない再実行では標準出力が従来と同じである（AC#3）" [ "$cw_stale_out1" = "$RUN_OUT" ]
+assert "worktree_base_dir を変えない再実行では標準出力が初回実行と同じである（AC#3）" [ "$cw_stale_out1" = "$RUN_OUT" ]
 
 # ---- worktree_base_dir を変更した再実行: 失効を検知して報告する ----
 cw_write_base_dir "$TMP_CW_STALE_REPO" "tmp-wt"

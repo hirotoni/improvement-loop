@@ -61,10 +61,11 @@ REPO_NAME="$(basename "$REPO_ROOT")"
 # ここで求める DIST_REPO_ROOT（配布元）は REPO_ROOT（操作対象）とは別物である。
 #
 # この source を上の git rev-parse より前へ移動しないこと。
-# tests/test_create_worktree.sh の 9c は「git 以外の外部コマンドはそれより前に
-# 登場しない」ことを前提に、git を含まない最小 PATH で git 不在時の診断メッセージを
-# 検証している。_bootstrap_resolve_own_path は realpath/dirname 等を使うため、
-# 前に置くとその前提が崩れ、生の "command not found" が先に出る。
+# tests/test_create_worktree.sh の「git コマンドが PATH に無い環境」の節は、
+# 「git 以外の外部コマンドはそれより前に登場しない」ことを前提に、git を含まない
+# 最小 PATH で git 不在時の診断メッセージを検証している。_bootstrap_resolve_own_path は
+# realpath/dirname 等を使うため、前に置くとその前提が崩れ、生の "command not found" が
+# 先に出る。
 _bootstrap_resolve_own_path() {
   if command -v realpath >/dev/null 2>&1; then
     realpath "$1"
