@@ -4,7 +4,7 @@
 # `backlog task view <ID> --plain` の出力から、Implementation Notes 節に `### ` 見出しで
 # 残した記録（`### 引き渡し`・`### 手順 2 観測記録`・`### レビュー <巡数> 巡目` 等）を
 # 取り出す。notes を読むスクリプトはこの 2 関数だけを使い、節の境界や見出しの区切りを
-# 各自で解析しない（別々に実装すると片方だけが食い違う。TASK-62 と同じ問題）。
+# 各自で解析しない（別々に実装すると、片方だけを直したときにもう片方が無音で食い違った結果を返す）。
 #
 # 入力の前提（backlog CLI 1.48.0 と 1.53.0 の実出力で確認した。tests/test_notes_records.sh）:
 # - 本文の節は Description / Acceptance Criteria / Definition of Done / Implementation Plan /

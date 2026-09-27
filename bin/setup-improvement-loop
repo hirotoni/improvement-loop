@@ -172,7 +172,7 @@ write_statuses_block() {
 # REQUIRED_STATUSES のうち欠けているものだけを正準順序の位置に挿入する。
 # 既存の要素（ユーザー独自のステータスを含む）は順序も含め一切変更しない。
 # 複数行リスト形式で検出した場合は、書き戻し時にインライン配列形式へ正規化する
-# （インライン形式のケースの出力は従来通り変更しない）。
+# （インライン形式で書かれている場合も、ダブルクォート付きのインライン配列に書き直す）。
 ensure_backlog_statuses() {
   local config_file="$1"
 
@@ -419,12 +419,12 @@ read_cli_default_assignee() {
 # CLI が対応していれば正規の手段で設定し、対応していなければ config.yml へ直接
 # 追記する（将来 CLI が読めるようになった時点で有効になる）。
 #
-# default_assignee の健全な書式は CLI のバージョンで違い、両方に対応する（TASK-100）。
+# default_assignee の健全な書式は CLI のバージョンで違い、両方に対応する。
 # - 1.48.0 はこのキーを知らないまま、"backlog config set <他のキー>" のたびに config.yml を
 #   丸ごと再シリアライズし、値をスカラー文字列として読み直す。インライン配列
 #   （["@improvement-loop-bot"]）は角括弧ごと値に取り込まれ、"[@improvement-loop-bot]" と
 #   いう別のアサイニー名に変わる。往復に耐えるのはダブルクォート付きスカラー
-#   （default_assignee: "@improvement-loop-bot"）だけである（TASK-90 で実機確認）。
+#   （default_assignee: "@improvement-loop-bot"）だけである（1.48.0 の実機で確認）。
 # - 1.53.0 はこのキーを認識し、再シリアライズのたびにスカラーもインライン配列として書き直す。
 #   インライン配列は CLI 自身の正規の表現であり、壊れた形ではない（実機確認）。
 # どちらの CLI かは、`backlog config get defaultAssignee` が成功するか（キーを認識するか）で

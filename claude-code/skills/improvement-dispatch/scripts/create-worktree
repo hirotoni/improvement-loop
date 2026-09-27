@@ -22,7 +22,7 @@
 # 占有記録のタイムスタンプだけを、ワークツリーの作成・再利用や起点解決を一切行わずに
 # 更新したい場合（例: 作業中のサブエージェントが生存を示すためだけに更新したい場合）は、
 # このスクリプトではなく claude-code/skills/improvement-dispatch/scripts/touch-occupancy
-# を使う（TASK-93）。
+# を使う。
 
 set -euo pipefail
 
@@ -294,7 +294,7 @@ if [ "$AUTO_MERGE_REVIEWED" -eq 1 ] && [ "$FETCH_OK" -eq 1 ] &&
     # ローカルが origin を含む（先行・同一）。先行タスクの成果はここにしか無い。
     BASE_REF="$LOCAL_REF"
   elif git merge-base --is-ancestor "$LOCAL_REF" "$ORIGIN_REF"; then
-    # ローカルが遅れている。従来どおり origin から分岐する。
+    # ローカルが遅れている。origin の方が新しいので origin から分岐する。
     BASE_REF="$ORIGIN_REF"
   else
     # 分岐しており、どちらを起点にしても片方のコミットが欠ける。マージ・rebase は
@@ -326,14 +326,14 @@ elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   git worktree add "$WORKTREE_DIR" "$BRANCH" >&2
 else
   # BASE_REF は main へのフォールバック値になりうるので、実在しない参照のことがある。
-  # 生のエラーで落ちないよう、他の失敗経路と同様に err() で診断してから終了する（TASK-38）。
+  # 生のエラーで落ちないよう、他の失敗経路と同様に err() で診断してから終了する。
   #
   # ただし worktree add は BASE_REF 以外の理由でも失敗する（同じパスにファイルがある、
   # 親ディレクトリに書き込めない、ブランチ参照がロックされている等）。失敗理由を
   # BASE_REF に決め打ちしないよう、worktree add を実行する前に BASE_REF が解決できるかを
   # 確かめて切り分ける。git のエラー文言で分類しないのは、文言が git のバージョンや
   # ロケールで変わるためである。事前に弾くので BASE_REF 不在の経路では
-  # git worktree add 自体が動かず、生の "fatal:" は出ない（TASK-87）。
+  # git worktree add 自体が動かず、生の "fatal:" は出ない。
   if ! git rev-parse --verify --quiet "${BASE_REF}^{commit}" >/dev/null 2>&1; then
     err "BASE_REF ($BASE_REF) の解決に失敗し、ワークツリーを作成できなかった"
     err "リモート 'origin' が設定されているか、ローカルのデフォルトブランチ名が \"main\" と一致するか確認すること。一致しない場合は create-worktree 内の main フォールバック値を実際のデフォルトブランチ名に書き換える必要がある。"
@@ -369,7 +369,7 @@ grep -Fxq ".backlog" "$EXCLUDE_FILE" 2>/dev/null || echo ".backlog" >> "$EXCLUDE
 
 # ---- 共有 config.yml の引き渡し時点の複製 ----
 # 上のリンク越しに共有の .backlog/config.yml が書き換えられた場合に、検知と復元の
-# 基準にする（TASK-117）。保存先・検知・復元は backlog-config-snapshot に任せる。
+# 基準にする。保存先・検知・復元は backlog-config-snapshot に任せる。
 # 複製に失敗してもワークツリー作成は止めない（検知ができなくなるだけで、引き渡し自体の
 # 妥当性には影響しない）。標準出力は出力契約専用なので、結果は標準エラーへ出す。
 # 標準エラーへ回す行には接頭辞を付け、正常に保存できたときは何も出さない。スクリプトの
@@ -392,7 +392,7 @@ fi
 # ---- 占有記録 ----
 # このワークツリーが「いつ・どのタスクに割り当てられたか」を記録する。新規作成・再利用の
 # どちらの経路でも通るため、実行のたびに丸ごと上書きする（追記しない）。書き込み自体は
-# bin/lib/occupancy.sh の occupancy_write_file() に委ねる（TASK-93）。ワークツリーの
+# bin/lib/occupancy.sh の occupancy_write_file() に委ねる。ワークツリーの
 # 作成・再利用や起点解決を伴わずに同じ書き込みだけを行いたい場合は、この関数を直接
 # 呼ぶ claude-code/skills/improvement-dispatch/scripts/touch-occupancy を使う。
 OCCUPANCY_FILE="$WORKTREE_DIR/.worktree-occupancy"
