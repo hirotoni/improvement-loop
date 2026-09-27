@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 14. claude-code/skills/improvement-dispatch/scripts/touch-occupancy の動作確認 ==="
+echo "=== 1. claude-code/skills/improvement-dispatch/scripts/touch-occupancy の動作確認 ==="
 # 一時 git リポジトリに対して実際に実行して検証する。
 
 TMP_TO_REPO="$(mktemp -d)"
@@ -47,49 +47,49 @@ $content"
 }
 
 echo ""
-echo "--- 14a. 正常系: 登録済みワークツリー・一致する task_id -> RESULT: OK で占有記録を作成する ---"
+echo "--- 1a. 正常系: 登録済みワークツリー・一致する task_id -> RESULT: OK で占有記録を作成する ---"
 run_in "$TMP_TO_REPO" "$TOUCH_OCCUPANCY_SCRIPT" "$TO_WORKTREE_DIR" "$TO_TASK_ID"
-assert "14a: 登録済みワークツリー・一致する task_id では RESULT: OK（exit 0）" \
+assert "1a: 登録済みワークツリー・一致する task_id では RESULT: OK（exit 0）" \
   run_result 0 'RESULT: OK'
-assert "14a: 占有記録ファイル(.worktree-occupancy)がワークツリー直下に作成される（AC#1）" [ -f "$TO_OCCUPANCY_FILE" ]
-to_check_occupancy_format "14a"
+assert "1a: 占有記録ファイル(.worktree-occupancy)がワークツリー直下に作成される（AC#1）" [ -f "$TO_OCCUPANCY_FILE" ]
+to_check_occupancy_format "1a"
 
 echo ""
-echo "--- 14b. 冪等性・上書き更新: 2回目の実行でタイムスタンプが更新され、記録が壊れない ---"
+echo "--- 1b. 冪等性・上書き更新: 2回目の実行でタイムスタンプが更新され、記録が壊れない ---"
 # sleep で時刻を進める代わりに、古い時刻の占有記録を先に書いておく。
 TO_OLD_EPOCH=1
 printf 'TASK_ID=%s\nASSIGNED_AT=1970-01-01T00:00:01Z\nASSIGNED_AT_EPOCH=%s\n' "$TO_TASK_ID" "$TO_OLD_EPOCH" > "$TO_OCCUPANCY_FILE"
 run_in "$TMP_TO_REPO" "$TOUCH_OCCUPANCY_SCRIPT" "$TO_WORKTREE_DIR" "$TO_TASK_ID"
-assert "14b: 2回目の実行も RESULT: OK（exit 0）" run_result 0 'RESULT: OK'
+assert "1b: 2回目の実行も RESULT: OK（exit 0）" run_result 0 'RESULT: OK'
 TO_SECOND_EPOCH="$(grep '^ASSIGNED_AT_EPOCH=' "$TO_OCCUPANCY_FILE" 2>/dev/null | cut -d= -f2)"
 ASSERT_DETAIL="事前に書いた epoch=${TO_OLD_EPOCH}, 実行後=${TO_SECOND_EPOCH:-なし}"
-assert "14b: 2回目の実行でタイムスタンプが更新される" [ "${TO_SECOND_EPOCH:-0}" -gt "$TO_OLD_EPOCH" ]
-to_check_occupancy_format "14b"
+assert "1b: 2回目の実行でタイムスタンプが更新される" [ "${TO_SECOND_EPOCH:-0}" -gt "$TO_OLD_EPOCH" ]
+to_check_occupancy_format "1b"
 
 echo ""
-echo "--- 14c. 異常系: 存在しないワークツリーパスを渡すとエラーになる（AC#2） ---"
+echo "--- 1c. 異常系: 存在しないワークツリーパスを渡すとエラーになる（AC#2） ---"
 run_in "$TMP_TO_REPO" "$TOUCH_OCCUPANCY_SCRIPT" "${TMP_TO_REPO}-does-not-exist" "$TO_TASK_ID"
-assert "14c: 存在しないワークツリーパスを渡すと RESULT: ERROR（非ゼロ終了）になる（AC#2）" \
+assert "1c: 存在しないワークツリーパスを渡すと RESULT: ERROR（非ゼロ終了）になる（AC#2）" \
   run_result nz 'RESULT: ERROR'
 
 echo ""
-echo "--- 14d. 異常系: 登録済みワークツリーだが一致しない task_id を渡すとエラーになる（AC#2） ---"
+echo "--- 1d. 異常系: 登録済みワークツリーだが一致しない task_id を渡すとエラーになる（AC#2） ---"
 TO_MISMATCHED_TASK_ID="task-93-mismatched-task-id"
 run_in "$TMP_TO_REPO" "$TOUCH_OCCUPANCY_SCRIPT" "$TO_WORKTREE_DIR" "$TO_MISMATCHED_TASK_ID"
-assert "14d: 一致しない task_id を渡すと RESULT: ERROR（非ゼロ終了）になる（AC#2）" \
+assert "1d: 一致しない task_id を渡すと RESULT: ERROR（非ゼロ終了）になる（AC#2）" \
   run_result nz 'RESULT: ERROR'
-assert_not "14d: 一致しない task_id で既存の占有記録が上書きされていない（AC#2）" \
+assert_not "1d: 一致しない task_id で既存の占有記録が上書きされていない（AC#2）" \
   grep -Fxq "TASK_ID=$TO_MISMATCHED_TASK_ID" "$TO_OCCUPANCY_FILE"
 
 echo ""
-echo "--- 14e. 異常系: 引数の個数が不正だとエラーになる ---"
+echo "--- 1e. 異常系: 引数の個数が不正だとエラーになる ---"
 run_in "$TMP_TO_REPO" "$TOUCH_OCCUPANCY_SCRIPT" "$TO_WORKTREE_DIR"
-assert "14e: 引数不足で touch-occupancy を実行するとエラーになる" [ "$RUN_EXIT" -ne 0 ]
+assert "1e: 引数不足で touch-occupancy を実行するとエラーになる" [ "$RUN_EXIT" -ne 0 ]
 
 echo ""
-echo "--- 14f. 異常系: task_id の形式が不正だとエラーになる ---"
+echo "--- 1f. 異常系: task_id の形式が不正だとエラーになる ---"
 run_in "$TMP_TO_REPO" "$TOUCH_OCCUPANCY_SCRIPT" "$TO_WORKTREE_DIR" "Not_A_Valid_Task_Id"
-assert "14f: task_id の形式が不正だと RESULT: ERROR（非ゼロ終了）になる" \
+assert "1f: task_id の形式が不正だと RESULT: ERROR（非ゼロ終了）になる" \
   run_result nz 'RESULT: ERROR'
 
 finish_tests

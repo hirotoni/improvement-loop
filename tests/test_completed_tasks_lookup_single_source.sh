@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 完了・アーカイブ済みタスクの照合手順の正本（claude-code/skills/completed-tasks-lookup.md）と、
-# それを参照する起票系3スキルの SKILL.md に対するテスト。
+# それを参照する起票系スキルの SKILL.md に対するテスト。
 #
 # backlog CLI の task list / search / view は .backlog/tasks/ しか見ないため、正本の走査手順は
 # 散文ではなく実際に動く grep でなければ意味が無い。ここでは正本から bash ブロックを抜き出して
 # 使い捨ての .backlog/ 構造に対して実行し、completed / archive 配下が実際に照合と集計に
-# 乗ることを確かめる。あわせて、3スキルから正本へのリンクが実際に解決できることを確かめる。
+# 乗ることを確かめる。あわせて、参照側の各スキルから正本へのリンクが実際に解決できることを確かめる。
 # 参照側の文言は照合しない（言い換えで落ちず、食い違いも捕まえられないため）。
 
 set -uo pipefail

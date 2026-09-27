@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 7. claude-code/skills/improvement-dispatch/scripts/select-next-task の選定ロジック検証 ==="
+echo "=== 1. claude-code/skills/improvement-dispatch/scripts/select-next-task の選定ロジック検証 ==="
 # improvement ループの6ステータスが揃った一時 backlog リポジトリに対して
 # select-next-task を実行し、選定ロジック（除外集合の計算・依存確認・優先度ソート・
 # 閾値判定）の各パターンを検証する。
@@ -61,7 +61,7 @@ select_expect() {
 
 make_select_repo TMP_REPO_SELECT task
 
-# --- 7a. NO_CANDIDATE: To Do タスクが1件も無い ---
+# --- 1a. NO_CANDIDATE: To Do タスクが1件も無い ---
 select_expect "To Do が無いとき RESULT: NO_CANDIDATE（exit 2）" "$TMP_REPO_SELECT" 1 3 2 'RESULT: NO_CANDIDATE'
 
 # 依存は create 時に付ける（後から edit で付ける呼び出しを省く）。TASK-3 は TASK-1 に依存する。
@@ -70,33 +70,33 @@ bl "$TMP_REPO_SELECT" task create "High task" --priority high
 bl "$TMP_REPO_SELECT" task create "Medium task A" --priority medium --dep task-1
 bl "$TMP_REPO_SELECT" task create "Medium task B" --priority medium
 
-# --- 7b. 通常選定: 優先度最高（High、TASK-2）が選ばれる ---
+# --- 1b. 通常選定: 優先度最高（High、TASK-2）が選ばれる ---
 select_expect "優先度最高（High, TASK-2）が選定される" "$TMP_REPO_SELECT" 1 3 0 'TASK_ID: TASK-2'
 
-# --- 7c. blocked:needs-decision ラベル除外と、依存タスク未完了の除外 ---
+# --- 1c. blocked:needs-decision ラベル除外と、依存タスク未完了の除外 ---
 # blocked の除外が壊れると TASK-2、依存の除外が壊れると TASK-3 が選ばれて FAIL する。
 bl "$TMP_REPO_SELECT" task edit TASK-2 --label 'blocked:needs-decision'
 select_expect "blocked:needs-decision 付き（TASK-2）と、未完了の依存（TASK-1）を持つ TASK-3 を除外し、TASK-4 を選ぶ" \
   "$TMP_REPO_SELECT" 1 3 0 'TASK_ID: TASK-4'
 
-# --- 7d. 依存解消後の再選定と、同優先度タイブレークがID最小になる ---
+# --- 1d. 依存解消後の再選定と、同優先度タイブレークがID最小になる ---
 # 依存タスクを Done にすると、除外されていた TASK-3 が同優先度の TASK-4 より先に選ばれる。
 bl "$TMP_REPO_SELECT" task edit TASK-1 -s "Done"
 select_expect "依存タスク（TASK-1）が Done になると、同優先度でID最小の TASK-3 が選ばれる" "$TMP_REPO_SELECT" 1 3 0 'TASK_ID: TASK-3'
 
-# --- 7e. max_in_progress GATED ---
+# --- 1e. max_in_progress GATED ---
 bl "$TMP_REPO_SELECT" task edit TASK-3 -s "In Progress"
 select_expect "In Progress が max_in_progress 以上のとき RESULT: GATED / REASON: max_in_progress（exit 1）" \
   "$TMP_REPO_SELECT" 1 3 1 'RESULT: GATED' 'REASON: max_in_progress' 'IN_PROGRESS_COUNT: 1'
 
-# --- 7f. max_in_review GATED ---
+# --- 1f. max_in_review GATED ---
 # TASK-3 は In Progress のまま、max_in_progress を 2 にして In Progress のゲートを通す。
 bl "$TMP_REPO_SELECT" task edit TASK-4 -s "In Review"
 select_expect "In Review が max_in_review 以上のとき RESULT: GATED / REASON: max_in_review（exit 1）" \
   "$TMP_REPO_SELECT" 2 1 1 'RESULT: GATED' 'REASON: max_in_review' 'IN_REVIEW_COUNT: 1'
 
 echo ""
-echo "=== 8. task_prefix をカスタマイズしたリポジトリでの回帰テスト（TASK-54） ==="
+echo "=== 2. task_prefix をカスタマイズしたリポジトリでの回帰テスト（TASK-54） ==="
 # ID は .backlog/config.yml の task_prefix に応じて変わる（task_prefix: "issue" なら
 # "ISSUE-<n>"）。ID 抽出・件数カウントを "TASK-" 固定パターンで行うと、prefix を
 # カスタマイズしたリポジトリでは常に0件になり、To Do が実在しても NO_CANDIDATE を返し続け、
@@ -104,24 +104,24 @@ echo "=== 8. task_prefix をカスタマイズしたリポジトリでの回帰�
 # In Review の件数も In Progress と同じ関数で数えるので、ゲートの確認は In Progress で行う。
 make_select_repo TMP_REPO_CUSTOM_PREFIX_SELECT issue
 
-# --- 8a. AC#1: To Do タスクが存在するとき RESULT: SELECTED / 正しい TASK_ID (ISSUE-1) ---
+# --- 2a. AC#1: To Do タスクが存在するとき RESULT: SELECTED / 正しい TASK_ID (ISSUE-1) ---
 bl "$TMP_REPO_CUSTOM_PREFIX_SELECT" task create "Custom prefix task" --priority high
 select_expect "AC#1: task_prefix をカスタマイズしたリポジトリ（ISSUE-1）でも RESULT: SELECTED / TASK_ID: ISSUE-1 を返す" \
   "$TMP_REPO_CUSTOM_PREFIX_SELECT" 1 3 0 'RESULT: SELECTED' 'TASK_ID: ISSUE-1'
 
-# --- 8b. AC#2: In Progress の件数が max_in_progress 以上のとき RESULT: GATED ---
+# --- 2b. AC#2: In Progress の件数が max_in_progress 以上のとき RESULT: GATED ---
 bl "$TMP_REPO_CUSTOM_PREFIX_SELECT" task edit ISSUE-1 -s "In Progress"
 select_expect "AC#2: task_prefix をカスタマイズしたリポジトリでも In Progress の件数が正しく数えられ RESULT: GATED / REASON: max_in_progress を返す" \
   "$TMP_REPO_CUSTOM_PREFIX_SELECT" 1 3 1 'RESULT: GATED' 'REASON: max_in_progress' 'IN_PROGRESS_COUNT: 1'
 
 echo ""
-echo "=== 9. 複数依存・存在しない依存の扱い（TASK-99） ==="
+echo "=== 3. 複数依存・存在しない依存の扱い（TASK-99） ==="
 # backlog CLI 1.53.0 の task view --plain は "Dependencies:" 行を出さず、
 # "Dependency Graph:" の "Depends on" 木で依存を表す。依存の一部だけが Done の場合、
 # 推移的依存を持つ場合、存在しない依存を持つ場合に、直接依存を正しく読み取って
 # 判定できることを確かめる。1.48.0 の "Dependencies:" 行の形式でも同じ結果になる。
-# 9 節は実 CLI の出力形式を確かめる経路として実 CLI のまま残す。両形式の依存解析と存在しない
-# 依存の扱いは、実 CLI のバージョンによらず 10b〜10f がスタブで検証する。
+# 3 節は実 CLI の出力形式を確かめる経路として実 CLI のまま残す。両形式の依存解析と存在しない
+# 依存の扱いは、実 CLI のバージョンによらず 4b〜4f がスタブで検証する。
 # 状態・依存・優先度は create 時に指定し、edit は To Do の候補を外すときだけ呼ぶ。
 make_select_repo TMP_REPO_DEPS_SELECT task
 
@@ -136,13 +136,13 @@ bl "$TMP_REPO_DEPS_SELECT" task create "Open dep first" --priority high --dep ta
 bl "$TMP_REPO_DEPS_SELECT" task create "Open dep last" --priority high --dep task-1,task-2
 bl "$TMP_REPO_DEPS_SELECT" task create "All deps done" --priority medium --dep task-1,task-3
 
-# --- 9a. 依存の一部だけが未完了のタスク（TASK-4・TASK-5）は並び順によらず除外され、全依存 Done の TASK-6 が選ばれる ---
+# --- 3a. 依存の一部だけが未完了のタスク（TASK-4・TASK-5）は並び順によらず除外され、全依存 Done の TASK-6 が選ばれる ---
 select_expect "未完了の依存（TASK-2）が先頭でも末尾でも TASK-4・TASK-5 を除外し、全依存 Done の TASK-6 を選ぶ" \
   "$TMP_REPO_DEPS_SELECT" 1 3 0 'TASK_ID: TASK-6'
 
-# --- 9b. 判定は直接依存だけで行う。直接依存（TASK-7）が Done なら、その先の推移的依存（TASK-2）が未完了でも TASK-8 は選ばれる ---
-# 従来の "Dependencies:" 行（1.48.0）も直接依存だけを列挙していたので、その挙動に揃える。
-# select-next-task は To Do の候補をすべて view するので、9a の候補は Proposed に移して
+# --- 3b. 判定は直接依存だけで行う。直接依存（TASK-7）が Done なら、その先の推移的依存（TASK-2）が未完了でも TASK-8 は選ばれる ---
+# 1.48.0 の "Dependencies:" 行も直接依存だけを列挙するので、その挙動に揃える。
+# select-next-task は To Do の候補をすべて view するので、3a の候補は Proposed に移して
 # 以降の選定での view を減らす（edit 3回で、以降3回の選定の view 計約24回を省く）。
 bl "$TMP_REPO_DEPS_SELECT" task edit TASK-4 -s "Proposed"
 bl "$TMP_REPO_DEPS_SELECT" task edit TASK-5 -s "Proposed"
@@ -152,7 +152,7 @@ bl "$TMP_REPO_DEPS_SELECT" task create "Needs TASK-7" --priority low --dep task-
 select_expect "直接依存（TASK-7）が Done なら、推移的依存（TASK-2）が未完了でも TASK-8 を選ぶ" \
   "$TMP_REPO_DEPS_SELECT" 1 3 0 'TASK_ID: TASK-8'
 
-# --- 9c. 存在しない依存を持つタスクは ERROR にならず、未完了扱いで除外される ---
+# --- 3c. 存在しない依存を持つタスクは ERROR にならず、未完了扱いで除外される ---
 # backlog CLI は存在しない ID を --dep で受け付けないため、依存先タスクが後から
 # 消えた状況をタスクファイルの frontmatter を直接書き換えて再現する（一時リポジトリ内のみ）。
 # Done の直接依存（TASK-7）の後ろに存在しない依存（TASK-77）を足す。
@@ -163,7 +163,7 @@ awk '{ print } $0 == "  - TASK-7" { print "  - TASK-77" }' "$dep_task_file" > "$
 select_expect "存在しない依存（TASK-77）を持つ TASK-8 を未完了扱いで除外し NO_CANDIDATE を返す" \
   "$TMP_REPO_DEPS_SELECT" 1 3 2 'RESULT: NO_CANDIDATE'
 
-# --- 9d. 説明文に依存表記と同じ見た目の行があっても依存として読まない ---
+# --- 3d. 説明文に依存表記と同じ見た目の行があっても依存として読まない ---
 # 自由記述の説明文（例: 不具合報告に CLI 出力を貼ったもの）の "Dependencies:" 行や
 # "Depends on" 木を依存と誤読すると、存在しない ID の view が失敗して RESULT: ERROR になる。
 bl "$TMP_REPO_DEPS_SELECT" task create "Quotes CLI output" --priority high \
@@ -171,9 +171,9 @@ bl "$TMP_REPO_DEPS_SELECT" task create "Quotes CLI output" --priority high \
 select_expect "説明文中の依存表記に似た行を無視し、依存の無い TASK-9 を選ぶ" "$TMP_REPO_DEPS_SELECT" 1 3 0 'TASK_ID: TASK-9'
 
 echo ""
-echo "=== 10. backlog CLI の出力順・バージョンによらない選定ロジックの検証（TASK-103） ==="
+echo "=== 4. backlog CLI の出力順・バージョンによらない選定ロジックの検証（TASK-103） ==="
 # 実 CLI（1.53.0）の task list は最初から優先度→ID順で返し、task view の依存の形式は
-# CLI のバージョンで違う。そのため 7〜9 節だけでは、select-next-task 自身の
+# CLI のバージョンで違う。そのため 1〜3 節だけでは、select-next-task 自身の
 # 優先度→数値ID順の選定と、実行環境の CLI と違うバージョンの形式の依存解析が壊れても検出できない。
 # ここでは PATH の先頭に backlog のスタブを置き、固定の出力を返させて検証する。
 # スタブは SELECT_STUB_FIXTURE_DIR 配下の次のファイルを返す。
@@ -217,7 +217,7 @@ write_stub_view_without_deps() {
   done
 }
 
-# --- 10a. CLI が優先度・ID の順になっていない一覧を返しても、High の中で数値ID最小（TASK-4）を選ぶ ---
+# --- 4a. CLI が優先度・ID の順になっていない一覧を返しても、High の中で数値ID最小（TASK-4）を選ぶ ---
 # 先頭は Low、High は TASK-9・TASK-10・TASK-4 の順に並べる。選定ループを無効化すると TASK-1、
 # 同優先度のID比較を無効化すると TASK-9、ID を文字列で比べると TASK-10 が選ばれて FAIL する。
 FIXTURE_ORDER_SELECT="$STUB_ROOT_SELECT/order"
@@ -244,13 +244,13 @@ else
 $select_out"
 fi
 
-# --- 10b. 1.48.0 形式の "Dependencies:" 行を読み、未完了の依存を持つタスクを除外する ---
+# --- 4b. 1.48.0 形式の "Dependencies:" 行を読み、未完了の依存を持つタスクを除外する ---
 # High の TASK-4 は "Dependencies: TASK-3, TASK-7" を持ち、TASK-3 は Done、TASK-7 は In Progress。
 # 未完了の依存を末尾に置き、カンマ区切りの全要素を見ていることも確かめる。
 # 1.48.0 形式の解析を無効化すると TASK-4 が選ばれて FAIL する。
-# 10b〜10f のフィクスチャは、各節に書いたバージョンの実 CLI の stdout を写したものである
+# 4b〜4f のフィクスチャは、各節に書いたバージョンの実 CLI の stdout を写したものである
 # （取得日 2026-09-27。File: 行の一時リポジトリのパスだけ "<一時リポジトリ>" に置き換えた）。
-# 10b は backlog CLI 1.48.0 の出力。TASK-1・TASK-2・TASK-5 を作ってから archive し、ID を揃えた。
+# 4b は backlog CLI 1.48.0 の出力。TASK-1・TASK-2・TASK-5 を作ってから archive し、ID を揃えた。
 FIXTURE_DEPS148_SELECT="$STUB_ROOT_SELECT/deps148"
 mkdir -p "$FIXTURE_DEPS148_SELECT"
 cat > "$FIXTURE_DEPS148_SELECT/list.txt" <<'LIST'
@@ -378,7 +378,7 @@ else
 $select_out"
 fi
 
-# --- 10c. 1.53.0 形式の "Dependency Graph:" の木から直接依存だけを読む ---
+# --- 4c. 1.53.0 形式の "Dependency Graph:" の木から直接依存だけを読む ---
 # backlog CLI 1.53.0 の出力。TASK-1 は In Progress、TASK-2 は TASK-1 に依存する Done。
 # High の TASK-3 は TASK-1（未完了）に直接依存し、High の TASK-4 は TASK-2（Done）に直接依存する。
 # TASK-4 の木には推移的依存の TASK-1（未完了）がインデント付きで出て、木の後には
@@ -548,7 +548,7 @@ else
 $select_out"
 fi
 
-# --- 10d. 1.53.0 形式の "unknown task ID"（存在しない依存）を持つタスクを選ばない ---
+# --- 4d. 1.53.0 形式の "unknown task ID"（存在しない依存）を持つタスクを選ばない ---
 # backlog CLI 1.53.0 の出力。High の TASK-1 の依存に存在しない TASK-77 を frontmatter で書き足した。
 # 実 CLI の TASK-77 の view は exit 1 なので、スタブにも view-TASK-77.txt を置かない
 # （unknown を依存 ID として view すると RESULT: ERROR になって FAIL する）。
@@ -625,7 +625,7 @@ else
 $select_out"
 fi
 
-# --- 10e. 1.53.0 形式の "ambiguous task ID"（ID が一意に決まらない依存）を持つタスクを選ばない ---
+# --- 4e. 1.53.0 形式の "ambiguous task ID"（ID が一意に決まらない依存）を持つタスクを選ばない ---
 # backlog CLI 1.53.0 の出力。Done の TASK-1 のファイルを別名で複製し、High の TASK-2 をそれに依存させた。
 # 実 CLI の TASK-1 の view は exit 1 なので、スタブにも view-TASK-1.txt を置かない。
 # なお実 1.53.0 は重複 ID があると task list --plain 自体を exit 1 で終える（stdout は下のとおり）。
@@ -708,7 +708,7 @@ else
 $select_out"
 fi
 
-# --- 10f. 1.48.0 形式の存在しない依存（Status 行の無い view）を持つタスクを選ばない ---
+# --- 4f. 1.48.0 形式の存在しない依存（Status 行の無い view）を持つタスクを選ばない ---
 # backlog CLI 1.48.0 の出力。High の TASK-1 の依存に存在しない TASK-77 を frontmatter で書き足した。
 # 実 1.48.0 の TASK-77 の view は stdout が空（"Task TASK-77 not found." は stderr）で exit 0 なので、
 # view-TASK-77.txt は空にする。Status 行が無い依存を Done 扱いにすると TASK-1 が選ばれて FAIL する。

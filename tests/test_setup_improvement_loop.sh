@@ -198,9 +198,9 @@ FIXTURE_FRESH_EXIT=$?
 #   - .backlog/config.my.yml への $FIXTURE_RERUN_MARKER の追記
 #   - .backlog/config.yml の statuses への $FIXTURE_RERUN_CUSTOM_STATUS の追加
 # を加えたうえで setup-improvement-loop を2回目に実行した状態。「導入済みリポジトリ
-# への再実行」を前提に検証するセクション 3・6c-3・8b が読み取り専用で共有する。
+# への再実行」を前提に検証するセクション 3・6b-2・8b が読み取り専用で共有する。
 # この2つのユーザー変更はフィクスチャの契約の一部であり、消費側はこれを前提にしてよい。
-# 6c-3 は、config.my.yml のどのキーの説明コメントもテンプレートと一致し、再実行が [warn] を
+# 6b-2 は、config.my.yml のどのキーの説明コメントもテンプレートと一致し、再実行が [warn] を
 # 1件も出さないことも前提にする。ユーザー変更を足すときはこの前提を崩さないこと。
 FIXTURE_RERUN_REPO="$(mktemp -d)"
 register_tmp_cleanup "$FIXTURE_RERUN_REPO"
@@ -219,7 +219,7 @@ FIXTURE_RERUN_EXIT=$?
 echo "FIXTURE_FRESH / FIXTURE_RERUN を構築した（それぞれ setup-improvement-loop 1回分）"
 
 echo ""
-echo "=== 1d. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
+echo "=== 1. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
 # REQUIRED_STATUSES と、状態遷移表の正本（claude-code/skills/status-table.md）の
 # 「## 状態遷移表」節に列挙されたステータス名の集合が一致することを検証する。
 # 情報源が2箇所に分かれている以上、片方だけが更新されて食い違いうるためである。
@@ -636,7 +636,7 @@ else
   fail "5c-1(AC#1): statuses 書き換えで config.yml のパーミッションが変わった（${perm_644_before} → ${perm_644_after}）"
 fi
 
-# ---- 5c-3. 0644 以外のモードでも保たれる（AC#1 の一般性）----
+# ---- 5c-2. 0644 以外のモードでも保たれる（AC#1 の一般性）----
 # 「たまたま 0644 に戻している」実装では通らないように、別のモードでも確認する。
 TMP_REPO_PERM_640="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_PERM_640"
@@ -649,38 +649,38 @@ perm_640_exit=$?
 perm_640_after="$(file_mode "$perm_640_config")"
 
 if [ "$perm_640_exit" -eq 0 ] && [ "$perm_640_after" = "$perm_640_before" ]; then
-  pass "5c-3(AC#1): 0640 の config.yml でも statuses 書き換え後にパーミッションが変化しない（${perm_640_before}）"
+  pass "5c-2(AC#1): 0640 の config.yml でも statuses 書き換え後にパーミッションが変化しない（${perm_640_before}）"
 else
-  fail "5c-3(AC#1): 0640 の config.yml で挙動が想定と異なる（exit ${perm_640_exit}, ${perm_640_before} → ${perm_640_after}）:
+  fail "5c-2(AC#1): 0640 の config.yml で挙動が想定と異なる（exit ${perm_640_exit}, ${perm_640_before} → ${perm_640_after}）:
 $perm_640_output"
 fi
 
-# ---- 5c-4. 書き換え後の内容が現在の挙動と同一であること（AC#3）----
+# ---- 5c-3. 書き換え後の内容が現在の挙動と同一であること（AC#3）----
 # パーミッションを保つために書き戻し方法を変えても、生成される内容は変えていないこと。
 perm_status_line="$(grep -m1 '^statuses:' "$perm_644_config" || true)"
 if [ "$perm_status_line" = 'statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]  # 末尾コメント' ]; then
-  pass "5c-4(AC#3): 補完後の statuses 行が既存の補完規則どおり（既存要素の順序を保ち、末尾コメントも保持されている）"
+  pass "5c-3(AC#3): 補完後の statuses 行が既存の補完規則どおり（既存要素の順序を保ち、末尾コメントも保持されている）"
 else
-  fail "5c-4(AC#3): 補完後の statuses 行が想定と異なる: $perm_status_line"
+  fail "5c-3(AC#3): 補完後の statuses 行が想定と異なる: $perm_status_line"
 fi
 
 perm_content_ok=true
 for perm_expected_line in 'project_name: "perm-644-test"' 'default_assignee: "@improvement-loop-bot"' 'labels: []' 'remote_operations: false' 'task_prefix: "task"'; do
   if ! grep -Fxq "$perm_expected_line" "$perm_644_config"; then
-    fail "5c-4(AC#3): 書き換え後の config.yml から既存の行が失われた: $perm_expected_line"
+    fail "5c-3(AC#3): 書き換え後の config.yml から既存の行が失われた: $perm_expected_line"
     perm_content_ok=false
   fi
 done
 if [ "$perm_content_ok" = true ]; then
-  pass "5c-4(AC#3): statuses 以外の既存キーが書き換え後もそのまま残っている"
+  pass "5c-3(AC#3): statuses 以外の既存キーが書き換え後もそのまま残っている"
 fi
 
 # mktemp が作った一時ファイル（config.yml.XXXXXX）が消し残されていないことも確認する。
 perm_leftover="$(find "$TMP_REPO_PERM_644/.backlog" -maxdepth 1 -name 'config.yml.*' 2>/dev/null || true)"
 if [ -z "$perm_leftover" ]; then
-  pass "5c-4: 書き戻しに使った一時ファイルが .backlog/ に残っていない"
+  pass "5c-3: 書き戻しに使った一時ファイルが .backlog/ に残っていない"
 else
-  fail "5c-4: 書き戻しに使った一時ファイルが残っている: $perm_leftover"
+  fail "5c-3: 書き戻しに使った一時ファイルが残っている: $perm_leftover"
 fi
 
 echo ""
@@ -700,9 +700,8 @@ register_tmp_cleanup "$TMP_REPO_MIGRATION"
 # （このセクションが見るのは config.my.yml だけである）。
 init_repo_with_backlog_config "$TMP_REPO_MIGRATION" "migration-test"
 
-# テンプレートの最後のキー（auto_merge_reviewed、コメント込み）が丸ごと欠けた
-# 「旧バージョンの config.my.yml」を、テンプレートの先頭から max_redispatch の
-# 値行までを切り出して作る。
+# テンプレートの max_redispatch より後ろのキー（auto_merge_reviewed 以降、コメント込み）が
+# 丸ごと欠けた config.my.yml を、テンプレートの先頭から max_redispatch の値行までを切り出して作る。
 migration_config="$TMP_REPO_MIGRATION/.backlog/config.my.yml"
 max_redispatch_line="$(grep -n '^  max_redispatch:' "$SOURCE_CONFIG" | head -1 | cut -d: -f1)"
 head -n "$max_redispatch_line" "$SOURCE_CONFIG" > "$migration_config"
@@ -803,7 +802,7 @@ else
 fi
 
 echo ""
-echo "=== 6c. 既存キーの説明コメントがテンプレートから取り残された場合の検出（TASK-74） ==="
+echo "=== 6b. 既存キーの説明コメントがテンプレートから取り残された場合の検出（TASK-74） ==="
 # ensure_config_my_yml_keys が補うのは「導入先に無いキー」だけなので、既にあるキーの
 # 説明コメントは再実行しても更新されず、テンプレート側の重要な訂正が既存の導入先に届かない。
 # ユーザー所有ファイルを壊さないことを優先して機械的な差し替えはせず、差異があることと
@@ -862,6 +861,8 @@ fi
 # 警告出力にテンプレート側の最新の説明そのものが載ることの検証に使う。
 template_first_comment_line="$(awk -v n="$(forbidden_paths_comment_start_line "$SOURCE_CONFIG")" 'NR == n' "$SOURCE_CONFIG")"
 
+echo ""
+echo "--- 6b-1. 説明コメントがテンプレートと異なるキーを報告し、config.my.yml は書き換えない（TASK-74 AC#1・AC#2） ---"
 # 実行前のファイル内容を控え、実行後に1バイトも変わっていないことを確かめる。
 drift_config_before="$(mktemp)"
 register_tmp_cleanup "$drift_config_before"
@@ -941,13 +942,13 @@ fi
 rm -f "$drift_config_before"
 
 echo ""
-echo "--- 6c-3. テンプレートと説明コメントが一致していれば警告は出ない（TASK-74 AC#1 の裏側） ---"
+echo "--- 6b-2. テンプレートと説明コメントが一致していれば警告は出ない（TASK-74 AC#1 の裏側） ---"
 # 共有フィクスチャ FIXTURE_RERUN の config.my.yml は、テンプレートの複製の末尾にマーカーの
 # コメント行を足しただけで、どのキーの説明コメントもテンプレートと一致している。その再実行の
 # 出力を読む。どちらも「出力に無いこと」を見るので、実行が失敗して出力が空でも通ってしまわない
 # よう、先に実行が成功して出力があることを確かめる。
 if [ "$FIXTURE_RERUN_EXIT" -ne 0 ] || [ -z "$FIXTURE_RERUN_OUTPUT" ]; then
-  fail "6c-3: 前提の FIXTURE_RERUN の実行が成功していない（exit ${FIXTURE_RERUN_EXIT}）ので、警告が出ないことを検証できない:
+  fail "6b-2: 前提の FIXTURE_RERUN の実行が成功していない（exit ${FIXTURE_RERUN_EXIT}）ので、警告が出ないことを検証できない:
 $FIXTURE_RERUN_OUTPUT"
 else
   if printf '%s\n' "$FIXTURE_RERUN_OUTPUT" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
@@ -960,7 +961,7 @@ $FIXTURE_RERUN_OUTPUT"
     fail "警告が無いのにサマリーへ「人手での確認が要る項目」の節が出力された:
 $FIXTURE_RERUN_OUTPUT"
   else
-    pass "警告が無ければサマリーの出力は従来どおり（余分な節を出さない）"
+    pass "警告が無ければサマリーに「人手での確認が要る項目」の節を出さない"
   fi
 fi
 
@@ -1066,7 +1067,7 @@ else
 fi
 
 echo ""
-echo "=== 7d. task_prefix をカスタマイズしたリポジトリでの Reviewed タスク移行（回帰テスト） ==="
+echo "=== 7c. task_prefix をカスタマイズしたリポジトリでの Reviewed タスク移行（回帰テスト） ==="
 # ID は config.yml の task_prefix に応じて変わる（task_prefix: "issue" なら "ISSUE-<n>"）。
 # 抽出パターンを "TASK-" 固定にすると、prefix をカスタマイズしたリポジトリでは対象タスクを
 # 一切検出できず、statuses からだけ "Reviewed" が消えて既存タスクが取り残される
@@ -1112,7 +1113,8 @@ echo "=== 8. remoteOperations / defaultAssignee の既定値収束の検証 ==="
 # remoteOperations と defaultAssignee は「未設定・既定値のままの箇所だけを安全に補正し、
 # 既にユーザーが設定した値は上書きしない」パターンで収束させる。
 
-# 8a の前状態は FIXTURE_FRESH と同一なので読み取りで共有する
+# ---- 8a. 新規セットアップで remoteOperations と default_assignee が既定値へ収束する ----
+# 前状態は FIXTURE_FRESH と同一なので読み取りで共有する
 # （backlog config get は読み取り専用でフィクスチャを変更しない）。
 remote_ops_after_setup="$(cd "$FIXTURE_FRESH_REPO" && backlog config get remoteOperations 2>/dev/null)"
 if [ "$remote_ops_after_setup" = "false" ]; then
@@ -1270,9 +1272,8 @@ else
 fi
 
 # ---- 8f. backlog CLI に壊された値が再実行で収束し、無音のスキップにならない（TASK-90 AC#2）----
-# 以前の setup-improvement-loop が書いたインライン配列を backlog CLI が再シリアライズした
-# 後の形をそのまま前状態として与える。従来はキーの有無しか見ていなかったため
-# 「既に設定されている」とだけ出して壊れたまま素通りしていた。
+# setup-improvement-loop が書いたインライン配列を backlog CLI が再シリアライズした後の形を
+# 前状態として与える。キーの有無だけで判定すると「既に設定されている」とスキップし、壊れたまま残る。
 TMP_REPO_BROKEN_ASSIGNEE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_BROKEN_ASSIGNEE"
 init_repo_with_backlog_config "$TMP_REPO_BROKEN_ASSIGNEE" "broken-assignee-test" \
@@ -1297,7 +1298,7 @@ else
   fail "8f(AC#2): 壊れた default_assignee が収束しなかった: $(grep -m1 '^default_assignee:' "$broken_assignee_config")"
 fi
 
-# 無音のスキップにならないこと。従来のスキップ文言が出ていないことも併せて見る
+# 無音のスキップにならないこと。通常のスキップ文言が出ていないことも併せて見る
 # （収束したのに「既に設定されている」と報告するのは矛盾である）。
 # config.my.yml の説明コメントのズレも [warn] を出しうるので、同じ行に
 # default_assignee が載っていることまで確かめる。
@@ -1321,8 +1322,8 @@ else
   fail "8f: 収束後、default_assignee が重複している（${broken_assignee_count} 件）"
 fi
 
-# 収束は config.yml の書き換えを伴うので、TASK-85 で入れたパーミッション保持の方針
-# （mv で inode ごと差し替えない）がこの経路でも守られていることを確認する。
+# 収束は config.yml の書き換えを伴うので、パーミッション保持の方針（mv で inode ごと
+# 差し替えない。TASK-85）がこの経路でも守られていることを確認する。
 broken_mode_after="$(file_mode "$broken_assignee_config")"
 if [ "$broken_mode_after" = "$broken_mode_before" ]; then
   pass "8f: default_assignee の収束で config.yml のパーミッションが変わらない（${broken_mode_before}）"
@@ -1711,7 +1712,7 @@ else
 $workspace_plain_output"
 fi
 
-# ---- claude-code/workspace-skills/ の2スキルだけが配置される ----
+# ---- claude-code/workspace-skills/ 配下のスキルだけが配置される ----
 assert_skill_symlinks "$TMP_WORKSPACE_PLAIN" "$SOURCE_WORKSPACE_SKILLS_DIR" "9a: " \
   "9a: claude-code/workspace-skills/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる" \
   "${WORKSPACE_SKILL_NAMES[@]}"
@@ -1725,7 +1726,7 @@ for name in "${SKILL_NAMES[@]}"; do
   fi
 done
 if [ "$workspace_plain_no_repo_skills" = true ]; then
-  pass "9a: --workspace 経路では単一リポジトリ用の5スキルが混入しない"
+  pass "9a: --workspace 経路では単一リポジトリ用のスキルが混入しない"
 fi
 
 # 件数が厳密に一致すること（想定外の余分なエントリが無いこと）も確認する。
@@ -1862,7 +1863,7 @@ register_tmp_cleanup "$TMP_NON_GIT_NO_FLAG"
 no_flag_output="$("$SETUP_SCRIPT" "$TMP_NON_GIT_NO_FLAG" 2>&1)"
 no_flag_exit=$?
 if [ "$no_flag_exit" -ne 0 ] && grep -Fq "対象ディレクトリは git リポジトリではない" <<<"$no_flag_output"; then
-  pass "9f: --workspace を渡さなければ、これまで通り git リポジトリでない対象はエラーで停止する"
+  pass "9f: --workspace を渡さなければ git リポジトリでない対象はエラーで停止する"
 else
   fail "9f: --workspace 無しの既定動作が変化している（exit ${no_flag_exit}）:
 $no_flag_output"
@@ -1888,7 +1889,7 @@ else
   workspace_no_backlog_output="$(PATH="$STRIPPED_PATH" "$SETUP_SCRIPT" --workspace "$TMP_WORKSPACE_NO_BACKLOG" 2>&1)"
   workspace_no_backlog_exit=$?
   if [ "$workspace_no_backlog_exit" -eq 0 ]; then
-    pass "9g: backlog が PATH に無くても --workspace は成功する（P2 fix の回帰防止）"
+    pass "9g: backlog が PATH に無くても --workspace は成功する（--workspace 経路は backlog を必要としない）"
   else
     fail "9g: backlog が PATH に無いと --workspace が失敗した（exit ${workspace_no_backlog_exit}）:
 $workspace_no_backlog_output"
@@ -1905,8 +1906,8 @@ $workspace_no_backlog_output"
     pass "9g: backlog が PATH に無い状態でもワークスペーススキルが正しく配置される"
   fi
 
-  # ---- 9h. 対照: 同じ backlog 不在環境で、--workspace を渡さなければ従来通り
-  # backlog 不在エラーで停止する（P2 fix が逆方向に回帰していないことのガード）----
+  # ---- 9h. 対照: 同じ backlog 不在環境で、--workspace を渡さなければ backlog 不在エラーで
+  # 停止する（backlog を不要とするのが --workspace 経路だけであることのガード）----
   TMP_NO_BACKLOG_NO_FLAG="$(mktemp -d)"
   register_tmp_cleanup "$TMP_NO_BACKLOG_NO_FLAG"
   no_backlog_no_flag_output="$(PATH="$STRIPPED_PATH" "$SETUP_SCRIPT" "$TMP_NO_BACKLOG_NO_FLAG" 2>&1)"

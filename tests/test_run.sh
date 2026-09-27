@@ -24,7 +24,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 16. tests/run.sh の集計とスキップされたテストファイルの扱い ==="
+echo "=== tests/run.sh の集計とスキップされたテストファイルの扱い ==="
 
 TOTAL_SUMMARY_RE='^PASS: [0-9]+, FAIL: [0-9]+, SKIP: [0-9]+$'
 

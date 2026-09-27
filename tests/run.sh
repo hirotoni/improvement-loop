@@ -69,9 +69,7 @@ for test_path in "$SCRIPT_DIR"/test_*.sh; do
     fi
   else
     # サマリー行が無いと、そのファイルが何件通って何件落ちたのかを集計できない。
-    # 終了ステータスが 0 でも黙って無視せず FAIL にする。以前はここが
-    # exit_code != 0 の場合だけの分岐だったため、「サマリー行なし かつ exit 0」の
-    # ファイルが PASS/FAIL/SKIP のどこにも計上されずに消えていた（TASK-91）。
+    # 終了ステータスが 0 でも黙って無視せず FAIL にする（TASK-91）。
     echo "FAIL: $test_file がサマリー行を出力せずに終了した（exit ${exit_code}）"
     TOTAL_FAIL=$((TOTAL_FAIL + 1))
     FILES_UNCOUNTED=$((FILES_UNCOUNTED + 1))
