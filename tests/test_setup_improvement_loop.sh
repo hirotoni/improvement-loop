@@ -69,42 +69,112 @@ for name in "${SKILL_NAMES[@]}"; do
   EXPECTED_EXCLUDE_LINES+=(".claude/skills/$name")
 done
 
-# 「improvement-loop の導入が既に済んでいるリポジトリ」の .backlog/config.yml を書き出す。
-# statuses に6ステータスが揃い、remote_operations が false、default_assignee も設定済みという、
-# setup-improvement-loop が既に一度収束させた後の状態である。
+# .backlog/config.yml を書き出す。既定は「improvement-loop の導入が既に済んでいるリポジトリ」、
+# つまり statuses に6ステータスが揃い、remote_operations が false、default_assignee も設定済みの
+# 状態である。前状態を空リポジトリにすると setup が backlog init と backlog config set を追加で
+# 起動し、backlog CLI は1回の起動で平均 170ms かかる。検証対象でない収束処理を毎セクション
+# 走らせないよう、各セクションは検証したい差分だけを引数で与える。
 #
-# config.yml 自体を検証対象にしていないセクション（config.my.yml のマイグレーションを見る
-# 6・6b・6c 系）がこれを使う。前状態を空リポジトリにすると setup が backlog init と
-# backlog config set を追加で起動し、backlog CLI は1回の起動で平均 170ms かかるためである。
-# 検証対象でない収束処理を毎セクション走らせる必要はない。
-#
-# config.yml を自前の heredoc で書くセクション（4・5・5b・7・7d）も同じ理由で
-# default_assignee と remote_operations: false を与えてある。statuses の書式や旧ステータス名の
-# 残存はそれぞれの検証対象なので heredoc のまま残す。8c だけは remote_operations の収束
-# そのものが検証対象なので収束前の値を保っている。
-# 引数: 書き出す config.yml のパス, project_name
-write_settled_backlog_config() {
+# 差分の書き方:
+#   "key: value"  既定の key の行をこの内容に置き換える（改行を含めて複数行の値にしてもよい）
+#   "-key"        既定の key の行を出力しない
+# 既定に無い key を渡すと、前状態を作れていないので fail を計上する。
+# 引数: 書き出す config.yml のパス, project_name, 差分...
+write_backlog_config() {
   local config_file="$1"
   local project_name="$2"
+  shift 2
+  local base_lines=(
+    "project_name: \"$project_name\""
+    'default_assignee: "@improvement-loop-bot"'
+    'default_status: "To Do"'
+    'statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]'
+    'labels: []'
+    'date_format: yyyy-mm-dd'
+    'max_column_width: 20'
+    'auto_open_browser: true'
+    'default_port: 6420'
+    'remote_operations: false'
+    'auto_commit: false'
+    'filesystem_only: false'
+    'bypass_git_hooks: false'
+    'check_active_branches: true'
+    'active_branch_days: 30'
+    'task_prefix: "task"'
+  )
+  local override key base_line matched
+  for override in "$@"; do
+    case "$override" in
+      -*:*) fail "テスト前提が壊れている: write_backlog_config の差分 '$override' は削除（-key）と置換（key: value）が混ざっている" ;;
+      -* | *:*) ;;
+      *) fail "テスト前提が壊れている: write_backlog_config の差分 '$override' が 'key: value' でも '-key' でもない" ;;
+    esac
+    key="${override#-}"
+    key="${key%%:*}"
+    matched=false
+    for base_line in "${base_lines[@]}"; do
+      [ "${base_line%%:*}" = "$key" ] && matched=true
+    done
+    if [ "$matched" = false ]; then
+      fail "テスト前提が壊れている: write_backlog_config の既定に無いキー '$key' が渡された"
+    fi
+  done
+
   mkdir -p "$(dirname "$config_file")"
-  cat > "$config_file" <<YAML
-project_name: "$project_name"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+  local line
+  for base_line in "${base_lines[@]}"; do
+    key="${base_line%%:*}"
+    line="$base_line"
+    for override in "$@"; do
+      if [ "$override" = "-$key" ]; then
+        line=""
+      elif [ "${override%%:*}" = "$key" ]; then
+        line="$override"
+      fi
+    done
+    if [ -n "$line" ]; then
+      printf '%s\n' "$line"
+    fi
+  done > "$config_file"
+}
+
+# git リポジトリとして初期化し、write_backlog_config で .backlog/config.yml を置く。
+# 引数: リポジトリのディレクトリ（作成・後片付け登録済みであること）, project_name, 差分...
+init_repo_with_backlog_config() {
+  local repo_dir="$1"
+  shift
+  (cd "$repo_dir" && git init -q)
+  write_backlog_config "$repo_dir/.backlog/config.yml" "$@"
+}
+
+# <対象ディレクトリ>/.claude/skills/<名前> が、<配布元>/<名前> へのシンボリックリンクとして
+# 実体を指していることを名前ごとに確かめる。問題のある名前ごとに fail を出し、すべて
+# 正しければ pass を1件計上する。
+# 引数: 対象ディレクトリ, 配布元のスキルディレクトリ, fail の接頭辞, pass の文言, スキル名...
+assert_skill_symlinks() {
+  local target_dir="$1"
+  local source_dir="$2"
+  local fail_prefix="$3"
+  local pass_message="$4"
+  shift 4
+  local name link_path resolved expected_resolved all_ok=true
+  for name in "$@"; do
+    link_path="$target_dir/.claude/skills/$name"
+    if [ ! -L "$link_path" ]; then
+      all_ok=false
+      fail "${fail_prefix}.claude/skills/$name がシンボリックリンクとして存在しない"
+      continue
+    fi
+    resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
+    expected_resolved="$(cd "$source_dir/$name" && pwd -P)"
+    if [ "$resolved" != "$expected_resolved" ]; then
+      all_ok=false
+      fail "${fail_prefix}.claude/skills/$name のリンク先が誤っている（${resolved} != ${expected_resolved}）"
+    fi
+  done
+  if [ "$all_ok" = true ]; then
+    pass "$pass_message"
+  fi
 }
 
 echo "=== 共有フィクスチャの構築 ==="
@@ -128,8 +198,10 @@ FIXTURE_FRESH_EXIT=$?
 #   - .backlog/config.my.yml への $FIXTURE_RERUN_MARKER の追記
 #   - .backlog/config.yml の statuses への $FIXTURE_RERUN_CUSTOM_STATUS の追加
 # を加えたうえで setup-improvement-loop を2回目に実行した状態。「導入済みリポジトリ
-# への再実行」を前提に検証するセクション 3・8b が読み取り専用で共有する。
+# への再実行」を前提に検証するセクション 3・6c-3・8b が読み取り専用で共有する。
 # この2つのユーザー変更はフィクスチャの契約の一部であり、消費側はこれを前提にしてよい。
+# 6c-3 は、config.my.yml のどのキーの説明コメントもテンプレートと一致し、再実行が [warn] を
+# 1件も出さないことも前提にする。ユーザー変更を足すときはこの前提を崩さないこと。
 FIXTURE_RERUN_REPO="$(mktemp -d)"
 register_tmp_cleanup "$FIXTURE_RERUN_REPO"
 FIXTURE_RERUN_MARKER="# TEST-MARKER-$$-$(date +%s)"
@@ -196,21 +268,9 @@ $FIXTURE_FRESH_OUTPUT"
 fi
 
 # ---- シンボリックリンクの検証 ----
-for name in "${SKILL_NAMES[@]}"; do
-  link_path="$FIXTURE_FRESH_REPO/.claude/skills/$name"
-  expected_target="$SOURCE_SKILLS_DIR/$name"
-  if [ -L "$link_path" ]; then
-    resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
-    expected_resolved="$(cd "$expected_target" && pwd -P)"
-    if [ "$resolved" = "$expected_resolved" ]; then
-      pass ".claude/skills/$name はリポジトリの claude-code/skills/$name への正しいシンボリックリンクである"
-    else
-      fail ".claude/skills/$name のリンク先が誤っている（${resolved} != ${expected_resolved}）"
-    fi
-  else
-    fail ".claude/skills/$name がシンボリックリンクとして存在しない"
-  fi
-done
+assert_skill_symlinks "$FIXTURE_FRESH_REPO" "$SOURCE_SKILLS_DIR" "" \
+  ".claude/skills/ 配下の全スキル（${SKILL_NAMES[*]}）がリポジトリの claude-code/skills/ への正しいシンボリックリンクである" \
+  "${SKILL_NAMES[@]}"
 
 # ---- .backlog/config.yml の statuses の検証 ----
 # backlog init --defaults の既定 statuses は3種のみで、Proposed / In Review / Approved が
@@ -289,25 +349,9 @@ $install_output"
 $symlink_output"
     fi
 
-    symlink_links_ok=true
-    for name in "${SKILL_NAMES[@]}"; do
-      link_path="$TMP_REPO_SYMLINK/.claude/skills/$name"
-      expected_target="$SOURCE_SKILLS_DIR/$name"
-      if [ -L "$link_path" ]; then
-        resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
-        expected_resolved="$(cd "$expected_target" && pwd -P)"
-        if [ "$resolved" != "$expected_resolved" ]; then
-          symlink_links_ok=false
-          fail "シンボリックリンク経由実行: .claude/skills/$name のリンク先が誤っている（${resolved} != ${expected_resolved}）"
-        fi
-      else
-        symlink_links_ok=false
-        fail "シンボリックリンク経由実行: .claude/skills/$name がシンボリックリンクとして存在しない"
-      fi
-    done
-    if [ "$symlink_links_ok" = true ]; then
-      pass "シンボリックリンク経由実行でも、本物のリポジトリの claude-code/skills/ を配布元として正しく使えている"
-    fi
+    assert_skill_symlinks "$TMP_REPO_SYMLINK" "$SOURCE_SKILLS_DIR" "シンボリックリンク経由実行: " \
+      "シンボリックリンク経由実行でも、本物のリポジトリの claude-code/skills/ を配布元として正しく使えている" \
+      "${SKILL_NAMES[@]}"
   else
     fail "install.zsh がシンボリックリンクを作成しなかった: $INSTALLED_SYMLINK"
   fi
@@ -389,27 +433,7 @@ echo "=== 4. statuses: [] (空配列) に対する回帰テスト ==="
 
 TMP_REPO_EMPTY_STATUSES="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_EMPTY_STATUSES"
-
-(cd "$TMP_REPO_EMPTY_STATUSES" && git init -q)
-mkdir -p "$TMP_REPO_EMPTY_STATUSES/.backlog"
-cat > "$TMP_REPO_EMPTY_STATUSES/.backlog/config.yml" <<'YAML'
-project_name: "empty-statuses-test"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses: []
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+init_repo_with_backlog_config "$TMP_REPO_EMPTY_STATUSES" "empty-statuses-test" 'statuses: []'
 
 empty_statuses_output="$("$SETUP_SCRIPT" "$TMP_REPO_EMPTY_STATUSES" 2>&1)"
 empty_statuses_exit=$?
@@ -430,30 +454,10 @@ echo "=== 5. statuses の複数行YAMLリスト形式に対する回帰テスト
 
 TMP_REPO_MULTILINE_STATUSES="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_MULTILINE_STATUSES"
-
-(cd "$TMP_REPO_MULTILINE_STATUSES" && git init -q)
-mkdir -p "$TMP_REPO_MULTILINE_STATUSES/.backlog"
-cat > "$TMP_REPO_MULTILINE_STATUSES/.backlog/config.yml" <<'YAML'
-project_name: "multiline-statuses-test"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses:
+init_repo_with_backlog_config "$TMP_REPO_MULTILINE_STATUSES" "multiline-statuses-test" 'statuses:
   - "To Do"
   - "In Progress"
-  - "Done"
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+  - "Done"'
 
 multiline_statuses_output="$("$SETUP_SCRIPT" "$TMP_REPO_MULTILINE_STATUSES" 2>&1)"
 multiline_statuses_exit=$?
@@ -518,27 +522,8 @@ echo ""
 echo "--- 5b-1. statuses をシングルクォートのインライン配列で書いた場合（AC#3） ---"
 TMP_REPO_SINGLEQUOTE_INLINE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_INLINE"
-
-(cd "$TMP_REPO_SINGLEQUOTE_INLINE" && git init -q)
-mkdir -p "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog"
-cat > "$TMP_REPO_SINGLEQUOTE_INLINE/.backlog/config.yml" <<'YAML'
-project_name: "singlequote-inline-test"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses: ['Proposed', 'To Do', 'Done']
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+init_repo_with_backlog_config "$TMP_REPO_SINGLEQUOTE_INLINE" "singlequote-inline-test" \
+  "statuses: ['Proposed', 'To Do', 'Done']"
 
 singlequote_inline_output="$("$SETUP_SCRIPT" "$TMP_REPO_SINGLEQUOTE_INLINE" 2>&1)"
 singlequote_inline_exit=$?
@@ -556,30 +541,10 @@ echo ""
 echo "--- 5b-2. statuses をシングルクォートの複数行YAMLリストで書いた場合（AC#1） ---"
 TMP_REPO_SINGLEQUOTE_MULTILINE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SINGLEQUOTE_MULTILINE"
-
-(cd "$TMP_REPO_SINGLEQUOTE_MULTILINE" && git init -q)
-mkdir -p "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog"
-cat > "$TMP_REPO_SINGLEQUOTE_MULTILINE/.backlog/config.yml" <<'YAML'
-project_name: "singlequote-multiline-test"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses:
+init_repo_with_backlog_config "$TMP_REPO_SINGLEQUOTE_MULTILINE" "singlequote-multiline-test" "statuses:
   - 'Proposed'
   - 'To Do'
-  - 'Done'
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+  - 'Done'"
 
 singlequote_multiline_output="$("$SETUP_SCRIPT" "$TMP_REPO_SINGLEQUOTE_MULTILINE" 2>&1)"
 singlequote_multiline_exit=$?
@@ -632,26 +597,8 @@ make_perm_test_repo() {
   local project_name="$2"
   local mode="$3"
 
-  (cd "$repo_dir" && git init -q)
-  mkdir -p "$repo_dir/.backlog"
-  cat > "$repo_dir/.backlog/config.yml" <<YAML
-project_name: "$project_name"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses: ["To Do", "In Progress", "Done"]  # 末尾コメント
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+  init_repo_with_backlog_config "$repo_dir" "$project_name" \
+    'statuses: ["To Do", "In Progress", "Done"]  # 末尾コメント'
   chmod "$mode" "$repo_dir/.backlog/config.yml"
 }
 
@@ -737,19 +684,21 @@ else
 fi
 
 echo ""
-echo "=== 6. config.my.yml の不足キー補完（マイグレーション）の回帰テスト ==="
+echo "=== 6. config.my.yml の不足キー補完（マイグレーション）とコメントアウトされたキーの回帰テスト（TASK-37） ==="
 # テンプレートに新しいキーが追加された状況を「導入先の config.my.yml に一部キーが
 # 欠けている」状態として再現する。欠けているキーだけがテンプレート側のコメント・既定値
 # 付きで補われ、既存のキーの値・コメントとユーザー独自のキーは残ることを確認する。
+#
+# 同じ前状態に、ユーザーが一時的に無効化する目的で行頭に "#" を付けたキー
+# （"  # max_in_progress: 1"）も置く。既存キーの検出が "^  key:" だけだと、これを「未設定」と
+# 誤認して有効な形で再追記してしまう（同名キーが2箇所に重複する）。コメントアウトされた
+# キーは意図的な無効化として扱い、重複追記されないことを検証する。
 
 TMP_REPO_MIGRATION="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_MIGRATION"
-
-(cd "$TMP_REPO_MIGRATION" && git init -q)
-mkdir -p "$TMP_REPO_MIGRATION/.backlog"
 # 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
 # （このセクションが見るのは config.my.yml だけである）。
-write_settled_backlog_config "$TMP_REPO_MIGRATION/.backlog/config.yml" "migration-test"
+init_repo_with_backlog_config "$TMP_REPO_MIGRATION" "migration-test"
 
 # テンプレートの最後のキー（auto_merge_reviewed、コメント込み）が丸ごと欠けた
 # 「旧バージョンの config.my.yml」を、テンプレートの先頭から max_redispatch の
@@ -762,23 +711,30 @@ if grep -q '^  auto_merge_reviewed:' "$migration_config"; then
   fail "テスト前提が壊れている: auto_merge_reviewed の除去に失敗した"
 fi
 
-# 既存キー（max_in_review）をユーザーが値・コメント付きで変更した状態を作る
-# （AC#2 検証用）。sed -i は使わず、他の箇所と同じ mktemp+mv で書き換える。
+# 既存キー max_in_review をユーザーが値・コメント付きで変更し（AC#2 検証用）、
+# max_in_progress をユーザーが一時的に無効化した想定でコメントアウトする。
+# sed -i は使わず、他の箇所と同じ mktemp+mv で書き換える。
 migration_config_tmp="$(mktemp)"
 register_tmp_cleanup "$migration_config_tmp"
-sed 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
+sed -E \
+  -e 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
+  -e 's/^  max_in_progress: 1$/  # max_in_progress: 1/' \
   "$migration_config" > "$migration_config_tmp"
 mv "$migration_config_tmp" "$migration_config"
 
 # テンプレートに無いユーザー独自のキーを追記する（AC#3 検証用）。
 printf '\n  # ユーザー独自の調整値。テンプレートには存在しない。\n  my_custom_key: "keep-me"\n' >> "$migration_config"
 
+if ! grep -Fq '  # max_in_progress: 1' "$migration_config"; then
+  fail "テスト前提が壊れている: max_in_progress のコメントアウトに失敗した"
+fi
+
 migration_output="$("$SETUP_SCRIPT" "$TMP_REPO_MIGRATION" 2>&1)"
 migration_exit=$?
 if [ "$migration_exit" -eq 0 ]; then
-  pass "欠けたキーを持つ config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
+  pass "欠けたキー・コメントアウトされたキーを持つ config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
 else
-  fail "欠けたキーを持つ config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${migration_exit}）:
+  fail "欠けたキー・コメントアウトされたキーを持つ config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${migration_exit}）:
 $migration_output"
 fi
 
@@ -808,7 +764,23 @@ else
   fail "テンプレートに無いユーザー独自のキー my_custom_key が失われた"
 fi
 
-# 全キーが揃った状態で再実行しても、キーが重複追加されない（冪等性）ことを確認する。
+# TASK-37 AC#1: コメントアウトされたキーが有効な形で重複追記されない
+commented_active_count="$(grep -Ec '^  max_in_progress:' "$migration_config" || true)"
+if [ "$commented_active_count" = "0" ]; then
+  pass "コメントアウトされたキー max_in_progress が有効な形で重複追記されない"
+else
+  fail "コメントアウトされたキー max_in_progress が有効な形で重複追記された（${commented_active_count} 件）:
+$(grep -n 'max_in_progress' "$migration_config")"
+fi
+
+if grep -Fq '  # max_in_progress: 1' "$migration_config"; then
+  pass "コメントアウトされた max_in_progress の行がそのまま保持されている"
+else
+  fail "コメントアウトされた max_in_progress の行が変更・消失した"
+fi
+
+# 全キーが揃った状態で再実行しても、キーが重複追加されず、コメントアウトされたキーも
+# 有効化されない（冪等性）ことを確認する。
 migration_output2="$("$SETUP_SCRIPT" "$TMP_REPO_MIGRATION" 2>&1)"
 migration_exit2=$?
 if [ "$migration_exit2" -eq 0 ]; then
@@ -823,74 +795,11 @@ if [ "$auto_merge_count" = "1" ]; then
 else
   fail "全キーが揃った後の再実行で auto_merge_reviewed が重複している（${auto_merge_count} 件）"
 fi
-
-echo ""
-echo "=== 6b. コメントアウトされたキーの誤認・重複追記の回帰テスト（TASK-37） ==="
-# 既存キーの検出が "^  key:" だけだと、ユーザーが一時的に無効化する目的で行頭に "#" を
-# 付けたキー（例: "  # max_in_review: 3"）を「未設定」と誤認し、有効な形で再追記して
-# しまう（同名キーが2箇所に重複する）。コメントアウトされたキーは意図的な無効化として
-# 扱い、重複追記されないことを検証する。
-
-TMP_REPO_COMMENTED="$(mktemp -d)"
-register_tmp_cleanup "$TMP_REPO_COMMENTED"
-
-(cd "$TMP_REPO_COMMENTED" && git init -q)
-mkdir -p "$TMP_REPO_COMMENTED/.backlog"
-# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
-# （このセクションが見るのは config.my.yml だけである）。
-write_settled_backlog_config "$TMP_REPO_COMMENTED/.backlog/config.yml" "commented-key-test"
-
-commented_config="$TMP_REPO_COMMENTED/.backlog/config.my.yml"
-cp "$SOURCE_CONFIG" "$commented_config"
-
-# 既存キー max_in_review を、ユーザーが一時的に無効化した想定でコメントアウトする。
-commented_config_tmp="$(mktemp)"
-register_tmp_cleanup "$commented_config_tmp"
-sed -E 's/^(  )max_in_review: 3$/\1# max_in_review: 3/' "$commented_config" > "$commented_config_tmp"
-mv "$commented_config_tmp" "$commented_config"
-
-if ! grep -Fq '  # max_in_review: 3' "$commented_config"; then
-  fail "テスト前提が壊れている: max_in_review のコメントアウトに失敗した"
-fi
-
-commented_output="$("$SETUP_SCRIPT" "$TMP_REPO_COMMENTED" 2>&1)"
-commented_exit=$?
-if [ "$commented_exit" -eq 0 ]; then
-  pass "コメントアウトされたキーを含む config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
-else
-  fail "コメントアウトされたキーを含む config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${commented_exit}）:
-$commented_output"
-fi
-
-# AC#1: コメントアウトされたキーが有効な形で重複追記されない
-commented_active_count="$(grep -Ec '^  max_in_review:' "$commented_config" || true)"
-if [ "$commented_active_count" = "0" ]; then
-  pass "コメントアウトされたキー max_in_review が有効な形で重複追記されない"
-else
-  fail "コメントアウトされたキー max_in_review が有効な形で重複追記された（${commented_active_count} 件）:
-$(grep -n 'max_in_review' "$commented_config")"
-fi
-
-if grep -Fq '  # max_in_review: 3' "$commented_config"; then
-  pass "コメントアウトされた max_in_review の行がそのまま保持されている"
-else
-  fail "コメントアウトされた max_in_review の行が変更・消失した"
-fi
-
-# 再実行しても結果が変わらない（冪等性）ことを確認する。
-commented_output2="$("$SETUP_SCRIPT" "$TMP_REPO_COMMENTED" 2>&1)"
-commented_exit2=$?
-if [ "$commented_exit2" -eq 0 ]; then
-  pass "コメントアウトされたキーを含む config.my.yml への再実行も成功する（exit 0）"
-else
-  fail "コメントアウトされたキーを含む config.my.yml への再実行が失敗した（exit ${commented_exit2}）:
-$commented_output2"
-fi
-commented_active_count2="$(grep -Ec '^  max_in_review:' "$commented_config" || true)"
+commented_active_count2="$(grep -Ec '^  max_in_progress:' "$migration_config" || true)"
 if [ "$commented_active_count2" = "0" ]; then
-  pass "再実行後もコメントアウトされたキー max_in_review が有効な形で重複追記されない"
+  pass "再実行後もコメントアウトされたキー max_in_progress が有効な形で重複追記されない"
 else
-  fail "再実行後にコメントアウトされたキー max_in_review が有効な形で重複追記された（${commented_active_count2} 件）"
+  fail "再実行後にコメントアウトされたキー max_in_progress が有効な形で重複追記された（${commented_active_count2} 件）"
 fi
 
 echo ""
@@ -900,63 +809,58 @@ echo "=== 6c. 既存キーの説明コメントがテンプレートから取り
 # ユーザー所有ファイルを壊さないことを優先して機械的な差し替えはせず、差異があることと
 # テンプレート側の最新の説明を利用者に示すにとどめる。ここではその報告が出ること、および
 # 報告のためにファイルを一切書き換えないことを検証する。
+#
+# 同じ前状態に、ユーザーが変更した値・独自キー・コメントアウトしたキーも同居させる。
+# 説明コメントの差異検出があっても、既存の3つの保護（値の保持・独自キーの保持・
+# コメントアウトされたキーを有効化しない）が崩れないことも確かめる（TASK-74 AC#2）。
 
 TMP_REPO_COMMENT_DRIFT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_COMMENT_DRIFT"
-
-(cd "$TMP_REPO_COMMENT_DRIFT" && git init -q)
-mkdir -p "$TMP_REPO_COMMENT_DRIFT/.backlog"
 # 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
 # （このセクションが見るのは config.my.yml だけである）。
-write_settled_backlog_config "$TMP_REPO_COMMENT_DRIFT/.backlog/config.yml" "comment-drift-test"
+init_repo_with_backlog_config "$TMP_REPO_COMMENT_DRIFT" "comment-drift-test"
 
 drift_config="$TMP_REPO_COMMENT_DRIFT/.backlog/config.my.yml"
 cp "$SOURCE_CONFIG" "$drift_config"
 
-# 「古いテンプレートで導入されたリポジトリ」を再現する。テンプレートの文面に依存しないよう、
 # forbidden_paths のキー行の直前にある連続コメント行（＝そのキーの説明ブロック）の
-# 先頭行だけを旧文言に差し替える。他のキー・値・ユーザー独自の記述には触れない。
+# 先頭行の行番号を出力する。
+# 引数: config.my.yml のパス
+forbidden_paths_comment_start_line() {
+  awk '
+    /^  forbidden_paths:/ { print (start ? start : NR); exit }
+    /^  #/ { if (!start) { start = NR }; next }
+    { start = 0 }
+  ' "$1"
+}
+
+# 「古いテンプレートで導入されたリポジトリ」を再現する。テンプレートの文面に依存しないよう、
+# forbidden_paths の説明ブロックの先頭行だけを旧文言に差し替える。あわせて、ユーザーによる
+# 値の変更・キーのコメントアウト・独自キーの追記を加える。
+drift_start_line="$(forbidden_paths_comment_start_line "$drift_config")"
 drift_config_tmp="$(mktemp)"
 register_tmp_cleanup "$drift_config_tmp"
-awk '
-  { lines[NR] = $0 }
-  END {
-    keyline = 0
-    for (i = 1; i <= NR; i++) {
-      if (lines[i] ~ /^  forbidden_paths:/) { keyline = i; break }
-    }
-    if (keyline == 0) { exit 1 }
-    start = keyline
-    for (i = keyline - 1; i >= 1; i--) {
-      if (lines[i] ~ /^  #/) { start = i } else { break }
-    }
-    lines[start] = "  # これはAIエージェントへの指示にとどまり、変更を機械的に拒否・検知する仕組みではない。"
-    for (i = 1; i <= NR; i++) { print lines[i] }
-  }
-' "$drift_config" > "$drift_config_tmp"
+awk -v n="$drift_start_line" '
+  NR == n { print "  # これはAIエージェントへの指示にとどまり、変更を機械的に拒否・検知する仕組みではない。"; next }
+  { print }
+' "$drift_config" | sed -E \
+  -e 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
+  -e 's/^  max_in_progress: 1$/  # max_in_progress: 1/' \
+  > "$drift_config_tmp"
 mv "$drift_config_tmp" "$drift_config"
+printf '\n  # ユーザー独自の調整値。テンプレートには存在しない。\n  my_custom_key: "keep-me"\n' >> "$drift_config"
 
 if ! grep -Fq '  # これはAIエージェントへの指示にとどまり、変更を機械的に拒否・検知する仕組みではない。' "$drift_config"; then
   fail "テスト前提が壊れている: forbidden_paths の説明コメントを旧文言に差し替えられなかった"
 fi
+if ! grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$drift_config" \
+  || ! grep -Fq '  # max_in_progress: 1' "$drift_config"; then
+  fail "テスト前提が壊れている: ユーザー変更・コメントアウトの再現に失敗した"
+fi
 
 # テンプレート側の説明ブロックの先頭行（＝導入先では旧文言に置き換わっている行）。
 # 警告出力にテンプレート側の最新の説明そのものが載ることの検証に使う。
-template_first_comment_line="$(awk '
-  { lines[NR] = $0 }
-  END {
-    keyline = 0
-    for (i = 1; i <= NR; i++) {
-      if (lines[i] ~ /^  forbidden_paths:/) { keyline = i; break }
-    }
-    if (keyline == 0) { exit 1 }
-    start = keyline
-    for (i = keyline - 1; i >= 1; i--) {
-      if (lines[i] ~ /^  #/) { start = i } else { break }
-    }
-    print lines[start]
-  }
-' "$SOURCE_CONFIG")"
+template_first_comment_line="$(awk -v n="$(forbidden_paths_comment_start_line "$SOURCE_CONFIG")" 'NR == n' "$SOURCE_CONFIG")"
 
 # 実行前のファイル内容を控え、実行後に1バイトも変わっていないことを確かめる。
 drift_config_before="$(mktemp)"
@@ -987,7 +891,7 @@ $drift_output"
 fi
 # 差異の報告だけでなく、テンプレート側の最新の説明そのものが出力に載ること
 # （キー名だけでは「何がどう変わったか」が利用者に届かないため）。
-if printf '%s\n' "$drift_output" | grep -Fq "$template_first_comment_line"; then
+if [ -n "$template_first_comment_line" ] && printf '%s\n' "$drift_output" | grep -Fq "$template_first_comment_line"; then
   pass "テンプレート側の最新の説明そのものが警告に出力される"
 else
   fail "テンプレート側の最新の説明が警告に出力されない（期待した行: ${template_first_comment_line}）:
@@ -1000,6 +904,32 @@ $drift_output"
 else
   pass "テンプレートと一致しているキー allowed_paths は報告されない"
 fi
+# コメントアウトされたキーは有効なキー行として存在しないため、差異検出の対象外である
+# （この限界は warn_config_my_yml_comment_drift のコメントに明記されている）。
+if printf '%s\n' "$drift_output" | grep -Fq "キー 'max_in_progress' の説明コメントが"; then
+  fail "コメントアウトされたキー max_in_progress が差異検出の対象になった:
+$drift_output"
+else
+  pass "コメントアウトされたキー max_in_progress は差異検出の対象にならない"
+fi
+
+# TASK-74 AC#2: 差異検出を経ても、ユーザーが変更した値・独自キー・コメントアウトしたキーが壊れない
+if grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$drift_config"; then
+  pass "説明コメントの差異検出を経てもユーザーが変更した値・行末コメントが保たれる"
+else
+  fail "説明コメントの差異検出でユーザーが変更した値・行末コメントが失われた"
+fi
+if grep -Fq '  my_custom_key: "keep-me"' "$drift_config"; then
+  pass "説明コメントの差異検出を経てもテンプレートに無い独自キーが保たれる"
+else
+  fail "説明コメントの差異検出でテンプレートに無い独自キーが失われた"
+fi
+drift_active_count="$(grep -Ec '^  max_in_progress:' "$drift_config" || true)"
+if [ "$drift_active_count" = "0" ] && grep -Fq '  # max_in_progress: 1' "$drift_config"; then
+  pass "説明コメントの差異検出を経てもコメントアウトされたキーが有効化・重複追記されない"
+else
+  fail "説明コメントの差異検出でコメントアウトされたキー max_in_progress が有効化された（${drift_active_count} 件）"
+fi
 
 # AC#2: 報告のためにユーザー所有ファイルを1バイトも書き換えない
 if cmp -s "$drift_config_before" "$drift_config"; then
@@ -1011,100 +941,27 @@ fi
 rm -f "$drift_config_before"
 
 echo ""
-echo "--- 6c-2. ユーザーが変更した値・独自キー・コメントアウトしたキーは壊れない（TASK-74 AC#2） ---"
-# 説明コメントの差異検出があっても、既存の3つの保護（値の保持・独自キーの保持・
-# コメントアウトされたキーを有効化しない）が崩れないことを、全部を同居させて確認する。
-
-TMP_REPO_DRIFT_USEREDIT="$(mktemp -d)"
-register_tmp_cleanup "$TMP_REPO_DRIFT_USEREDIT"
-
-(cd "$TMP_REPO_DRIFT_USEREDIT" && git init -q)
-mkdir -p "$TMP_REPO_DRIFT_USEREDIT/.backlog"
-# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
-# （このセクションが見るのは config.my.yml だけである）。
-write_settled_backlog_config "$TMP_REPO_DRIFT_USEREDIT/.backlog/config.yml" "drift-useredit-test"
-
-useredit_config="$TMP_REPO_DRIFT_USEREDIT/.backlog/config.my.yml"
-cp "$drift_config" "$useredit_config"
-
-useredit_config_tmp="$(mktemp)"
-register_tmp_cleanup "$useredit_config_tmp"
-sed -E \
-  -e 's/^  max_in_review: 3$/  max_in_review: 99  # ユーザーが変更した値/' \
-  -e 's/^  max_in_progress: 1$/  # max_in_progress: 1/' \
-  "$useredit_config" > "$useredit_config_tmp"
-mv "$useredit_config_tmp" "$useredit_config"
-printf '\n  # ユーザー独自の調整値。テンプレートには存在しない。\n  my_custom_key: "keep-me"\n' >> "$useredit_config"
-
-if ! grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$useredit_config" \
-  || ! grep -Fq '  # max_in_progress: 1' "$useredit_config"; then
-  fail "テスト前提が壊れている: ユーザー変更・コメントアウトの再現に失敗した"
-fi
-
-useredit_output="$("$SETUP_SCRIPT" "$TMP_REPO_DRIFT_USEREDIT" 2>&1)"
-useredit_exit=$?
-if [ "$useredit_exit" -eq 0 ]; then
-  pass "ユーザー変更を含む config.my.yml に対する setup-improvement-loop 実行が成功する（exit 0）"
+echo "--- 6c-3. テンプレートと説明コメントが一致していれば警告は出ない（TASK-74 AC#1 の裏側） ---"
+# 共有フィクスチャ FIXTURE_RERUN の config.my.yml は、テンプレートの複製の末尾にマーカーの
+# コメント行を足しただけで、どのキーの説明コメントもテンプレートと一致している。その再実行の
+# 出力を読む。どちらも「出力に無いこと」を見るので、実行が失敗して出力が空でも通ってしまわない
+# よう、先に実行が成功して出力があることを確かめる。
+if [ "$FIXTURE_RERUN_EXIT" -ne 0 ] || [ -z "$FIXTURE_RERUN_OUTPUT" ]; then
+  fail "6c-3: 前提の FIXTURE_RERUN の実行が成功していない（exit ${FIXTURE_RERUN_EXIT}）ので、警告が出ないことを検証できない:
+$FIXTURE_RERUN_OUTPUT"
 else
-  fail "ユーザー変更を含む config.my.yml に対する setup-improvement-loop 実行が失敗した（exit ${useredit_exit}）:
-$useredit_output"
-fi
-if grep -Fq '  max_in_review: 99  # ユーザーが変更した値' "$useredit_config"; then
-  pass "説明コメントの差異検出を経てもユーザーが変更した値・行末コメントが保たれる"
-else
-  fail "説明コメントの差異検出でユーザーが変更した値・行末コメントが失われた"
-fi
-if grep -Fq '  my_custom_key: "keep-me"' "$useredit_config"; then
-  pass "説明コメントの差異検出を経てもテンプレートに無い独自キーが保たれる"
-else
-  fail "説明コメントの差異検出でテンプレートに無い独自キーが失われた"
-fi
-useredit_active_count="$(grep -Ec '^  max_in_progress:' "$useredit_config" || true)"
-if [ "$useredit_active_count" = "0" ] && grep -Fq '  # max_in_progress: 1' "$useredit_config"; then
-  pass "説明コメントの差異検出を経てもコメントアウトされたキーが有効化・重複追記されない"
-else
-  fail "説明コメントの差異検出でコメントアウトされたキー max_in_progress が有効化された（${useredit_active_count} 件）"
-fi
-# コメントアウトされたキーは有効なキー行として存在しないため、差異検出の対象外である
-# （この限界は warn_config_my_yml_comment_drift のコメントに明記されている）。
-if printf '%s\n' "$useredit_output" | grep -Fq "キー 'max_in_progress' の説明コメントが"; then
-  fail "コメントアウトされたキー max_in_progress が差異検出の対象になった:
-$useredit_output"
-else
-  pass "コメントアウトされたキー max_in_progress は差異検出の対象にならない"
-fi
-
-echo ""
-echo "--- 6c-3. テンプレートと一致していれば警告は出ない（TASK-74 AC#1 の裏側） ---"
-TMP_REPO_NO_DRIFT="$(mktemp -d)"
-register_tmp_cleanup "$TMP_REPO_NO_DRIFT"
-
-(cd "$TMP_REPO_NO_DRIFT" && git init -q)
-mkdir -p "$TMP_REPO_NO_DRIFT/.backlog"
-# 収束済みの config.yml を先に置き、backlog init と backlog config set を走らせない
-# （このセクションが見るのは config.my.yml だけである）。
-write_settled_backlog_config "$TMP_REPO_NO_DRIFT/.backlog/config.yml" "no-drift-test"
-cp "$SOURCE_CONFIG" "$TMP_REPO_NO_DRIFT/.backlog/config.my.yml"
-
-no_drift_output="$("$SETUP_SCRIPT" "$TMP_REPO_NO_DRIFT" 2>&1)"
-no_drift_exit=$?
-if [ "$no_drift_exit" -eq 0 ]; then
-  pass "テンプレートと同一の config.my.yml に対する実行が成功する（exit 0）"
-else
-  fail "テンプレートと同一の config.my.yml に対する実行が失敗した（exit ${no_drift_exit}）:
-$no_drift_output"
-fi
-if printf '%s\n' "$no_drift_output" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
-  fail "テンプレートと同一なのに説明コメントの差異が報告された:
-$no_drift_output"
-else
-  pass "テンプレートと同一なら説明コメントの差異は報告されない"
-fi
-if printf '%s\n' "$no_drift_output" | grep -Fq "人手での確認が要る項目"; then
-  fail "警告が無いのにサマリーへ「人手での確認が要る項目」の節が出力された:
-$no_drift_output"
-else
-  pass "警告が無ければサマリーの出力は従来どおり（余分な節を出さない）"
+  if printf '%s\n' "$FIXTURE_RERUN_OUTPUT" | grep -Fq "説明コメントが配布元テンプレートと異なる"; then
+    fail "説明コメントがテンプレートと一致しているのに差異が報告された:
+$FIXTURE_RERUN_OUTPUT"
+  else
+    pass "説明コメントがテンプレートと一致していれば差異は報告されない"
+  fi
+  if printf '%s\n' "$FIXTURE_RERUN_OUTPUT" | grep -Fq "人手での確認が要る項目"; then
+    fail "警告が無いのにサマリーへ「人手での確認が要る項目」の節が出力された:
+$FIXTURE_RERUN_OUTPUT"
+  else
+    pass "警告が無ければサマリーの出力は従来どおり（余分な節を出さない）"
+  fi
 fi
 
 echo ""
@@ -1117,28 +974,9 @@ echo "=== 7. 旧ステータス名 Reviewed が残る既存 consumer リポジ�
 TMP_REPO_REVIEWED_MIGRATION="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_REVIEWED_MIGRATION"
 
-(cd "$TMP_REPO_REVIEWED_MIGRATION" && git init -q)
-mkdir -p "$TMP_REPO_REVIEWED_MIGRATION/.backlog"
-
 # 実機で確認された statuses の並びをそのまま模擬する。
-cat > "$TMP_REPO_REVIEWED_MIGRATION/.backlog/config.yml" <<'YAML'
-project_name: "reviewed-migration-test"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+REVIEWED_LEGACY_STATUSES='statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]'
+init_repo_with_backlog_config "$TMP_REPO_REVIEWED_MIGRATION" "reviewed-migration-test" "$REVIEWED_LEGACY_STATUSES"
 
 # status: Reviewed の既存タスク（TASK-1）と、影響を受けてはいけない別ステータスのタスク
 # （TASK-2、To Do のまま）を backlog CLI 経由で用意する。TASK-1 のタイトルにわざと
@@ -1236,27 +1074,8 @@ echo "=== 7d. task_prefix をカスタマイズしたリポジトリでの Revie
 
 TMP_REPO_CUSTOM_PREFIX="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_CUSTOM_PREFIX"
-
-(cd "$TMP_REPO_CUSTOM_PREFIX" && git init -q)
-mkdir -p "$TMP_REPO_CUSTOM_PREFIX/.backlog"
-cat > "$TMP_REPO_CUSTOM_PREFIX/.backlog/config.yml" <<'YAML'
-project_name: "custom-prefix-test"
-default_assignee: "@improvement-loop-bot"
-default_status: "To Do"
-statuses: ["Proposed", "To Do", "In Progress", "In Review", "Reviewed", "Approved", "Done"]
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "issue"
-YAML
+init_repo_with_backlog_config "$TMP_REPO_CUSTOM_PREFIX" "custom-prefix-test" \
+  "$REVIEWED_LEGACY_STATUSES" 'task_prefix: "issue"'
 
 (cd "$TMP_REPO_CUSTOM_PREFIX" && backlog task create "custom prefix reviewed task" --plain >/dev/null)
 (cd "$TMP_REPO_CUSTOM_PREFIX" && backlog task edit ISSUE-1 -s "Reviewed" --plain >/dev/null)
@@ -1334,25 +1153,8 @@ fi
 # ---- 8c. 既に remote_operations: true を明示している既存 consumer リポジトリでも false に収束すること ----
 TMP_REPO_REMOTE_OPS="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_REMOTE_OPS"
-(cd "$TMP_REPO_REMOTE_OPS" && git init -q)
-mkdir -p "$TMP_REPO_REMOTE_OPS/.backlog"
-cat > "$TMP_REPO_REMOTE_OPS/.backlog/config.yml" <<'YAML'
-project_name: "remote-ops-test"
-default_status: "To Do"
-statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: true
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+init_repo_with_backlog_config "$TMP_REPO_REMOTE_OPS" "remote-ops-test" \
+  '-default_assignee' 'remote_operations: true'
 
 remote_ops_output="$("$SETUP_SCRIPT" "$TMP_REPO_REMOTE_OPS" 2>&1)"
 remote_ops_exit=$?
@@ -1372,26 +1174,8 @@ fi
 # ---- 8d. defaultAssignee が既にユーザー独自の値で設定されている場合、上書きしない ----
 TMP_REPO_CUSTOM_ASSIGNEE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_CUSTOM_ASSIGNEE"
-(cd "$TMP_REPO_CUSTOM_ASSIGNEE" && git init -q)
-mkdir -p "$TMP_REPO_CUSTOM_ASSIGNEE/.backlog"
-cat > "$TMP_REPO_CUSTOM_ASSIGNEE/.backlog/config.yml" <<'YAML'
-project_name: "custom-assignee-test"
-default_assignee: ["@someone-else"]
-default_status: "To Do"
-statuses: ["Proposed", "To Do", "In Progress", "In Review", "Approved", "Done"]
-labels: []
-date_format: yyyy-mm-dd
-max_column_width: 20
-auto_open_browser: true
-default_port: 6420
-remote_operations: false
-auto_commit: false
-filesystem_only: false
-bypass_git_hooks: false
-check_active_branches: true
-active_branch_days: 30
-task_prefix: "task"
-YAML
+init_repo_with_backlog_config "$TMP_REPO_CUSTOM_ASSIGNEE" "custom-assignee-test" \
+  'default_assignee: ["@someone-else"]'
 
 custom_assignee_output="$("$SETUP_SCRIPT" "$TMP_REPO_CUSTOM_ASSIGNEE" 2>&1)"
 custom_assignee_exit=$?
@@ -1488,13 +1272,9 @@ fi
 # 「既に設定されている」とだけ出して壊れたまま素通りしていた。
 TMP_REPO_BROKEN_ASSIGNEE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_BROKEN_ASSIGNEE"
-(cd "$TMP_REPO_BROKEN_ASSIGNEE" && git init -q)
-write_settled_backlog_config "$TMP_REPO_BROKEN_ASSIGNEE/.backlog/config.yml" "broken-assignee-test"
+init_repo_with_backlog_config "$TMP_REPO_BROKEN_ASSIGNEE" "broken-assignee-test" \
+  'default_assignee: "[@improvement-loop-bot]"'
 broken_assignee_config="$TMP_REPO_BROKEN_ASSIGNEE/.backlog/config.yml"
-broken_tmp="$(mktemp)"
-register_tmp_cleanup "$broken_tmp"
-sed 's/^default_assignee:.*$/default_assignee: "[@improvement-loop-bot]"/' "$broken_assignee_config" > "$broken_tmp"
-cat "$broken_tmp" > "$broken_assignee_config"
 chmod 640 "$broken_assignee_config"
 broken_mode_before="$(file_mode "$broken_assignee_config")"
 
@@ -1572,13 +1352,9 @@ fi
 # 8j で模擬して検証する。
 TMP_REPO_LEGACY_ASSIGNEE="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_LEGACY_ASSIGNEE"
-(cd "$TMP_REPO_LEGACY_ASSIGNEE" && git init -q)
-write_settled_backlog_config "$TMP_REPO_LEGACY_ASSIGNEE/.backlog/config.yml" "legacy-assignee-test"
+init_repo_with_backlog_config "$TMP_REPO_LEGACY_ASSIGNEE" "legacy-assignee-test" \
+  'default_assignee: ["@improvement-loop-bot"]'
 legacy_assignee_config="$TMP_REPO_LEGACY_ASSIGNEE/.backlog/config.yml"
-legacy_tmp="$(mktemp)"
-register_tmp_cleanup "$legacy_tmp"
-sed 's/^default_assignee:.*$/default_assignee: ["@improvement-loop-bot"]/' "$legacy_assignee_config" > "$legacy_tmp"
-cat "$legacy_tmp" > "$legacy_assignee_config"
 
 legacy_assignee_output="$("$SETUP_SCRIPT" "$TMP_REPO_LEGACY_ASSIGNEE" 2>&1)"
 legacy_assignee_exit=$?
@@ -1624,13 +1400,9 @@ fi
 # ことを確かめる。形だけで判定する実装だと、ユーザーのアサイニー名を勝手に書き換えてしまう。
 TMP_REPO_CUSTOM_BROKEN="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_CUSTOM_BROKEN"
-(cd "$TMP_REPO_CUSTOM_BROKEN" && git init -q)
-write_settled_backlog_config "$TMP_REPO_CUSTOM_BROKEN/.backlog/config.yml" "custom-broken-test"
+init_repo_with_backlog_config "$TMP_REPO_CUSTOM_BROKEN" "custom-broken-test" \
+  'default_assignee: "[@someone-else]"'
 custom_broken_config="$TMP_REPO_CUSTOM_BROKEN/.backlog/config.yml"
-custom_broken_tmp="$(mktemp)"
-register_tmp_cleanup "$custom_broken_tmp"
-sed 's/^default_assignee:.*$/default_assignee: "[@someone-else]"/' "$custom_broken_config" > "$custom_broken_tmp"
-cat "$custom_broken_tmp" > "$custom_broken_config"
 
 custom_broken_output="$("$SETUP_SCRIPT" "$TMP_REPO_CUSTOM_BROKEN" 2>&1)"
 custom_broken_exit=$?
@@ -1658,13 +1430,9 @@ fi
 # が残り、既定値の破損なのにユーザー値として素通りしてしまう。どちらの CLI でも収束することを見る。
 TMP_REPO_DOUBLE_BROKEN="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_DOUBLE_BROKEN"
-(cd "$TMP_REPO_DOUBLE_BROKEN" && git init -q)
-write_settled_backlog_config "$TMP_REPO_DOUBLE_BROKEN/.backlog/config.yml" "double-broken-test"
+init_repo_with_backlog_config "$TMP_REPO_DOUBLE_BROKEN" "double-broken-test" \
+  'default_assignee: ["[@improvement-loop-bot]"]'
 double_broken_config="$TMP_REPO_DOUBLE_BROKEN/.backlog/config.yml"
-double_broken_tmp="$(mktemp)"
-register_tmp_cleanup "$double_broken_tmp"
-sed 's/^default_assignee:.*$/default_assignee: ["[@improvement-loop-bot]"]/' "$double_broken_config" > "$double_broken_tmp"
-cat "$double_broken_tmp" > "$double_broken_config"
 
 double_broken_output="$("$SETUP_SCRIPT" "$TMP_REPO_DOUBLE_BROKEN" 2>&1)"
 double_broken_exit=$?
@@ -1688,7 +1456,7 @@ fi
 # （それは 8e で、実行環境の CLI が 1.48.0 のときに実機で検証される）。ここで見るのは setup 側の分岐である。
 # シムは defaultAssignee 以外の backlog config set を本物へ通すので、実行環境の CLI が 1.53.0 なら
 # その時点で default_assignee が配列形式へ書き直され、1.48.0 の前提が崩れる。各前状態を
-# write_settled_backlog_config（remote_operations: false 済み）で作り、setup が default_assignee の
+# write_backlog_config の既定（remote_operations: false 済み）で作り、setup が default_assignee の
 # 判定より前に backlog config set を実行しないようにしているのはそのためである。
 REAL_BACKLOG_BIN="$(command -v backlog)"
 LEGACY_BACKLOG_SHIM_DIR="$(mktemp -d)"
@@ -1706,13 +1474,9 @@ chmod +x "$LEGACY_BACKLOG_SHIM_DIR/backlog"
 # 8j-1. インライン配列は壊れる予約として [warn] のうえ正準形へ収束する（AC#2 の保護が 1.53.0 環境でも検証される）。
 TMP_REPO_SHIM_LEGACY="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SHIM_LEGACY"
-(cd "$TMP_REPO_SHIM_LEGACY" && git init -q)
-write_settled_backlog_config "$TMP_REPO_SHIM_LEGACY/.backlog/config.yml" "shim-legacy-test"
+init_repo_with_backlog_config "$TMP_REPO_SHIM_LEGACY" "shim-legacy-test" \
+  'default_assignee: ["@improvement-loop-bot"]'
 shim_legacy_config="$TMP_REPO_SHIM_LEGACY/.backlog/config.yml"
-shim_legacy_tmp="$(mktemp)"
-register_tmp_cleanup "$shim_legacy_tmp"
-sed 's/^default_assignee:.*$/default_assignee: ["@improvement-loop-bot"]/' "$shim_legacy_config" > "$shim_legacy_tmp"
-cat "$shim_legacy_tmp" > "$shim_legacy_config"
 shim_legacy_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_LEGACY" 2>&1)"
 shim_legacy_exit=$?
 if [ "$shim_legacy_exit" -eq 0 ] && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$shim_legacy_config"; then
@@ -1745,13 +1509,9 @@ fi
 # 警告文は角括弧の取り込みではなく、正準形でないことを伝えるものになる。
 TMP_REPO_SHIM_QUOTED="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SHIM_QUOTED"
-(cd "$TMP_REPO_SHIM_QUOTED" && git init -q)
-write_settled_backlog_config "$TMP_REPO_SHIM_QUOTED/.backlog/config.yml" "shim-quoted-test"
+init_repo_with_backlog_config "$TMP_REPO_SHIM_QUOTED" "shim-quoted-test" \
+  "default_assignee: '@improvement-loop-bot'"
 shim_quoted_config="$TMP_REPO_SHIM_QUOTED/.backlog/config.yml"
-shim_quoted_tmp="$(mktemp)"
-register_tmp_cleanup "$shim_quoted_tmp"
-sed "s/^default_assignee:.*\$/default_assignee: '@improvement-loop-bot'/" "$shim_quoted_config" > "$shim_quoted_tmp"
-cat "$shim_quoted_tmp" > "$shim_quoted_config"
 shim_quoted_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_QUOTED" 2>&1)"
 shim_quoted_exit=$?
 if [ "$shim_quoted_exit" -eq 0 ] && grep -Fxq 'default_assignee: "@improvement-loop-bot"' "$shim_quoted_config" \
@@ -1765,13 +1525,8 @@ fi
 # 8j-4. default_assignee が無い config.yml には、config set が失敗するので正準形を直接追記する。
 TMP_REPO_SHIM_MISSING="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_SHIM_MISSING"
-(cd "$TMP_REPO_SHIM_MISSING" && git init -q)
-write_settled_backlog_config "$TMP_REPO_SHIM_MISSING/.backlog/config.yml" "shim-missing-test"
+init_repo_with_backlog_config "$TMP_REPO_SHIM_MISSING" "shim-missing-test" '-default_assignee'
 shim_missing_config="$TMP_REPO_SHIM_MISSING/.backlog/config.yml"
-shim_missing_tmp="$(mktemp)"
-register_tmp_cleanup "$shim_missing_tmp"
-grep -v '^default_assignee:' "$shim_missing_config" > "$shim_missing_tmp"
-cat "$shim_missing_tmp" > "$shim_missing_config"
 shim_missing_output="$(PATH="$LEGACY_BACKLOG_SHIM_DIR:$PATH" "$SETUP_SCRIPT" "$TMP_REPO_SHIM_MISSING" 2>&1)"
 shim_missing_exit=$?
 if [ "$shim_missing_exit" -eq 0 ] \
@@ -1789,13 +1544,9 @@ fi
 if [ "$BACKLOG_KNOWS_DEFAULT_ASSIGNEE" = true ]; then
   TMP_REPO_QUOTED_KNOWN="$(mktemp -d)"
   register_tmp_cleanup "$TMP_REPO_QUOTED_KNOWN"
-  (cd "$TMP_REPO_QUOTED_KNOWN" && git init -q)
-  write_settled_backlog_config "$TMP_REPO_QUOTED_KNOWN/.backlog/config.yml" "quoted-known-test"
+  init_repo_with_backlog_config "$TMP_REPO_QUOTED_KNOWN" "quoted-known-test" \
+    "default_assignee: '@improvement-loop-bot'"
   quoted_known_config="$TMP_REPO_QUOTED_KNOWN/.backlog/config.yml"
-  quoted_known_tmp="$(mktemp)"
-  register_tmp_cleanup "$quoted_known_tmp"
-  sed "s/^default_assignee:.*\$/default_assignee: '@improvement-loop-bot'/" "$quoted_known_config" > "$quoted_known_tmp"
-  cat "$quoted_known_tmp" > "$quoted_known_config"
   quoted_known_output="$("$SETUP_SCRIPT" "$TMP_REPO_QUOTED_KNOWN" 2>&1)"
   quoted_known_exit=$?
   if [ "$quoted_known_exit" -eq 0 ] \
@@ -1842,25 +1593,9 @@ $workspace_plain_output"
 fi
 
 # ---- claude-code/workspace-skills/ の2スキルだけが配置される ----
-workspace_plain_links_ok=true
-for name in "${WORKSPACE_SKILL_NAMES[@]}"; do
-  link_path="$TMP_WORKSPACE_PLAIN/.claude/skills/$name"
-  expected_target="$SOURCE_WORKSPACE_SKILLS_DIR/$name"
-  if [ -L "$link_path" ]; then
-    resolved="$(cd "$link_path" 2>/dev/null && pwd -P)"
-    expected_resolved="$(cd "$expected_target" && pwd -P)"
-    if [ "$resolved" != "$expected_resolved" ]; then
-      workspace_plain_links_ok=false
-      fail "9a: .claude/skills/$name のリンク先が誤っている（${resolved} != ${expected_resolved}）"
-    fi
-  else
-    workspace_plain_links_ok=false
-    fail "9a: .claude/skills/$name がシンボリックリンクとして存在しない"
-  fi
-done
-if [ "$workspace_plain_links_ok" = true ]; then
-  pass "9a: claude-code/workspace-skills/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる"
-fi
+assert_skill_symlinks "$TMP_WORKSPACE_PLAIN" "$SOURCE_WORKSPACE_SKILLS_DIR" "9a: " \
+  "9a: claude-code/workspace-skills/ 配下の全スキル（${WORKSPACE_SKILL_NAMES[*]}）が正しくシンボリックリンクされる" \
+  "${WORKSPACE_SKILL_NAMES[@]}"
 
 # 単一リポジトリ用のスキルが誤って混入していないことも確認する。
 workspace_plain_no_repo_skills=true
