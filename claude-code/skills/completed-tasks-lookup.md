@@ -21,7 +21,7 @@ CLI 1.48.0 の `--help` を確認したが、完了・アーカイブ済みを�
 `backlog milestone list --plain` は Active と Completed の両方を出すので、milestone は完了では
 消えない。消えるのは `.backlog/archive/milestones/` へ移したときだけである。
 
-**読み取りに限った手当てである。** タスクの追加・更新・アーカイブは従来どおりすべて
+**読み取りに限った手当てである。** タスクの追加・更新・アーカイブはすべて
 `backlog` CLI 経由で行う。`.backlog/` 配下の md を直接編集しない。
 
 ## 共通の前置き
