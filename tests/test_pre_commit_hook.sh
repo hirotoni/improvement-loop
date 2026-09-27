@@ -13,7 +13,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 11. githooks/pre-commit の動作確認 ==="
+echo "=== githooks/pre-commit の動作確認 ==="
 
 if [ ! -f "$PRECOMMIT_HOOK" ]; then
   fail "githooks/pre-commit が存在しない: $PRECOMMIT_HOOK"

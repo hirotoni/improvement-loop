@@ -15,7 +15,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 check_test_dependencies
 
-echo "=== 15. improvement-work/SKILL.md のスクリプト2候補探索ブロックの一致 ==="
+echo "=== 1. improvement-work/SKILL.md のスクリプト2候補探索ブロックの一致 ==="
 
 WORK_SKILL_FILE="$SOURCE_SKILLS_DIR/improvement-work/SKILL.md"
 
@@ -87,7 +87,7 @@ if [ "$started" -eq 1 ]; then
 fi
 
 echo ""
-echo "--- 15a. 探索ブロックがちょうど2つ抽出できる ---"
+echo "--- 1a. 探索ブロックがちょうど2つ抽出できる ---"
 if [ "${#BLOCKS[@]}" -eq 2 ]; then
   pass "improvement-work/SKILL.md から2候補探索ブロックを2つ抽出できた（手順1と手順8）"
 else
@@ -96,7 +96,7 @@ else
 fi
 
 echo ""
-echo "--- 15b. 2つのブロックが手順1・手順8のものである ---"
+echo "--- 1b. 2つのブロックが手順1・手順8のものである ---"
 # 抽出対象を取り違えていないことの確認。手順1は check-handoff、手順8は
 # check-forbidden-allowed-paths を探すブロックであり、この2つ以外は無い。
 found_scripts="$(printf '%s\n' "${BLOCKS[@]}" \
@@ -110,7 +110,7 @@ $(diff <(printf '%s\n' "$expected_scripts") <(printf '%s\n' "$found_scripts"))"
 fi
 
 echo ""
-echo "--- 15c. 2つのブロックが対象スクリプト名を除いて同一である ---"
+echo "--- 1c. 2つのブロックが対象スクリプト名を除いて同一である ---"
 normalized_1="$(normalize_lookup_block "${BLOCKS[0]}")"
 normalized_2="$(normalize_lookup_block "${BLOCKS[1]}")"
 if [ "$normalized_1" = "$normalized_2" ]; then
