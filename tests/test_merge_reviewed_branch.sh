@@ -18,8 +18,17 @@ echo "--- 7a. 前提条件未達: メインの作業木が汚れている ---"
 TMP_MERGE_DIRTY="$(mktemp -d)"
 register_tmp_cleanup "$TMP_MERGE_DIRTY"
 
+# feature ブランチには main との差分を持たせる。差分が無いと dirty 判定を外しても
+# 「差分無し」分岐で同じ PRECONDITION_NOT_MET になり、dirty 分岐を通ったか区別できない。
 (cd "$TMP_MERGE_DIRTY" && git init -q -b main && git commit -q --allow-empty -m init)
-(cd "$TMP_MERGE_DIRTY" && git branch feature-dirty-check)
+(cd "$TMP_MERGE_DIRTY" && git switch -q -c feature-dirty-check \
+  && git commit -q --allow-empty -m "feature dirty-check work" && git switch -q main)
+merge_dirty_main_before="$(cd "$TMP_MERGE_DIRTY" && git rev-parse main)"
+if [ "$(cd "$TMP_MERGE_DIRTY" && git rev-list --count main..feature-dirty-check)" -eq 1 ]; then
+  pass "7a: 前状態として feature-dirty-check が main との差分（1コミット）を持つ"
+else
+  fail "7a: 前状態の feature-dirty-check に main との差分が無い"
+fi
 echo "uncommitted" > "$TMP_MERGE_DIRTY/dirty.txt"
 
 merge_dirty_output="$(cd "$TMP_MERGE_DIRTY" && "$MERGE_SCRIPT" feature-dirty-check 2>&1)"
@@ -33,6 +42,21 @@ if grep -Fq "RESULT: PRECONDITION_NOT_MET" <<<"$merge_dirty_output"; then
   pass "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれる"
 else
   fail "7a: 出力に RESULT: PRECONDITION_NOT_MET が含まれない: $merge_dirty_output"
+fi
+if grep -Fq "メインの作業木が汚れている" <<<"$merge_dirty_output"; then
+  pass "7a: dirty 判定の分岐（メインの作業木が汚れている）を通る"
+else
+  fail "7a: dirty 判定の分岐の文言が出力されない: $merge_dirty_output"
+fi
+if grep -Fq "との差分が無い" <<<"$merge_dirty_output"; then
+  fail "7a: dirty 判定ではなく「差分無し」の分岐を通っている: $merge_dirty_output"
+else
+  pass "7a: 「差分無し」の分岐は通らない"
+fi
+if [ "$(cd "$TMP_MERGE_DIRTY" && git rev-parse main)" = "$merge_dirty_main_before" ]; then
+  pass "7a: 前提条件未達時、main は feature-dirty-check の内容まで進まない"
+else
+  fail "7a: 前提条件未達のはずが、main が進んでいる（マージされた）"
 fi
 if [ -n "$(cd "$TMP_MERGE_DIRTY" && git status --porcelain)" ] \
   && [ "$(cd "$TMP_MERGE_DIRTY" && git rev-parse --abbrev-ref HEAD)" = "main" ]; then

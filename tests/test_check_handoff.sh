@@ -63,56 +63,69 @@ else
   fail "12c: ブランチの不一致がエラーメッセージに明示されていない: $handoff_wrongbranch_output"
 fi
 
+# 12d/12e/12f は .backlog の3分岐を区別する。判定失敗は exit 2（使い方エラーの exit 1 と
+# 区別する）で、出力には該当分岐の固有文言だけが含まれ、他の2分岐の文言は含まれない。
+HANDOFF_MSG_MISSING=".backlog が存在しない"
+HANDOFF_MSG_NOT_LINK=".backlog がシンボリックリンクではない"
+HANDOFF_MSG_BROKEN="リンク先が有効なディレクトリではない"
+
+# 引数: <テストID> <出力> <終了コード> <期待する固有文言> <含まれてはならない文言>...
+assert_handoff_backlog_branch() {
+  local id="$1" output="$2" exit_code="$3" expected="$4"
+  shift 4
+  if [ "$exit_code" -eq 2 ]; then
+    pass "${id}: 判定失敗の終了コード 2 で終了する"
+  else
+    fail "${id}: 終了コードが 2 でない（${exit_code}）: $output"
+  fi
+  if grep -Fq "$expected" <<<"$output"; then
+    pass "${id}: 分岐固有の文言「${expected}」が出力される"
+  else
+    fail "${id}: 分岐固有の文言「${expected}」が出力されない: $output"
+  fi
+  local other
+  for other in "$@"; do
+    if grep -Fq "$other" <<<"$output"; then
+      fail "${id}: 別の分岐の文言「${other}」が出力されている: $output"
+    else
+      pass "${id}: 別の分岐の文言「${other}」は出力されない"
+    fi
+  done
+  local error_lines
+  error_lines="$(grep -c '^エラー: ' <<<"$output")"
+  if [ "$error_lines" -eq 1 ]; then
+    pass "${id}: エラーは .backlog の1件だけである（作業ディレクトリ・ブランチの不一致は出ない）"
+  else
+    fail "${id}: エラー行が1件でない（${error_lines}件）: $output"
+  fi
+}
+
 echo ""
-echo "--- 12d. .backlog がシンボリックリンクとして存在しないとき、失敗（非0終了コード）で終了する（AC#4） ---"
+echo "--- 12d. .backlog がシンボリックリンクとして存在しないとき、exit 2 で「存在しない」分岐を通る（AC#4） ---"
 rm "$TMP_HANDOFF_REPO/.backlog"
 handoff_nolink_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
 handoff_nolink_exit=$?
-if [ "$handoff_nolink_exit" -ne 0 ]; then
-  pass "12d: .backlog が無いとき、非0終了コードで終了する（${handoff_nolink_exit}）"
-else
-  fail "12d: .backlog が無いはずなのに exit 0 で終了した"
-fi
-if grep -Fq ".backlog" <<<"$handoff_nolink_output"; then
-  pass "12d: .backlog の欠落がエラーメッセージに明示される"
-else
-  fail "12d: .backlog の欠落がエラーメッセージに明示されていない: $handoff_nolink_output"
-fi
+assert_handoff_backlog_branch "12d" "$handoff_nolink_output" "$handoff_nolink_exit" \
+  "$HANDOFF_MSG_MISSING" "$HANDOFF_MSG_NOT_LINK" "$HANDOFF_MSG_BROKEN"
 
 echo ""
-echo "--- 12e. .backlog が壊れたシンボリックリンクのとき、失敗（非0終了コード）で終了する（AC#4） ---"
+echo "--- 12e. .backlog が壊れたシンボリックリンクのとき、exit 2 で「壊れたリンク」分岐を通る（AC#4） ---"
 ln -s "$TMP_HANDOFF_REPO/no-such-target" "$TMP_HANDOFF_REPO/.backlog"
 handoff_brokenlink_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
 handoff_brokenlink_exit=$?
-if [ "$handoff_brokenlink_exit" -ne 0 ]; then
-  pass "12e: .backlog が壊れたシンボリックリンクのとき、非0終了コードで終了する（${handoff_brokenlink_exit}）"
-else
-  fail "12e: .backlog が壊れたシンボリックリンクのはずなのに exit 0 で終了した"
-fi
-if grep -Fq ".backlog" <<<"$handoff_brokenlink_output"; then
-  pass "12e: .backlog の壊れたリンクがエラーメッセージに明示される"
-else
-  fail "12e: .backlog の壊れたリンクがエラーメッセージに明示されていない: $handoff_brokenlink_output"
-fi
+assert_handoff_backlog_branch "12e" "$handoff_brokenlink_output" "$handoff_brokenlink_exit" \
+  "$HANDOFF_MSG_BROKEN" "$HANDOFF_MSG_MISSING" "$HANDOFF_MSG_NOT_LINK"
 rm -f "$TMP_HANDOFF_REPO/.backlog"
 ln -s "$TMP_HANDOFF_REPO" "$TMP_HANDOFF_REPO/.backlog"
 
 echo ""
-echo "--- 12f. .backlog がシンボリックリンクではなく実体のディレクトリのとき、失敗（非0終了コード）で終了する（AC#4） ---"
+echo "--- 12f. .backlog がシンボリックリンクではなく実体のディレクトリのとき、exit 2 で「シンボリックリンクではない」分岐を通る（AC#4） ---"
 rm "$TMP_HANDOFF_REPO/.backlog"
 mkdir "$TMP_HANDOFF_REPO/.backlog"
 handoff_realdir_output="$(cd "$TMP_HANDOFF_REPO" && "$CHECK_HANDOFF_SCRIPT" "$TMP_HANDOFF_REPO" "$HANDOFF_BRANCH" 2>&1)"
 handoff_realdir_exit=$?
-if [ "$handoff_realdir_exit" -ne 0 ]; then
-  pass "12f: .backlog が実体のディレクトリのとき、非0終了コードで終了する（${handoff_realdir_exit}）"
-else
-  fail "12f: .backlog が実体のディレクトリのはずなのに exit 0 で終了した"
-fi
-if grep -Fq ".backlog" <<<"$handoff_realdir_output"; then
-  pass "12f: .backlog が実体のディレクトリであることがエラーメッセージに明示される"
-else
-  fail "12f: .backlog が実体のディレクトリであることがエラーメッセージに明示されていない: $handoff_realdir_output"
-fi
+assert_handoff_backlog_branch "12f" "$handoff_realdir_output" "$handoff_realdir_exit" \
+  "$HANDOFF_MSG_NOT_LINK" "$HANDOFF_MSG_MISSING" "$HANDOFF_MSG_BROKEN"
 rm -rf "$TMP_HANDOFF_REPO/.backlog"
 ln -s "$TMP_HANDOFF_REPO" "$TMP_HANDOFF_REPO/.backlog"
 
