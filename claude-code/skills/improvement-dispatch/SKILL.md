@@ -76,61 +76,78 @@ cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を�
 
 #### 2-3. 判断の持ち越しと不在の確定
 
-2-1 も 2-2 も成立しない場合（または 2-2 の「動いている」表示を疑うべき場合）、直ちに「存在しない」とみなして `To Do` へ差し戻さない。ワークツリーの実際の状態を確認してから判断する。
+2-1 も 2-2 も成立しない場合（または 2-2 の「動いている」表示を疑うべき場合）、直ちに「存在しない」とみなして `To Do` へ差し戻さない。ワークツリーの実際の状態を観測し、前回この手順で残した観測記録と比べてから判断する。
+
+観測、記録する本文の生成、前回の記録との比較、経過時間の判定は `.claude/skills/improvement-dispatch/scripts/observe-progress` に切り出されている。`git log`・`git status --porcelain`・`date` を手で組み立てない。記録を手で書かない。経過時間を暗算しない。メインの作業木（このディレクトリ）から、notes の `### 引き渡し` にある `WORKTREE_DIR` と `BRANCH` を渡して実行する。
 
 ```bash
-git worktree list
-git -C <ワークツリーのパス> log -1 --format='%H %cI'   # 直近コミットのハッシュと時刻
-git -C <ワークツリーのパス> status --porcelain          # 未コミットの変更の有無
-date -u +%FT%TZ                                          # 今回の起動時刻（観測に記録する）
-backlog task view TASK-<n> --plain                       # 前回この手順で記録した観測（あれば）を確認する
+OBSERVE_OUT="$(.claude/skills/improvement-dispatch/scripts/observe-progress TASK-<n> <ワークツリーのパス> <作業ブランチ>)"
+OBSERVE_EXIT=$?
+printf '%s\n' "$OBSERVE_OUT"
+if [ "$OBSERVE_EXIT" -eq 0 ]; then
+  # RESULT: RECORD のときだけ、スクリプトが出した本文を書き写さずにそのまま追記する。
+  RECORD_BODY="$(printf '%s\n' "$OBSERVE_OUT" | sed -e '1,/^RECORD_BEGIN$/d' -e '/^RECORD_END$/,$d')"
+  backlog task edit TASK-<n> --append-notes "$RECORD_BODY" --plain
+fi
 ```
 
-ワークツリーが `git worktree list` に存在しない場合は上記の `-C` が使えない。その場合は `git branch --list improvement/task-<n>-<スラッグ>` でブランチの有無を確認する。ブランチも残っていなければ、観測を待たずその時点で「存在しない」と確定してよい（ワークツリーとブランチの両方が消えているのは、作業途中で環境ごと失われたことの強い証拠である）。ブランチだけが残っている場合は、メインの作業木から `git log <作業ブランチ> --oneline -1` で得たコミットハッシュを観測値として使い、以降は同じ比較ロジックに従う。
+標準出力には `RESULT` の前に次の判定材料の行が並ぶ。`RESULT: RECORD` のときだけ、追記する本文（`### 手順 2 観測記録` から始まる）が `RECORD_BEGIN` と `RECORD_END` の間に出る。
 
-- notes に前回の起動でこの手順が記録した観測（コミットハッシュ・`git status --porcelain` の内容・観測時刻）が無い、またはあっても今回のコミットハッシュか `git status --porcelain` の内容と異なる → 直近で変化があったということであり、まだ作業中の可能性が高いとみなす。そのタスクには触れず（`To Do` へ戻さない）、今回の観測を新しい記録として残し、手順 7 に進む。notes にはこの見出しの記録が複数回追記されて残ることがあるが、比較には常に notes 中でこの見出しが最後に現れる記録（＝直近に記録したもの）だけを使う。過去の記録が残っていても無視してよい。
+```
+WORKTREE_EXISTS: true|false
+BRANCH_EXISTS: true|false
+PREVIOUS_RECORD: none|changed|unchanged|N/A
+ELAPSED_SECONDS: <秒数>|N/A
+THRESHOLD_SECONDS: <秒数>
+RESULT: <値>
+```
 
-  ```bash
-  backlog task edit TASK-<n> --append-notes '### 手順 2 観測記録
-  - commit: <ハッシュ> (<コミット時刻>)
-  - status: <git status --porcelain の内容。無ければ (clean)>
-  - 観測時刻: <今回の起動時刻>' --plain
-  ```
+スクリプトは次の規則で判定する。書式と規則の詳細はスクリプト冒頭のコメントにある。
 
-- 直近の記録があり、かつコミットハッシュと `git status --porcelain` の内容が完全に一致する（＝直近の観測から変化が無い）→ その記録の観測時刻からの経過時間を見る。
-  - 経過が 30 分未満 → まだ「存在しない」と断定しない。記録は上書きせずそのまま残し、判断を持ち越して手順 7 に進む。
-  - 経過が 30 分以上 → ここで初めて「サブエージェントが存在しない（前回のセッションが落ちた、中断された）」と確定し、復旧する。
+- ワークツリーがあれば、その直近コミットと `git status --porcelain` を観測する。ワークツリーが無くブランチだけ残っていれば、メインの作業木から見たブランチの直近コミットを観測値にし、以降は同じ比較をする。ワークツリーとブランチの両方が無ければ、観測を待たずその時点で「存在しない」と確定する（作業途中で環境ごと失われたことの強い証拠である）。
+- 比べる相手は、notes の最後の `### 引き渡し` より後にある最後の `### 手順 2 観測記録` だけである。それより前の記録は無視する。
+- 観測時刻を除く本文が前回の記録とバイト列で一致し、前回の観測時刻がこのスクリプトの書式（epoch 秒つき）であるときだけ「変化なし」とする。書式の揺れた手書きの記録（このスクリプト導入前のもの）は「変化あり」として扱い、新しい記録を残させる。
+- 経過時間は前回の記録の epoch 秒から計算する。閾値（30 分）は `bin/lib/stale_threshold.sh` の定義を `check-progress-recovery` と共有する。
 
-    1. `backlog task view TASK-<n> --plain` で notes と plan を読む。notes には引き渡し時のワークツリーのパス（`WORKTREE_DIR`）と作業ブランチ名（`BRANCH`）が残っているはずである。
+| `RESULT`（終了ステータス） | 意味 | dispatch が行うこと |
+| --- | --- | --- |
+| `RECORD`（0） | 前回の記録が無い、または状態が変わった（直近で変化があり、まだ作業中の可能性が高い） | 上のブロックのとおり本文を追記する。タスクには触れず（`To Do` へ戻さない）、手順 7 に進む。 |
+| `CARRY_OVER`（1） | 前回の記録から状態が変わっておらず、経過が閾値未満 | まだ「存在しない」と断定しない。記録を追記せず判断を持ち越し、手順 7 に進む。 |
+| `RUN_RECOVERY`（2） | 前回の記録から状態が変わらないまま閾値以上経過した、またはワークツリーとブランチの両方が無い | ここで初めて「サブエージェントが存在しない（前回のセッションが落ちた、中断された）」と確定し、下の「復旧」に進む。 |
+| `ERROR`（3） | 引数不正、対象リポジトリでない、git・backlog の実行に失敗した等 | 標準エラー出力の内容を確認して報告する。このタスクには触れず（`To Do` へ戻さない）、手順 7 に進む。 |
 
-    2. 復旧診断（ワークツリー・ブランチの有無、デフォルトブランチから見て新しいコミットがあるかの判定）は `.claude/skills/improvement-dispatch/scripts/check-progress-recovery` に切り出されている。散文を読んで毎回 `git worktree list` や `git log` を手で組み立てない。メインの作業木（このディレクトリ）から実行する。
+##### 復旧（`RESULT: RUN_RECOVERY` のとき）
 
-       ```bash
-       .claude/skills/improvement-dispatch/scripts/check-progress-recovery <ワークツリーのパス> <作業ブランチ> <デフォルトブランチ>
-       ```
+1. `backlog task view TASK-<n> --plain` で notes と plan を読む。notes には引き渡し時のワークツリーのパス（`WORKTREE_DIR`）と作業ブランチ名（`BRANCH`）が残っているはずである。
 
-       標準出力には `RESULT` の前に次の判定材料の行が並ぶ。
+2. 復旧診断（ワークツリー・ブランチの有無、デフォルトブランチから見て新しいコミットがあるかの判定）は `.claude/skills/improvement-dispatch/scripts/check-progress-recovery` に切り出されている。散文を読んで毎回 `git worktree list` や `git log` を手で組み立てない。メインの作業木（このディレクトリ）から実行する。
 
-       ```
-       WORKTREE_EXISTS: true|false
-       BRANCH_EXISTS: true|false
-       NEW_COMMITS: <件数>|N/A
-       OCCUPANCY_RECORD_EXISTS: true|false
-       OCCUPANCY_AGE_SECONDS: <秒数>|N/A
-       OCCUPANCY_FRESH: true|false|N/A
-       RESULT: <値>
-       ```
+   ```bash
+   .claude/skills/improvement-dispatch/scripts/check-progress-recovery <ワークツリーのパス> <作業ブランチ> <デフォルトブランチ>
+   ```
 
-       `OCCUPANCY_*` は、ワークツリー直下の占有記録（`.worktree-occupancy`。`.claude/skills/improvement-dispatch/scripts/create-worktree` が引き渡し・再引き渡しのたびに上書きする。`TASK_ID`・`ASSIGNED_AT`・`ASSIGNED_AT_EPOCH` の3行）を読み、その `ASSIGNED_AT_EPOCH`（最後に `create-worktree` が実行された＝最後にこのワークツリーが引き渡された時刻）からの経過秒数が 1800 秒（30分）未満かどうかを示す。占有記録が無い、または読めない場合は `OCCUPANCY_RECORD_EXISTS: false` / `OCCUPANCY_AGE_SECONDS: N/A` / `OCCUPANCY_FRESH: N/A` となり、コミット履歴のみの判定にフォールバックする。dispatch はこれらの行を個別に解釈する必要は無く、最後の行 `RESULT: <値>` だけで結果を判別すればよい（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
+   標準出力には `RESULT` の前に次の判定材料の行が並ぶ。
 
-       | `RESULT` | 意味 | dispatch が行うこと |
-       | --- | --- | --- |
-       | `REUSE_WORKTREE_REDISPATCH` | 次のいずれか。(a) ワークツリー・ブランチともに存在し、デフォルトブランチから見て新しいコミットがある（＝実装が途中まで進んでいる）。(b) 新しいコミットは無いが、`OCCUPANCY_FRESH: true`（＝最後の引き渡しから30分未満）。この場合はコミットを伴わない長時間処理（大きなテスト実行など）が続いているだけで、実際には稼働中の可能性が高いとみなす。 | 既存のワークツリーをそのまま再利用し、その到達点を引き渡し情報に含めて手順 5 で再度引き渡す（手順 5 は `create-worktree` を経由するため、占有記録の `ASSIGNED_AT_EPOCH` もこの再引き渡しの時刻に更新される）。 |
-       | `RECREATE_WORKTREE_REDISPATCH` | ワークツリーは無いがブランチが存在し、新しいコミットがある（ワークツリーが無い時点で占有記録は判定に使わない） | `git worktree prune` で古い管理情報を掃除した後、手順 5（`.claude/skills/improvement-dispatch/scripts/create-worktree`。ワークツリーは無くブランチだけ存在する場合、新規作成せず既存の作業ブランチを割り当てる）で作り直し、到達点を引き渡し情報に含めて再度引き渡す。 |
-       | `REVERT_TO_TODO` | ブランチが存在しない。またはブランチはあるが新しいコミットが無く、かつ占有記録も新しくない（`OCCUPANCY_FRESH` が `false` または `N/A`）（＝コミット履歴からも占有記録からも活動が確認できない） | `backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @dispatch` で戻す。出力の `WORKTREE_EXISTS: true` でワークツリーが残っていると分かれば `git worktree remove <ワークツリーのパス>` で片付ける。 |
-       | `ERROR` | 引数不正、対象リポジトリでない、デフォルトブランチが解決できない等 | 標準エラー出力の内容を確認する。 |
+   ```
+   WORKTREE_EXISTS: true|false
+   BRANCH_EXISTS: true|false
+   NEW_COMMITS: <件数>|N/A
+   OCCUPANCY_RECORD_EXISTS: true|false
+   OCCUPANCY_AGE_SECONDS: <秒数>|N/A
+   OCCUPANCY_FRESH: true|false|N/A
+   RESULT: <値>
+   ```
 
-30 分という閾値は、この手順の中に独立して2箇所出てくる。ひとつは直前の「経過が 30 分以上」（dispatch 自身が notes のコミットハッシュ・`git status --porcelain` の記録から判定する、この復旧診断を呼び出すかどうかのゲート）、もうひとつは `check-progress-recovery` 内部の `OCCUPANCY_FRESH`（占有記録の `ASSIGNED_AT_EPOCH` からの経過。復旧診断を呼び出した後、新しいコミットが無い場合の判定に使う）である。両者は測る起点が異なる（前者はコミット・作業ツリー差分が最後に変化した時刻、後者は最後に `create-worktree` が実行された＝引き渡された時刻）。値をどちらも 1800 秒に揃えているのは、根拠となる手順 7 の起動間隔（後述）が共通だからであり、同じ1つの計測を指しているわけではない。
+   `OCCUPANCY_*` は、ワークツリー直下の占有記録（`.worktree-occupancy`。`.claude/skills/improvement-dispatch/scripts/create-worktree` が引き渡し・再引き渡しのたびに上書きする。`TASK_ID`・`ASSIGNED_AT`・`ASSIGNED_AT_EPOCH` の3行）を読み、その `ASSIGNED_AT_EPOCH`（最後に `create-worktree` が実行された＝最後にこのワークツリーが引き渡された時刻）からの経過秒数が閾値（`bin/lib/stale_threshold.sh` の `IMPROVEMENT_STALE_THRESHOLD_SECONDS`。30分）未満かどうかを示す。占有記録が無い、または読めない場合は `OCCUPANCY_RECORD_EXISTS: false` / `OCCUPANCY_AGE_SECONDS: N/A` / `OCCUPANCY_FRESH: N/A` となり、コミット履歴のみの判定にフォールバックする。dispatch はこれらの行を個別に解釈する必要は無く、最後の行 `RESULT: <値>` だけで結果を判別すればよい（終了ステータスでも判別できる: 0=REUSE_WORKTREE_REDISPATCH, 1=RECREATE_WORKTREE_REDISPATCH, 2=REVERT_TO_TODO, 3=ERROR）。診断結果を出すのみで、backlog タスクのステータス変更や `git worktree add`/`remove` のような実際の変更操作はスクリプトの範囲外であり、次の対応表の通り dispatch が行う。
+
+   | `RESULT` | 意味 | dispatch が行うこと |
+   | --- | --- | --- |
+   | `REUSE_WORKTREE_REDISPATCH` | 次のいずれか。(a) ワークツリー・ブランチともに存在し、デフォルトブランチから見て新しいコミットがある（＝実装が途中まで進んでいる）。(b) 新しいコミットは無いが、`OCCUPANCY_FRESH: true`（＝最後の引き渡しから30分未満）。この場合はコミットを伴わない長時間処理（大きなテスト実行など）が続いているだけで、実際には稼働中の可能性が高いとみなす。 | 既存のワークツリーをそのまま再利用し、その到達点を引き渡し情報に含めて手順 5 で再度引き渡す（手順 5 は `create-worktree` を経由するため、占有記録の `ASSIGNED_AT_EPOCH` もこの再引き渡しの時刻に更新される）。 |
+   | `RECREATE_WORKTREE_REDISPATCH` | ワークツリーは無いがブランチが存在し、新しいコミットがある（ワークツリーが無い時点で占有記録は判定に使わない） | `git worktree prune` で古い管理情報を掃除した後、手順 5（`.claude/skills/improvement-dispatch/scripts/create-worktree`。ワークツリーは無くブランチだけ存在する場合、新規作成せず既存の作業ブランチを割り当てる）で作り直し、到達点を引き渡し情報に含めて再度引き渡す。 |
+   | `REVERT_TO_TODO` | ブランチが存在しない。またはブランチはあるが新しいコミットが無く、かつ占有記録も新しくない（`OCCUPANCY_FRESH` が `false` または `N/A`）（＝コミット履歴からも占有記録からも活動が確認できない） | `backlog task edit TASK-<n> -s "To Do" --comment '引き渡し先が消失したため To Do に戻した' --comment-author @dispatch` で戻す。出力の `WORKTREE_EXISTS: true` でワークツリーが残っていると分かれば `git worktree remove <ワークツリーのパス>` で片付ける。 |
+   | `ERROR` | 引数不正、対象リポジトリでない、デフォルトブランチが解決できない等 | 標準エラー出力の内容を確認する。 |
+
+30 分という閾値は、この手順の 2 つの判定で使う。ひとつは `observe-progress` の経過判定（前回の観測記録から状態が変わらないまま経過した時間。復旧診断を呼び出すかどうかのゲート）、もうひとつは `check-progress-recovery` 内部の `OCCUPANCY_FRESH`（占有記録の `ASSIGNED_AT_EPOCH` からの経過。復旧診断を呼び出した後、新しいコミットが無い場合の判定に使う）である。両者は測る起点が異なる（前者は最後に状態の変化を観測した時刻、後者は最後に引き渡された、またはハートビートで更新された時刻）。同じ値を使うのは、根拠となる手順 7 の起動間隔（後述）が共通だからであり、同じ 1 つの計測を指しているわけではない。値は `bin/lib/stale_threshold.sh` の `IMPROVEMENT_STALE_THRESHOLD_SECONDS` に 1 か所だけ定義し、両スクリプトがそれを読む。
 
 この 30 分という目安の根拠は手順 7 の起動間隔である。手順 7 では、サブエージェント稼働中の次回起動を保険として 1800 秒以上後に、承認待ち・レビュー待ちで動けないときは 1200〜1800 秒後にそれぞれ設定する目安を定めている。1 回の起動間隔が概ね 20〜30 分であることを踏まえ、記録した観測から 30 分以上が経過していれば、その間に少なくとも 1 回以上は別の起動を挟んでいる（＝複数回の起動にわたって同じ状態を確認した）とみなせる。
 

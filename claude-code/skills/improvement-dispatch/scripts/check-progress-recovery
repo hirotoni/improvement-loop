@@ -16,8 +16,10 @@
 #
 # 出力する行（WORKTREE_EXISTS / BRANCH_EXISTS / NEW_COMMITS / OCCUPANCY_RECORD_EXISTS /
 # OCCUPANCY_AGE_SECONDS / OCCUPANCY_FRESH / RESULT）の意味、RESULT の各値に対する
-# dispatch 側の対応、および 1800 秒（30分）という鮮度の閾値の根拠（手順7の起動間隔）は
+# dispatch 側の対応、および鮮度の閾値（30分）の根拠（手順7の起動間隔）は
 # claude-code/skills/improvement-dispatch/SKILL.md 手順2 が正本。RESULT は最終行に出す。
+# 閾値の値は bin/lib/stale_threshold.sh の IMPROVEMENT_STALE_THRESHOLD_SECONDS だけで
+# 定義し、手順2 の観測記録の経過判定（observe-progress）と共有する。
 #
 # 終了ステータス:
 #   0 = REUSE_WORKTREE_REDISPATCH
@@ -59,6 +61,30 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
   emit_result "ERROR"
   exit 3
 fi
+
+# bin/lib/stale_threshold.sh を source するために、自分自身の実パスから配布元リポジトリの
+# ルートを解決する（`.claude/skills/improvement-dispatch` シンボリックリンク経由で実行され
+# うるため、BASH_SOURCE をそのまま使えない）。DIST_REPO_ROOT（配布元）は REPO_ROOT
+# （判定対象）とは別物である。touch-occupancy・create-worktree と同じ理由・同じ実装。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元>/claude-code/skills/improvement-dispatch/scripts。4階層上がルート。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+# shellcheck source=../../../../bin/lib/stale_threshold.sh
+source "$DIST_REPO_ROOT/bin/lib/stale_threshold.sh"
 
 # ---- 0. 前提条件: base_branch がこのリポジトリで解決できるか ----
 if ! git -C "$REPO_ROOT" rev-parse --quiet --verify "${BASE_BRANCH}^{commit}" >/dev/null; then
@@ -108,7 +134,6 @@ fi
 OCCUPANCY_RECORD_EXISTS="false"
 OCCUPANCY_AGE_SECONDS="N/A"
 OCCUPANCY_FRESH="N/A"
-OCCUPANCY_FRESH_THRESHOLD_SECONDS=1800  # 30分。根拠はヘッダーコメント参照。
 
 if [ "$WORKTREE_EXISTS" = "true" ]; then
   occupancy_file="$WORKTREE_PATH/.worktree-occupancy"
@@ -124,7 +149,7 @@ if [ "$WORKTREE_EXISTS" = "true" ]; then
       if [ "$OCCUPANCY_AGE_SECONDS" -lt 0 ]; then
         OCCUPANCY_AGE_SECONDS=0
       fi
-      if [ "$OCCUPANCY_AGE_SECONDS" -lt "$OCCUPANCY_FRESH_THRESHOLD_SECONDS" ]; then
+      if [ "$OCCUPANCY_AGE_SECONDS" -lt "$IMPROVEMENT_STALE_THRESHOLD_SECONDS" ]; then
         OCCUPANCY_FRESH="true"
       else
         OCCUPANCY_FRESH="false"

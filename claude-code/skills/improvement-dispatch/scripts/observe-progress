@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# improvement-dispatch 手順 2-3 の前段（In Progress のタスクの引き渡し先がまだ動いているかの
+# 判定）を決定論的に行う。ワークツリーを観測し、notes の `### 手順 2 観測記録` を生成し、
+# 前回の記録と比べ、変化が無ければ経過時間を判定する。
+#
+# 使い方: observe-progress <task_id> <worktree_path> <branch>
+#   task_id        backlog のタスク ID（例: TASK-12）。notes の読み取りに使う。
+#   worktree_path  notes の `### 引き渡し` に記録されている WORKTREE_DIR。存在しなくてもよい。
+#   branch         作業ブランチ名。存在しなくてもよい。
+#
+# 呼び出し元のカレントディレクトリが属する git リポジトリをメインの作業木として扱う。
+# ワークツリーの有無は check-progress-recovery と同じく git worktree list --porcelain への
+# 登録で判定し、加えてディレクトリが実在することを求める（観測に git -C が要るため）。
+#
+# 観測するもの:
+# - ワークツリーがある: そのワークツリーの `git log -1 --format='%H %cI'` と
+#   `git status --porcelain`（core.quotePath=true に固定する。利用者の設定で表記が変わらない
+#   ようにするため。--no-optional-locks で index.lock を取らず、作業中のサブエージェントの
+#   git add・commit とぶつからないようにする）。
+# - ワークツリーが無くブランチだけある: メインの作業木から見たブランチの直近コミット。
+#   作業ツリーは観測できないので status は `(ワークツリー無し)` とする。
+# - どちらも無い: 観測を待たず、引き渡し先は存在しないと確定する（RUN_RECOVERY）。
+#   ワークツリーとブランチの両方が消えているのは、作業途中で環境ごと失われたことの強い
+#   証拠だからである。notes は読まない。
+#
+# 記録の書式（このスクリプトだけが生成する。dispatch は出力をそのまま追記する）:
+#   ### 手順 2 観測記録
+#   - commit: <ハッシュ> (<コミット時刻 %cI>)
+#   - status: (clean)                      … 未コミットの変更が無い場合
+#   - status:                              … ある場合は porcelain の各行を 1 行ずつ並べる
+#     - <git status --porcelain の 1 行>
+#   - status: (ワークツリー無し)            … ブランチだけ残っている場合
+#   - 観測時刻: <UTC の ISO8601> (epoch <UNIX 秒>)
+# 区切り文字で 1 行に連結しないのは、区切り文字がファイル名と衝突しうるためである。
+# 経過時間は epoch から計算する。ISO8601 文字列の解析は GNU date と BSD date で割れるので
+# 行わない（bin/lib/occupancy.sh の ASSIGNED_AT_EPOCH と同じ理由）。
+#
+# 比較の規則:
+# - 比べる相手は、notes の最後の `### 引き渡し` より後にある最後の `### 手順 2 観測記録`
+#   （bin/lib/notes_records.sh の notes_records で取り出す）。引き渡し前の記録は別の引き渡しの
+#   観測なので比べない。
+# - 前回の記録から最後の 1 行（観測時刻）を除いた部分が、今回の記録の同じ部分とバイト列で
+#   一致し、かつ前回の最後の行が上の観測時刻の書式どおりであるときだけ「変化なし」とする。
+#   それ以外（書式の揺れた手書きの記録、補足行付き、epoch の無い記録を含む）はすべて
+#   「変化あり」として新しい記録を残させる。判定を止めずに安全側（まだ作業中）へ倒すためである。
+#
+# 標準出力（診断メッセージは標準エラー）:
+#   WORKTREE_EXISTS: true|false
+#   BRANCH_EXISTS: true|false
+#   PREVIOUS_RECORD: none|changed|unchanged|N/A
+#   ELAPSED_SECONDS: <秒数>|N/A
+#   THRESHOLD_SECONDS: <秒数>
+#   RECORD_BEGIN        … RESULT: RECORD のときだけ、追記すべき本文をこの 2 行の間に出す
+#   <本文>
+#   RECORD_END
+#   RESULT: <値>        … 最終行
+#
+# 終了ステータス:
+#   0 = RECORD        前回の記録が無いか、状態が変わった。本文を notes に追記して、手順 7 へ。
+#   1 = CARRY_OVER    変化なし・経過が閾値未満。記録を追記せず判断を持ち越して、手順 7 へ。
+#   2 = RUN_RECOVERY  変化なし・経過が閾値以上、またはワークツリーとブランチが両方無い。
+#                     check-progress-recovery による復旧診断へ進む。
+#   3 = ERROR         引数不正、対象リポジトリでない、git・backlog の実行失敗など。
+#
+# 閾値は bin/lib/stale_threshold.sh の IMPROVEMENT_STALE_THRESHOLD_SECONDS を
+# check-progress-recovery と共有する。RESULT ごとの dispatch の対応の正本は
+# claude-code/skills/improvement-dispatch/SKILL.md 手順 2-3。
+#
+# 責務外: notes への追記、backlog タスクのステータス変更、ワークツリーの変更操作。
+
+set -uo pipefail
+
+OBSERVATION_HEADING="手順 2 観測記録"
+
+err() {
+  printf 'エラー: %s\n' "$*" >&2
+}
+
+emit_result() {
+  printf 'RESULT: %s\n' "$1"
+}
+
+fail_error() {
+  err "$1"
+  emit_result "ERROR"
+  exit 3
+}
+
+if [ "$#" -ne 3 ]; then
+  fail_error "使い方: $(basename "$0") <task_id> <worktree_path> <branch>"
+fi
+
+TASK_ID="$1"
+WORKTREE_PATH="$2"
+BRANCH="$3"
+
+if [ -z "$TASK_ID" ] || [ -z "$WORKTREE_PATH" ] || [ -z "$BRANCH" ]; then
+  fail_error "task_id・worktree_path・branch はいずれも空文字にできない"
+fi
+
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
+  fail_error "カレントディレクトリが git リポジトリの中ではない: $REPO_ROOT"
+fi
+
+# bin/lib を source するために、自分自身の実パスから配布元リポジトリのルートを解決する
+# （`.claude/skills/improvement-dispatch` シンボリックリンク経由で実行されうるため、
+# BASH_SOURCE をそのまま使えない）。DIST_REPO_ROOT（配布元）は REPO_ROOT（判定対象）とは
+# 別物である。touch-occupancy・check-progress-recovery と同じ理由・同じ実装。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元>/claude-code/skills/improvement-dispatch/scripts。4階層上がルート。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+# shellcheck source=../../../../bin/lib/notes_records.sh
+source "$DIST_REPO_ROOT/bin/lib/notes_records.sh"
+# shellcheck source=../../../../bin/lib/stale_threshold.sh
+source "$DIST_REPO_ROOT/bin/lib/stale_threshold.sh"
+
+# ---- 1. ワークツリー・ブランチの有無 ----
+if ! worktree_list_output="$(git -C "$REPO_ROOT" worktree list --porcelain 2>&1)"; then
+  fail_error "git worktree list の実行に失敗した: $worktree_list_output"
+fi
+
+WORKTREE_EXISTS="false"
+if [ -d "$WORKTREE_PATH" ]; then
+  normalized_worktree_path="$(cd "$WORKTREE_PATH" && pwd -P)"
+  if printf '%s\n' "$worktree_list_output" | grep -Fxq "worktree $normalized_worktree_path"; then
+    WORKTREE_EXISTS="true"
+  fi
+fi
+
+BRANCH_EXISTS="false"
+if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  BRANCH_EXISTS="true"
+fi
+
+emit_summary() {
+  printf 'WORKTREE_EXISTS: %s\n' "$WORKTREE_EXISTS"
+  printf 'BRANCH_EXISTS: %s\n' "$BRANCH_EXISTS"
+  printf 'PREVIOUS_RECORD: %s\n' "$1"
+  printf 'ELAPSED_SECONDS: %s\n' "$2"
+  printf 'THRESHOLD_SECONDS: %s\n' "$IMPROVEMENT_STALE_THRESHOLD_SECONDS"
+}
+
+if [ "$WORKTREE_EXISTS" = "false" ] && [ "$BRANCH_EXISTS" = "false" ]; then
+  emit_summary "N/A" "N/A"
+  emit_result "RUN_RECOVERY"
+  exit 2
+fi
+
+# ---- 2. 観測する ----
+if [ "$WORKTREE_EXISTS" = "true" ]; then
+  if ! commit_info="$(git -C "$WORKTREE_PATH" log -1 --format='%H %cI' 2>&1)"; then
+    fail_error "ワークツリーの直近コミットを取得できない: $commit_info"
+  fi
+  if ! porcelain="$(git --no-optional-locks -c core.quotePath=true -C "$WORKTREE_PATH" status --porcelain 2>&1)"; then
+    fail_error "ワークツリーの git status に失敗した: $porcelain"
+  fi
+  if [ -z "$porcelain" ]; then
+    status_lines="- status: (clean)"
+  else
+    status_lines="- status:"
+    while IFS= read -r porcelain_line; do
+      status_lines="$status_lines
+  - $porcelain_line"
+    done <<<"$porcelain"
+  fi
+else
+  if ! commit_info="$(git -C "$REPO_ROOT" log -1 --format='%H %cI' "refs/heads/$BRANCH" 2>&1)"; then
+    fail_error "ブランチの直近コミットを取得できない: $commit_info"
+  fi
+  status_lines="- status: (ワークツリー無し)"
+fi
+
+commit_hash="${commit_info%% *}"
+commit_time="${commit_info#* }"
+
+# ISO8601 と epoch を 1 回の date で取り、両者が同じ瞬間を指すようにする。
+now_pair="$(date -u '+%Y-%m-%dT%H:%M:%SZ %s')"
+now_iso="${now_pair%% *}"
+now_epoch="${now_pair#* }"
+
+record_head="### $OBSERVATION_HEADING
+- commit: $commit_hash ($commit_time)
+$status_lines"
+record_body="$record_head
+- 観測時刻: $now_iso (epoch $now_epoch)"
+
+emit_record() {
+  emit_summary "$1" "$2"
+  echo "RECORD_BEGIN"
+  printf '%s\n' "$record_body"
+  echo "RECORD_END"
+  emit_result "RECORD"
+  exit 0
+}
+
+# ---- 3. 前回の記録と比べる ----
+# task view の出力は変数に取らず、そのまま notes_records に流す。$(...) は末尾の空行を削るので、
+# 1.53.0 の出力（notes 節の後に「Modified files: ...」行と空行が来て終わる）を一度変数に
+# 入れると、notes_section が Modified files 行を notes の終わりと認識できなくなる。
+# backlog の失敗は pipefail で拾う（backlog の標準エラーはそのまま呼び出し元へ出る）。
+if ! previous_record="$(backlog task view "$TASK_ID" --plain \
+    | notes_records --after-last-handoff --heading "$OBSERVATION_HEADING" --last)"; then
+  fail_error "backlog task view $TASK_ID --plain から notes の観測記録を読み取れなかった"
+fi
+
+if [ -z "$previous_record" ]; then
+  emit_record "none" "N/A"
+fi
+
+# 前回の記録を「最後の 1 行」と「それより前」に分ける。
+previous_head="$(printf '%s\n' "$previous_record" | sed '$d')"
+previous_last="$(printf '%s\n' "$previous_record" | tail -n 1)"
+previous_epoch="$(printf '%s\n' "$previous_last" \
+  | LC_ALL=C sed -n 's/^- 観測時刻: [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z (epoch \([0-9][0-9]*\))$/\1/p')"
+
+if [ "$previous_head" != "$record_head" ] || [ -z "$previous_epoch" ]; then
+  emit_record "changed" "N/A"
+fi
+
+# ---- 4. 変化なし: 経過時間で判定する ----
+# 10# を付けて、先頭が 0 の値を 8 進数として解釈させない。
+elapsed=$((now_epoch - 10#$previous_epoch))
+if [ "$elapsed" -lt 0 ]; then
+  elapsed=0
+fi
+
+emit_summary "unchanged" "$elapsed"
+if [ "$elapsed" -ge "$IMPROVEMENT_STALE_THRESHOLD_SECONDS" ]; then
+  emit_result "RUN_RECOVERY"
+  exit 2
+fi
+emit_result "CARRY_OVER"
+exit 1
