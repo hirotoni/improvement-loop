@@ -199,8 +199,9 @@ echo "=== 9. 複数依存・存在しない依存の扱い（TASK-99） ==="
 # backlog CLI 1.53.0 の task view --plain は "Dependencies:" 行を出さず、
 # "Dependency Graph:" の "Depends on" 木で依存を表す。依存の一部だけが Done の場合、
 # 推移的依存を持つ場合、存在しない依存を持つ場合に、直接依存を正しく読み取って
-# 判定できることを確かめる。1.48.0 の "Dependencies:" 行の形式でも同じ結果になる
-# （このうちカンマ区切りの複数依存の解析は、実 CLI が 1.53.0 でも 10b がスタブで検証する）。
+# 判定できることを確かめる。1.48.0 の "Dependencies:" 行の形式でも同じ結果になる。
+# 9 節は実 CLI の出力形式を確かめる経路として実 CLI のまま残す。両形式の依存解析と存在しない
+# 依存の扱いは、実 CLI のバージョンによらず 10b〜10f がスタブで検証する。
 
 TMP_REPO_DEPS_SELECT="$(mktemp -d)"
 register_tmp_cleanup "$TMP_REPO_DEPS_SELECT"
@@ -304,9 +305,9 @@ fi
 
 echo ""
 echo "=== 10. backlog CLI の出力順・バージョンによらない選定ロジックの検証（TASK-103） ==="
-# 実 CLI（1.53.0）の task list は最初から優先度→ID順で返し、task view は 1.48.0 の
-# "Dependencies:" 行を出さない。そのため 7〜9 節だけでは、select-next-task 自身の
-# 優先度→数値ID順の選定と 1.48.0 形式の依存解析が壊れても検出できない。
+# 実 CLI（1.53.0）の task list は最初から優先度→ID順で返し、task view の依存の形式は
+# CLI のバージョンで違う。そのため 7〜9 節だけでは、select-next-task 自身の
+# 優先度→数値ID順の選定と、実行環境の CLI と違うバージョンの形式の依存解析が壊れても検出できない。
 # ここでは PATH の先頭に backlog のスタブを置き、固定の出力を返させて検証する。
 # スタブは SELECT_STUB_FIXTURE_DIR 配下の次のファイルを返す。
 #   task list --plain                         -> list.txt
@@ -379,8 +380,10 @@ fi
 # --- 10b. 1.48.0 形式の "Dependencies:" 行を読み、未完了の依存を持つタスクを除外する ---
 # High の TASK-4 は "Dependencies: TASK-3, TASK-7" を持ち、TASK-3 は Done、TASK-7 は In Progress。
 # 未完了の依存を末尾に置き、カンマ区切りの全要素を見ていることも確かめる。
-# view の内容は select-next-task のコメントにある 1.48.0 の形式を手で写したもので、実出力の細部までは再現しない。
 # 1.48.0 形式の解析を無効化すると TASK-4 が選ばれて FAIL する。
+# 10b〜10f のフィクスチャは、各節に書いたバージョンの実 CLI の stdout を写したものである
+# （取得日 2026-09-27。File: 行の一時リポジトリのパスだけ "<一時リポジトリ>" に置き換えた）。
+# 10b は backlog CLI 1.48.0 の出力。TASK-1・TASK-2・TASK-5 を作ってから archive し、ID を揃えた。
 FIXTURE_DEPS148_SELECT="$STUB_ROOT_SELECT/deps148"
 mkdir -p "$FIXTURE_DEPS148_SELECT"
 cat > "$FIXTURE_DEPS148_SELECT/list.txt" <<'LIST'
@@ -395,50 +398,108 @@ Done:
   TASK-3 - Done dep
 
 LIST
-: > "$FIXTURE_DEPS148_SELECT/blocked.txt"
+cat > "$FIXTURE_DEPS148_SELECT/blocked.txt" <<'LIST'
+No tasks found.
+LIST
 cat > "$FIXTURE_DEPS148_SELECT/view-TASK-4.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-4 - Has-open-dep.md
+
 Task TASK-4 - Has open dep
 ==================================================
 
 Status: ○ To Do
 Priority: High
+Ordinal: 4000
+Created: 2026-09-27 05:26 (UTC)
+Updated: 2026-09-27 05:26 (UTC)
 Dependencies: TASK-3, TASK-7
 
 Description:
 --------------------------------------------------
-stub
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
 VIEW
 cat > "$FIXTURE_DEPS148_SELECT/view-TASK-6.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-6 - Has-done-dep.md
+
 Task TASK-6 - Has done dep
 ==================================================
 
 Status: ○ To Do
 Priority: Medium
+Ordinal: 6000
+Created: 2026-09-27 05:26 (UTC)
+Updated: 2026-09-27 05:26 (UTC)
 Dependencies: TASK-3
 
 Description:
 --------------------------------------------------
-stub
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
 VIEW
 cat > "$FIXTURE_DEPS148_SELECT/view-TASK-3.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-3 - Done-dep.md
+
 Task TASK-3 - Done dep
 ==================================================
 
 Status: ✔ Done
+Ordinal: 3000
+Created: 2026-09-27 05:26 (UTC)
+Updated: 2026-09-27 05:26 (UTC)
 
 Description:
 --------------------------------------------------
-stub
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
 VIEW
 cat > "$FIXTURE_DEPS148_SELECT/view-TASK-7.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-7 - Open-dep.md
+
 Task TASK-7 - Open dep
 ==================================================
 
 Status: ◒ In Progress
+Ordinal: 7000
+Created: 2026-09-27 05:26 (UTC)
+Updated: 2026-09-27 05:26 (UTC)
 
 Description:
 --------------------------------------------------
-stub
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
 VIEW
 # max_in_progress は In Progress の TASK-7 でゲートされないよう 2 にする。
 select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_DEPS148_SELECT" "$SELECT_SCRIPT" 2 3 2>&1)"
@@ -447,6 +508,410 @@ if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID:
   pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.48.0 形式の Dependencies: 行から未完了の依存（TASK-7）を読み、TASK-4 を除外して TASK-6 を選ぶ"
 else
   fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.48.0 形式の依存行を持つタスクの選定結果が期待と異なる（TASK-6 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 10c. 1.53.0 形式の "Dependency Graph:" の木から直接依存だけを読む ---
+# backlog CLI 1.53.0 の出力。TASK-1 は In Progress、TASK-2 は TASK-1 に依存する Done。
+# High の TASK-3 は TASK-1（未完了）に直接依存し、High の TASK-4 は TASK-2（Done）に直接依存する。
+# TASK-4 の木には推移的依存の TASK-1（未完了）がインデント付きで出て、木の後には
+# Proposed の TASK-6 を並べた "Dependents" セクションが続く。
+# 期待は TASK-3 を除外して TASK-4 を選ぶこと。木の解析を無効化すると TASK-3 が選ばれ、
+# 推移的依存を依存として読むと TASK-4 も除外され、Dependents の木まで読むとスタブに view の無い
+# ID を引いて RESULT: ERROR になり、どちらも FAIL する。
+FIXTURE_TREE153_SELECT="$STUB_ROOT_SELECT/tree153"
+mkdir -p "$FIXTURE_TREE153_SELECT"
+cat > "$FIXTURE_TREE153_SELECT/list.txt" <<'LIST'
+Proposed:
+  TASK-5 - Depends on TASK-3
+  TASK-6 - Depends on TASK-4
+
+To Do:
+  [HIGH] TASK-3 - Direct open dep
+  [HIGH] TASK-4 - Transitive open dep only
+
+In Progress:
+  TASK-1 - Open dep
+
+Done:
+  TASK-2 - Done dep with open dep
+
+LIST
+cat > "$FIXTURE_TREE153_SELECT/blocked.txt" <<'LIST'
+No tasks found.
+LIST
+cat > "$FIXTURE_TREE153_SELECT/view-TASK-3.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-3 - Direct-open-dep.md
+
+Task TASK-3 - Direct open dep
+==================================================
+
+Status: ○ To Do
+Priority: High
+Ordinal: 3000
+Created: 2026-09-27 05:26 (UTC)
+
+Dependency Graph:
+--------------------------------------------------
+Depends on (1 direct, 1 total):
+└─ TASK-1 - Open dep [In Progress]
+
+Dependents (1 direct, 1 total):
+└─ TASK-5 - Depends on TASK-3 [Proposed]
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+cat > "$FIXTURE_TREE153_SELECT/view-TASK-4.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-4 - Transitive-open-dep-only.md
+
+Task TASK-4 - Transitive open dep only
+==================================================
+
+Status: ○ To Do
+Priority: High
+Ordinal: 4000
+Created: 2026-09-27 05:26 (UTC)
+
+Dependency Graph:
+--------------------------------------------------
+Depends on (1 direct, 2 total):
+└─ TASK-2 - Done dep with open dep [completed]
+   └─ TASK-1 - Open dep [In Progress]
+
+Dependents (1 direct, 1 total):
+└─ TASK-6 - Depends on TASK-4 [Proposed]
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+cat > "$FIXTURE_TREE153_SELECT/view-TASK-1.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-1 - Open-dep.md
+
+Task TASK-1 - Open dep
+==================================================
+
+Status: ◒ In Progress
+Ordinal: 1000
+Created: 2026-09-27 05:26 (UTC)
+Updated: 2026-09-27 05:26 (UTC)
+
+Dependency Graph:
+--------------------------------------------------
+Dependents (2 direct, 5 total):
+├─ TASK-2 - Done dep with open dep [completed]
+│  └─ TASK-4 - Transitive open dep only [To Do]
+│     └─ TASK-6 - Depends on TASK-4 [Proposed]
+└─ TASK-3 - Direct open dep [To Do]
+   └─ TASK-5 - Depends on TASK-3 [Proposed]
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+cat > "$FIXTURE_TREE153_SELECT/view-TASK-2.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-2 - Done-dep-with-open-dep.md
+
+Task TASK-2 - Done dep with open dep
+==================================================
+
+Status: ✔ Done
+Ordinal: 2000
+Created: 2026-09-27 05:26 (UTC)
+Updated: 2026-09-27 05:26 (UTC)
+
+Dependency Graph:
+--------------------------------------------------
+Depends on (1 direct, 1 total):
+└─ TASK-1 - Open dep [In Progress]
+
+Dependents (1 direct, 2 total):
+└─ TASK-4 - Transitive open dep only [To Do]
+   └─ TASK-6 - Depends on TASK-4 [Proposed]
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+# max_in_progress は In Progress の TASK-1 でゲートされないよう 2 にする。
+select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_TREE153_SELECT" "$SELECT_SCRIPT" 2 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-4'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.53.0 形式の木から、未完了の直接依存（TASK-1）を持つ TASK-3 を除外し、推移的依存だけが未完了の TASK-4 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.53.0 形式の木を持つタスクの選定結果が期待と異なる（TASK-4 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 10d. 1.53.0 形式の "unknown task ID"（存在しない依存）を持つタスクを選ばない ---
+# backlog CLI 1.53.0 の出力。High の TASK-1 の依存に存在しない TASK-77 を frontmatter で書き足した。
+# 実 CLI の TASK-77 の view は exit 1 なので、スタブにも view-TASK-77.txt を置かない
+# （unknown を依存 ID として view すると RESULT: ERROR になって FAIL する）。
+FIXTURE_UNKNOWN153_SELECT="$STUB_ROOT_SELECT/unknown153"
+mkdir -p "$FIXTURE_UNKNOWN153_SELECT"
+cat > "$FIXTURE_UNKNOWN153_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-1 - Missing dep
+  [LOW] TASK-2 - No deps
+
+LIST
+cat > "$FIXTURE_UNKNOWN153_SELECT/blocked.txt" <<'LIST'
+No tasks found.
+LIST
+cat > "$FIXTURE_UNKNOWN153_SELECT/view-TASK-1.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-1 - Missing-dep.md
+
+Task TASK-1 - Missing dep
+==================================================
+
+Status: ○ To Do
+Priority: High
+Ordinal: 1000
+Created: 2026-09-27 05:26 (UTC)
+
+Dependency Graph:
+--------------------------------------------------
+Depends on (1 direct, 1 total):
+└─ TASK-77 - unknown task ID
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+cat > "$FIXTURE_UNKNOWN153_SELECT/view-TASK-2.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-2 - No-deps.md
+
+Task TASK-2 - No deps
+==================================================
+
+Status: ○ To Do
+Priority: Low
+Ordinal: 2000
+Created: 2026-09-27 05:26 (UTC)
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_UNKNOWN153_SELECT" "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-2'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.53.0 形式の unknown task ID（TASK-77）を依存に持つ TASK-1 を選ばず、TASK-2 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.53.0 形式の unknown task ID を持つタスクの選定結果が期待と異なる（TASK-2 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 10e. 1.53.0 形式の "ambiguous task ID"（ID が一意に決まらない依存）を持つタスクを選ばない ---
+# backlog CLI 1.53.0 の出力。Done の TASK-1 のファイルを別名で複製し、High の TASK-2 をそれに依存させた。
+# 実 CLI の TASK-1 の view は exit 1 なので、スタブにも view-TASK-1.txt を置かない。
+# なお実 1.53.0 は重複 ID があると task list --plain 自体を exit 1 で終える（stdout は下のとおり）。
+# そのため実環境では select-next-task は最初の task list で RESULT: ERROR になる。スタブは exit 0 で
+# 返すので、ここでは list と view の間に重複が生じた場合に備えた木の ambiguous の扱いを検証する。
+FIXTURE_AMBIGUOUS153_SELECT="$STUB_ROOT_SELECT/ambiguous153"
+mkdir -p "$FIXTURE_AMBIGUOUS153_SELECT"
+cat > "$FIXTURE_AMBIGUOUS153_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-2 - Ambiguous dep
+  [LOW] TASK-3 - No deps
+
+Done:
+  TASK-1 - Ambiguous dep target copy
+  TASK-1 - Ambiguous dep target
+
+LIST
+cat > "$FIXTURE_AMBIGUOUS153_SELECT/blocked.txt" <<'LIST'
+No tasks found.
+LIST
+cat > "$FIXTURE_AMBIGUOUS153_SELECT/view-TASK-2.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-2 - Ambiguous-dep.md
+
+Task TASK-2 - Ambiguous dep
+==================================================
+
+Status: ○ To Do
+Priority: High
+Ordinal: 2000
+Created: 2026-09-27 05:26 (UTC)
+
+Dependency Graph:
+--------------------------------------------------
+Depends on (1 direct, 1 total):
+└─ TASK-1 - ambiguous task ID
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+cat > "$FIXTURE_AMBIGUOUS153_SELECT/view-TASK-3.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-3 - No-deps.md
+
+Task TASK-3 - No deps
+==================================================
+
+Status: ○ To Do
+Priority: Low
+Ordinal: 3000
+Created: 2026-09-27 05:26 (UTC)
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_AMBIGUOUS153_SELECT" "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-3'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.53.0 形式の ambiguous task ID（TASK-1）を依存に持つ TASK-2 を選ばず、TASK-3 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.53.0 形式の ambiguous task ID を持つタスクの選定結果が期待と異なる（TASK-3 を期待、exit ${select_exit}）:
+$select_out"
+fi
+
+# --- 10f. 1.48.0 形式の存在しない依存（Status 行の無い view）を持つタスクを選ばない ---
+# backlog CLI 1.48.0 の出力。High の TASK-1 の依存に存在しない TASK-77 を frontmatter で書き足した。
+# 実 1.48.0 の TASK-77 の view は stdout が空（"Task TASK-77 not found." は stderr）で exit 0 なので、
+# view-TASK-77.txt は空にする。Status 行が無い依存を Done 扱いにすると TASK-1 が選ばれて FAIL する。
+FIXTURE_MISSING148_SELECT="$STUB_ROOT_SELECT/missing148"
+mkdir -p "$FIXTURE_MISSING148_SELECT"
+cat > "$FIXTURE_MISSING148_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-1 - Missing dep
+  [LOW] TASK-2 - No deps
+
+LIST
+cat > "$FIXTURE_MISSING148_SELECT/blocked.txt" <<'LIST'
+No tasks found.
+LIST
+cat > "$FIXTURE_MISSING148_SELECT/view-TASK-1.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-1 - Missing-dep.md
+
+Task TASK-1 - Missing dep
+==================================================
+
+Status: ○ To Do
+Priority: High
+Ordinal: 1000
+Created: 2026-09-27 05:26 (UTC)
+Dependencies: TASK-77
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+cat > "$FIXTURE_MISSING148_SELECT/view-TASK-2.txt" <<'VIEW'
+File: <一時リポジトリ>/.backlog/tasks/task-2 - No-deps.md
+
+Task TASK-2 - No deps
+==================================================
+
+Status: ○ To Do
+Priority: Low
+Ordinal: 2000
+Created: 2026-09-27 05:26 (UTC)
+
+Description:
+--------------------------------------------------
+No description provided
+
+Acceptance Criteria:
+--------------------------------------------------
+No acceptance criteria defined
+
+Definition of Done:
+--------------------------------------------------
+No Definition of Done items defined
+
+VIEW
+: > "$FIXTURE_MISSING148_SELECT/view-TASK-77.txt"
+select_out="$(cd "$STUB_ROOT_SELECT" && PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$FIXTURE_MISSING148_SELECT" "$SELECT_SCRIPT" 1 3 2>&1)"
+select_exit=$?
+if [ "$select_exit" -eq 0 ] && printf '%s\n' "$select_out" | grep -Fxq 'TASK_ID: TASK-2'; then
+  pass "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.48.0 形式の存在しない依存（TASK-77、Status 行の無い view）を持つ TASK-1 を選ばず、TASK-2 を選ぶ"
+else
+  fail "claude-code/skills/improvement-dispatch/scripts/select-next-task: 1.48.0 形式の存在しない依存を持つタスクの選定結果が期待と異なる（TASK-2 を期待、exit ${select_exit}）:
 $select_out"
 fi
 
