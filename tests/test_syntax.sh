@@ -33,6 +33,8 @@ echo "=== 1. 構文チェック ==="
 # - `--shell=bash`: bin/lib/*.sh のようなシバンを持たないファイル。シバン無しのまま
 #   渡すと対象シェル不明として SC2148 (error) になり必ず失敗する。ファイル自身に
 #   シバンやディレクティブを足すのは対象スクリプトへの変更になるので、フラグ側で解決する。
+# - `-e SC2034`: 変数だけを定義して関数を持たない bin/lib/stale_threshold.sh。変数の消費者は
+#   source する側にあり、単体で解析すると未使用として報告される（tests/lib/*.sh と同じ理由）。
 # - 4フィールド目が true なのは install.zsh だけ。zsh 専用で shellcheck が zsh を
 #   直接サポートしないためである（下の shellcheck ループのコメントを参照）。
 CHECK_SCRIPTS=(
@@ -44,6 +46,7 @@ CHECK_SCRIPTS=(
   "$WORKTREE_PORCELAIN_SCRIPT|bin/lib/worktree_porcelain.sh|--shell=bash|false"
   "$OCCUPANCY_LIB_SCRIPT|bin/lib/occupancy.sh|--shell=bash|false"
   "$NOTES_RECORDS_SCRIPT|bin/lib/notes_records.sh|--shell=bash|false"
+  "$STALE_THRESHOLD_SCRIPT|bin/lib/stale_threshold.sh|--shell=bash -e SC2034|false"
   "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-scout-major/scripts/list-target-repos|-x -P SCRIPTDIR|false"
@@ -53,7 +56,8 @@ CHECK_SCRIPTS=(
   "$SELECT_SCRIPT|claude-code/skills/improvement-dispatch/scripts/select-next-task||false"
   "$CHECK_HANDOFF_SCRIPT|claude-code/skills/improvement-work/scripts/check-handoff||false"
   "$PRECOMMIT_HOOK|githooks/pre-commit||false"
-  "$CHECK_RECOVERY_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-progress-recovery||false"
+  "$CHECK_RECOVERY_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-progress-recovery|-x -P SCRIPTDIR|false"
+  "$OBSERVE_PROGRESS_SCRIPT|claude-code/skills/improvement-dispatch/scripts/observe-progress|-x -P SCRIPTDIR|false"
   "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
   "$BACKLOG_CONFIG_SNAPSHOT_SCRIPT|claude-code/skills/improvement-dispatch/scripts/backlog-config-snapshot||false"
 )
