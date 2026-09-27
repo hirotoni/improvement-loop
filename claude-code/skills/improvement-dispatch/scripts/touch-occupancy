@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 占有記録ファイル（.worktree-occupancy）の ASSIGNED_AT/ASSIGNED_AT_EPOCH だけを
-# 更新する軽量経路（TASK-93）。claude-code/skills/improvement-dispatch/scripts/create-worktree
+# 更新する軽量経路。claude-code/skills/improvement-dispatch/scripts/create-worktree
 # が行う git worktree add/remove、起点（BASE_REF）の解決、.git/info/exclude への
 # 追記は一切行わない。
 #
