@@ -56,6 +56,7 @@ CHECK_SCRIPTS=(
   "$CHECK_RECOVERY_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-progress-recovery||false"
   "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
   "$BACKLOG_CONFIG_SNAPSHOT_SCRIPT|claude-code/skills/improvement-dispatch/scripts/backlog-config-snapshot||false"
+  "$CHECK_REVIEW_RECORDS_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-review-records|-x -P SCRIPTDIR|false"
 )
 
 # ---- tests/ 配下のスクリプトを実体から動的に追記する ----
