@@ -7,6 +7,8 @@
 #   setup-improvement-loop --workspace [対象ワークスペースディレクトリのパス]
 #   setup-improvement-loop --help | -h
 # 引数を省略した場合はカレントディレクトリを対象とする。
+# -- より後ろの引数はオプションとして扱わず、対象のパスとして扱う（- で始まる名前の
+# ディレクトリを渡すときに使う）。
 #
 # --workspace は、対象を単一リポジトリではなくワークスペースディレクトリとして扱い、
 # claude-code/workspace-skills/ 配下のスキル一式を配置する別経路（setup_workspace）に
@@ -53,6 +55,8 @@ usage() {
   setup-improvement-loop --help | -h
 
 引数を省略した場合はカレントディレクトリを対象とする。対象のパスは 1 つだけ渡す。
+-- より後ろの引数はオプションとして扱わず、対象のパスとして扱う
+（例: setup-improvement-loop -- -repo）。
 
 オプション:
   --workspace  対象を単一リポジトリではなくワークスペースディレクトリとして扱い、
@@ -953,10 +957,20 @@ fi
 # 使い方を添えて終了コード 2 で止める。黙って無視すると、綴りを誤ったフラグが
 # 「対象ディレクトリが存在しない」と報告されたり、2 つ目のリポジトリが未導入の
 # まま成功扱いになったりする。
+# -- より後ろの引数は、- で始まっていてもオプションとして解釈せず位置引数とする
+# （--workspace や -h も同様）。- で始まる名前のディレクトリを渡すための区切りである。
 WORKSPACE_MODE=false
 POSITIONAL_ARGS=()
+END_OF_OPTIONS=false
 for arg in "$@"; do
+  if [ "$END_OF_OPTIONS" = true ]; then
+    POSITIONAL_ARGS+=("$arg")
+    continue
+  fi
   case "$arg" in
+    --)
+      END_OF_OPTIONS=true
+      ;;
     -h|--help)
       usage
       exit 0
@@ -1004,7 +1018,13 @@ if [ ! -d "$TARGET_DIR_ARG" ]; then
   err "対象ディレクトリが存在しない: $TARGET_DIR_ARG"
   exit 1
 fi
-TARGET_REPO_ROOT="$(cd "$TARGET_DIR_ARG" && pwd)"
+# - で始まる相対パス（-- の後に渡されたもの）は、cd がオプションや直前のディレクトリ
+# （cd -）として解釈しないよう ./ を前置してから渡す。
+TARGET_DIR_FOR_CD="$TARGET_DIR_ARG"
+case "$TARGET_DIR_FOR_CD" in
+  -*) TARGET_DIR_FOR_CD="./$TARGET_DIR_FOR_CD" ;;
+esac
+TARGET_REPO_ROOT="$(cd "$TARGET_DIR_FOR_CD" && pwd)"
 
 # 以降（git リポジトリ判定、backlog init、.backlog/ 配下の配置等）は --workspace 無しの
 # 既定動作専用である。
@@ -1048,8 +1068,10 @@ else
   # projectName は明示的に渡す。--defaults でも名前だけは省略すると非対話環境で
   # 入力待ちのまま失敗する。対象ディレクトリ名を既定値として渡す。
   project_name="$(basename "$TARGET_REPO_ROOT")"
-  log "[run]  backlog init \"$project_name\" --defaults --backlog-dir .backlog --agent-instructions none"
-  (cd "$TARGET_REPO_ROOT" && backlog init "$project_name" --defaults --backlog-dir .backlog --agent-instructions none < /dev/null)
+  # プロジェクト名は -- の後に渡す。- で始まる名前のディレクトリ（-- で渡された対象）の
+  # basename を backlog CLI がオプションとして解釈しないようにするためである。
+  log "[run]  backlog init --defaults --backlog-dir .backlog --agent-instructions none -- \"$project_name\""
+  (cd "$TARGET_REPO_ROOT" && backlog init --defaults --backlog-dir .backlog --agent-instructions none -- "$project_name" < /dev/null)
   CREATED+=(".backlog/ (backlog init)")
 fi
 

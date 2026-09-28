@@ -2190,4 +2190,114 @@ $extra_pos_ws_output"
 fi
 assert_args_repos_unchanged "11c: --workspace"
 
+echo ""
+echo "=== 11d. -- 以降の引数を位置引数として扱う（TASK-137） ==="
+# - で始まる名前のディレクトリを、-- の後に ./ を付けずに渡せることを確かめる。
+# 対象は親ディレクトリをカレントにして相対パスで渡す（絶対パスは - で始まらないため）。
+TMP_DDASH_PARENT="$(mktemp -d)"
+register_tmp_cleanup "$TMP_DDASH_PARENT"
+
+# ---- 11d-1. setup-improvement-loop -- -repo（AC#1） ----
+mkdir "$TMP_DDASH_PARENT/-repo"
+init_repo_with_backlog_config "$TMP_DDASH_PARENT/-repo" "ddash-repo"
+ddash_repo_output="$(cd "$TMP_DDASH_PARENT" && "$SETUP_SCRIPT" -- -repo 2>&1)"
+ddash_repo_exit=$?
+if [ "$ddash_repo_exit" -eq 0 ]; then
+  pass "11d-1: -- -repo が exit 0 で終わる"
+else
+  fail "11d-1: -- -repo が失敗した（exit ${ddash_repo_exit}）:
+$ddash_repo_output"
+fi
+assert_skill_symlinks "$TMP_DDASH_PARENT/-repo" "$SOURCE_SKILLS_DIR" "11d-1: " \
+  "11d-1: -- -repo で -repo に全スキルが配置される" \
+  "${SKILL_NAMES[@]}"
+if [ -f "$TMP_DDASH_PARENT/-repo/.backlog/config.my.yml" ]; then
+  pass "11d-1: -- -repo で -repo に .backlog/config.my.yml が配置される"
+else
+  fail "11d-1: -- -repo で -repo に .backlog/config.my.yml が配置されていない"
+fi
+if [ -e "$TMP_DDASH_PARENT/.claude" ] || [ -e "$TMP_DDASH_PARENT/.backlog" ]; then
+  fail "11d-1: カレントディレクトリ（親ディレクトリ）に .claude か .backlog が作られた"
+else
+  pass "11d-1: カレントディレクトリ（親ディレクトリ）には何も作らない"
+fi
+
+# .backlog/ が無い新規リポジトリでは backlog init が走る。プロジェクト名（basename）が
+# - で始まっても backlog CLI にオプションとして解釈されないことを確かめる。
+mkdir "$TMP_DDASH_PARENT/-fresh"
+(cd "$TMP_DDASH_PARENT/-fresh" && git init -q)
+ddash_fresh_output="$(cd "$TMP_DDASH_PARENT" && "$SETUP_SCRIPT" -- -fresh 2>&1)"
+ddash_fresh_exit=$?
+if [ "$ddash_fresh_exit" -eq 0 ] &&
+  grep -Eq '^project_name: "?-fresh"?$' "$TMP_DDASH_PARENT/-fresh/.backlog/config.yml" 2>/dev/null; then
+  pass "11d-1: .backlog/ が無い -fresh にも -- -fresh で backlog init が走り、project_name が -fresh になる"
+else
+  fail "11d-1: .backlog/ が無い -fresh への -- -fresh が想定と異なる（exit ${ddash_fresh_exit}）:
+$ddash_fresh_output"
+fi
+assert_skill_symlinks "$TMP_DDASH_PARENT/-fresh" "$SOURCE_SKILLS_DIR" "11d-1: " \
+  "11d-1: -- -fresh で -fresh に全スキルが配置される" \
+  "${SKILL_NAMES[@]}"
+
+# ---- 11d-2. setup-improvement-loop --workspace -- -ws（AC#2） ----
+mkdir "$TMP_DDASH_PARENT/-ws"
+ddash_ws_output="$(cd "$TMP_DDASH_PARENT" && "$SETUP_SCRIPT" --workspace -- -ws 2>&1)"
+ddash_ws_exit=$?
+if [ "$ddash_ws_exit" -eq 0 ]; then
+  pass "11d-2: --workspace -- -ws が exit 0 で終わる"
+else
+  fail "11d-2: --workspace -- -ws が失敗した（exit ${ddash_ws_exit}）:
+$ddash_ws_output"
+fi
+assert_skill_symlinks "$TMP_DDASH_PARENT/-ws" "$SOURCE_WORKSPACE_SKILLS_DIR" "11d-2: " \
+  "11d-2: --workspace -- -ws で -ws にワークスペース用の全スキルが配置される" \
+  "${WORKSPACE_SKILL_NAMES[@]}"
+if [ -e "$TMP_DDASH_PARENT/-ws/.backlog" ]; then
+  fail "11d-2: --workspace -- -ws で -ws に .backlog/ が作られた"
+else
+  pass "11d-2: --workspace -- -ws は -ws をワークスペースとして扱い .backlog/ を作らない"
+fi
+
+# ---- 11d-3. -- の後に位置引数が 2 つ（AC#3） ----
+mkdir "$TMP_DDASH_PARENT/-a" "$TMP_DDASH_PARENT/-b"
+(cd "$TMP_DDASH_PARENT/-a" && git init -q)
+(cd "$TMP_DDASH_PARENT/-b" && git init -q)
+ddash_a_before="$(snapshot_dir_state "$TMP_DDASH_PARENT/-a")"
+ddash_b_before="$(snapshot_dir_state "$TMP_DDASH_PARENT/-b")"
+for ddash_prefix in "" "--workspace"; do
+  ddash_label="11d-3: ${ddash_prefix:+$ddash_prefix }-- -a -b"
+  if [ -n "$ddash_prefix" ]; then
+    ddash_two_output="$(cd "$TMP_DDASH_PARENT" && "$SETUP_SCRIPT" "$ddash_prefix" -- -a -b 2>&1)"
+  else
+    ddash_two_output="$(cd "$TMP_DDASH_PARENT" && "$SETUP_SCRIPT" -- -a -b 2>&1)"
+  fi
+  ddash_two_exit=$?
+  if [ "$ddash_two_exit" -ne 0 ] && grep -Fq "受け付けなかった引数: -b" <<<"$ddash_two_output"; then
+    pass "$ddash_label: 受け付けなかった引数を示して非 0 で終わる"
+  else
+    fail "$ddash_label: 想定と異なる（exit ${ddash_two_exit}）:
+$ddash_two_output"
+  fi
+  if [ "$(snapshot_dir_state "$TMP_DDASH_PARENT/-a")" = "$ddash_a_before" ] &&
+    [ "$(snapshot_dir_state "$TMP_DDASH_PARENT/-b")" = "$ddash_b_before" ]; then
+    pass "$ddash_label: どちらの対象にも何も作らない"
+  else
+    fail "$ddash_label: 対象の状態が変わった"
+  fi
+  if [ -e "$TMP_DDASH_PARENT/.claude" ] || [ -e "$TMP_DDASH_PARENT/.backlog" ]; then
+    fail "$ddash_label: カレントディレクトリ（親ディレクトリ）に .claude か .backlog が作られた"
+  else
+    pass "$ddash_label: カレントディレクトリ（親ディレクトリ）にも何も作らない"
+  fi
+done
+
+# ---- 11d-4. --help の出力に -- の扱いが含まれる（AC#4） ----
+ddash_help_stdout="$("$SETUP_SCRIPT" --help 2>/dev/null)"
+if grep -Fq -- "-- より後ろの引数はオプションとして扱わず" <<<"$ddash_help_stdout"; then
+  pass "11d-4: --help の出力に -- の扱いが含まれる"
+else
+  fail "11d-4: --help の出力に -- の扱いが含まれない:
+$ddash_help_stdout"
+fi
+
 finish_tests
