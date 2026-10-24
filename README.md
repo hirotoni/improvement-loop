@@ -51,7 +51,7 @@ setup-improvement-loop
 
 ## 使い方
 
-improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の 5 スキルが分担して動かす。状態遷移の正本は `claude-code/skills/status-table.md` にある。
+improvement ループは Backlog.md のタスク状態（`Proposed` → `To Do` → `In Progress` → `In Review` → `Approved` → `Done`）を、以下の 5 スキルが分担して動かす。状態遷移の正本は [`claude-code/skills/improvement-dispatch/status-table.md`](claude-code/skills/improvement-dispatch/status-table.md) にある。
 各スキルの詳細（引数、手順、入出力例）はこの README には書かず、対応する `claude-code/skills/<name>/SKILL.md` を参照すること。
 
 - **improvement-add**: 人間が伝えた改善要望を、そのまま `Proposed` として起票する。

@@ -220,12 +220,12 @@ echo "FIXTURE_FRESH / FIXTURE_RERUN を構築した（それぞれ setup-improve
 
 echo ""
 echo "=== 1. REQUIRED_STATUSES と状態遷移表の正本の一致 ==="
-# REQUIRED_STATUSES と、状態遷移表の正本（claude-code/skills/status-table.md）の
+# REQUIRED_STATUSES と、状態遷移表の正本（claude-code/skills/improvement-dispatch/status-table.md）の
 # 「## 状態遷移表」節に列挙されたステータス名の集合が一致することを検証する。
 # 情報源が2箇所に分かれている以上、片方だけが更新されて食い違いうるためである。
-STATUS_TABLE_FILE="$REPO_ROOT/claude-code/skills/status-table.md"
+STATUS_TABLE_FILE="$REPO_ROOT/claude-code/skills/improvement-dispatch/status-table.md"
 if [ ! -f "$STATUS_TABLE_FILE" ]; then
-  fail "claude-code/skills/status-table.md が存在しない"
+  fail "claude-code/skills/improvement-dispatch/status-table.md が存在しない"
 else
   table_statuses_raw="$(awk '
     /^## 状態遷移表/ { flag=1; next }
@@ -234,7 +234,7 @@ else
   ' "$STATUS_TABLE_FILE" | grep -E '^\| `' | sed -E 's/^\| `([^`]*)`.*/\1/')"
 
   if [ -z "$table_statuses_raw" ]; then
-    fail "claude-code/skills/status-table.md の「## 状態遷移表」節からステータス名を1件も抽出できなかった（見出しや表の書式が変わった可能性がある）"
+    fail "claude-code/skills/improvement-dispatch/status-table.md の「## 状態遷移表」節からステータス名を1件も抽出できなかった（見出しや表の書式が変わった可能性がある）"
   else
     TABLE_STATUSES=()
     while IFS= read -r line; do
@@ -245,10 +245,10 @@ else
     table_sorted="$(printf '%s\n' "${TABLE_STATUSES[@]}" | sort)"
 
     if [ "$required_sorted" = "$table_sorted" ]; then
-      pass "REQUIRED_STATUSES と claude-code/skills/status-table.md の状態遷移表のステータス名一覧が一致する"
+      pass "REQUIRED_STATUSES と claude-code/skills/improvement-dispatch/status-table.md の状態遷移表のステータス名一覧が一致する"
     else
       diff_out="$(diff <(printf '%s\n' "$required_sorted") <(printf '%s\n' "$table_sorted"))"
-      fail "REQUIRED_STATUSES（bin/setup-improvement-loop）と claude-code/skills/status-table.md の状態遷移表のステータス名一覧が一致しない:
+      fail "REQUIRED_STATUSES（bin/setup-improvement-loop）と claude-code/skills/improvement-dispatch/status-table.md の状態遷移表のステータス名一覧が一致しない:
 $diff_out"
     fi
   fi

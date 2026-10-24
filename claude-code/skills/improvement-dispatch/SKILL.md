@@ -13,7 +13,7 @@ Backlog.md の状態を読み、次に何を動かすかを決める。
 
 ## ループ内の位置
 
-状態遷移表の正本は `claude-code/skills/status-table.md` にある。まず読む。**このスキルが動かすのは `In Progress`（dispatch が動かす）と、`auto_merge_reviewed` 次第の `Done`（dispatch または人間）である。**
+状態遷移表の正本は [`claude-code/skills/improvement-dispatch/status-table.md`](status-table.md) にある。まず読む。**このスキルが動かすのは `In Progress`（dispatch が動かす）と、`auto_merge_reviewed` 次第の `Done`（dispatch または人間）である。**
 
 `Proposed` を `To Do` に上げるのは人間である。承認を代行しない。
 `In Review` を `Approved` に上げるのも人間である。レビューを代行しない。

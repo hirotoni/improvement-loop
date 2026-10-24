@@ -11,7 +11,7 @@ description: 人間が伝えた改善要望を、探索や観点選定を挟ま�
 
 ## ループ内の位置
 
-状態遷移表の正本は `claude-code/skills/status-table.md` にある。まず読む。**このスキルが動かすのは `Proposed`（add が起票する。scout も起票する）である。**
+状態遷移表の正本は [`claude-code/skills/improvement-dispatch/status-table.md`](../improvement-dispatch/status-table.md) にある。まず読む。**このスキルが動かすのは `Proposed`（add が起票する。scout も起票する）である。**
 
 `Proposed` から先には進めない。人間が内容を確認して `To Do` に上げたものだけが improvement-dispatch に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。

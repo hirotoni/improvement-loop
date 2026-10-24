@@ -11,7 +11,7 @@ model: sonnet
 
 ## ループ内の位置
 
-状態遷移表の正本は `claude-code/skills/status-table.md` にある。まず読む。**このスキルが動かすのは `In Review`（work が動かす）である。**
+状態遷移表の正本は [`claude-code/skills/improvement-dispatch/status-table.md`](../improvement-dispatch/status-table.md) にある。まず読む。**このスキルが動かすのは `In Review`（work が動かす）である。**
 
 **承認は既に済んでいる。** 人間が `Proposed` を `To Do` に上げた時点が承認である。
 だから改めて承認を求めない。ただし承認されたのはタスクの受入基準の範囲だけである。そこから外に出るときは中断する（後述）。

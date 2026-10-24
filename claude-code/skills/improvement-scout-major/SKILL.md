@@ -24,7 +24,7 @@ description: コードベースを探索し、アーキテクチャ級の大き�
 
 ## ループ内の位置
 
-状態遷移表の正本は `claude-code/skills/status-table.md` にある。まず読む。**このスキルが動かすのは `Proposed`（scout-major が起票する）である。**
+状態遷移表の正本は [`claude-code/skills/improvement-dispatch/status-table.md`](../improvement-dispatch/status-table.md) にある。まず読む。**このスキルが動かすのは `Proposed`（scout-major が起票する）である。**
 
 `Proposed` から先には進めない。人間が milestone とタスクの内容を確認して個々のタスクを `To Do` に上げたものだけが improvement-dispatch に拾われる。
 このスキルは起票までで終わる。承認を促したり、自分で `To Do` に上げたりしない。
