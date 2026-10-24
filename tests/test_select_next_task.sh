@@ -782,4 +782,128 @@ else
 $select_out"
 fi
 
+echo ""
+echo "=== 5. 空き枠（max_in_progress − In Progress）の数まで選ぶ（TASK-141） ==="
+# 1 回の起動で空き枠を埋める件数を引き渡すため、select-next-task は SELECTED のとき
+# TASK_ID 行を空き枠の数まで優先順に出す。TASK_ID 行の集合と順序を完全一致で確かめる
+# （存在だけを見ると、除外漏れや上限超過で余分な行が出ても PASS してしまう）。
+
+# assert_selected_ids <ラベル> <期待する終了コード> [期待する ID...]: RUN_OUT の TASK_ID 行が、
+# 期待する ID を順に並べたものと完全に一致すれば PASS。ID を渡さなければ TASK_ID 行が無いことを見る。
+assert_selected_ids() {
+  local label="$1" code="$2"
+  shift 2
+  local actual expected="" id
+  actual="$(grep '^TASK_ID: ' <<< "$RUN_OUT" || true)"
+  for id in "$@"; do
+    expected="${expected:+$expected
+}TASK_ID: $id"
+  done
+  if [ "$RUN_EXIT" -eq "$code" ] && [ "$actual" = "$expected" ]; then
+    pass "$label"
+  else
+    fail "$label
+$ASSERT_DETAIL"
+  fi
+}
+
+# $1 = フィクスチャのディレクトリ。スタブで select-next-task を実行し RUN_OUT / RUN_EXIT を設定する。
+# 残りの引数は select-next-task にそのまま渡す。
+run_select_stub() {
+  local fixture="$1"
+  shift
+  run_in "$STUB_ROOT_SELECT" env PATH="$STUB_ROOT_SELECT/bin:$PATH" SELECT_STUB_FIXTURE_DIR="$fixture" "$SELECT_SCRIPT" "$@"
+}
+
+# --- 5a. AC#1: 候補が空き枠以上あれば、空き枠ちょうどの件数を優先度→数値ID順に選ぶ ---
+# max_in_progress 4・In Progress 1 件で空き枠は 3。候補は 6 件。High の TASK-9・TASK-10、
+# Medium で ID 最小の TASK-3 の 3 件だけが選ばれる。打ち切りが壊れると 4 件以上、
+# ID を文字列で比べると TASK-10 が TASK-9 より先に出て FAIL する。
+FIXTURE_SLOTS_SELECT="$STUB_ROOT_SELECT/slots"
+mkdir -p "$FIXTURE_SLOTS_SELECT"
+cat > "$FIXTURE_SLOTS_SELECT/list.txt" <<'LIST'
+To Do:
+  [LOW] TASK-1 - Low
+  TASK-2 - No priority
+  [MEDIUM] TASK-5 - Medium five
+  [HIGH] TASK-10 - High ten
+  [MEDIUM] TASK-3 - Medium three
+  [HIGH] TASK-9 - High nine
+
+In Progress:
+  TASK-20 - Running
+
+LIST
+: > "$FIXTURE_SLOTS_SELECT/blocked.txt"
+write_stub_view_without_deps "$FIXTURE_SLOTS_SELECT" TASK-1 TASK-2 TASK-5 TASK-10 TASK-3 TASK-9
+run_select_stub "$FIXTURE_SLOTS_SELECT" 4 3
+assert_selected_ids "select-next-task: AC#1: 空き枠 3（max_in_progress 4・In Progress 1）に対し候補 6 件から TASK-9・TASK-10・TASK-3 の 3 件を順に選ぶ" 0 TASK-9 TASK-10 TASK-3
+assert "select-next-task: 複数件を選んでも 1 行目は RESULT: SELECTED" first_line_is 'RESULT: SELECTED'
+# 空き枠が 1 なら、候補が複数あっても TASK_ID は 1 行だけ（max_in_progress 1 の従来の挙動と同じ）。
+# 一覧に In Progress が 1 件（TASK-20）あるので、max_in_progress 2 で空き枠 1 にする。
+run_select_stub "$FIXTURE_SLOTS_SELECT" 2 3
+assert_selected_ids "select-next-task: 空き枠 1 なら候補 6 件でも TASK_ID は最良の TASK-9 の 1 行だけ" 0 TASK-9
+
+# --- 5b. AC#2・AC#3: 候補が空き枠より少なければ候補だけを選ぶ。blocked と依存未完了は除外したまま ---
+# max_in_progress 5・In Progress 1 件で空き枠は 4。High の TASK-1 は blocked:needs-decision、
+# High の TASK-2 は In Progress の TASK-20 に依存する（1.48.0 形式）。残る TASK-3・TASK-4 の 2 件だけを選ぶ。
+FIXTURE_FEW_SELECT="$STUB_ROOT_SELECT/few"
+mkdir -p "$FIXTURE_FEW_SELECT"
+cat > "$FIXTURE_FEW_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-1 - Blocked
+  [HIGH] TASK-2 - Open dep
+  [MEDIUM] TASK-3 - Medium
+  [LOW] TASK-4 - Low
+
+In Progress:
+  TASK-20 - Running
+
+LIST
+cat > "$FIXTURE_FEW_SELECT/blocked.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-1 - Blocked
+LIST
+write_stub_view_without_deps "$FIXTURE_FEW_SELECT" TASK-1 TASK-3 TASK-4
+printf 'Task TASK-2 - Open dep\n==================================================\n\nStatus: ○ To Do\nDependencies: TASK-20\n\nDescription:\n--------------------------------------------------\nstub\n' \
+  > "$FIXTURE_FEW_SELECT/view-TASK-2.txt"
+printf 'Task TASK-20 - Running\n==================================================\n\nStatus: ◒ In Progress\n\nDescription:\n--------------------------------------------------\nstub\n' \
+  > "$FIXTURE_FEW_SELECT/view-TASK-20.txt"
+run_select_stub "$FIXTURE_FEW_SELECT" 5 3
+assert_selected_ids "select-next-task: AC#2・AC#3: 空き枠 4 に対し、blocked（TASK-1）と依存未完了（TASK-2）を除いた TASK-3・TASK-4 の 2 件だけを選ぶ" 0 TASK-3 TASK-4
+
+# --- 5c. AC#3: 空き枠があっても max_in_review に達していれば 1 件も選ばない ---
+FIXTURE_REVIEW_GATE_SELECT="$STUB_ROOT_SELECT/review-gate"
+mkdir -p "$FIXTURE_REVIEW_GATE_SELECT"
+cat > "$FIXTURE_REVIEW_GATE_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-1 - Ready
+  [HIGH] TASK-2 - Ready too
+
+In Review:
+  TASK-10 - Review one
+  TASK-11 - Review two
+
+LIST
+: > "$FIXTURE_REVIEW_GATE_SELECT/blocked.txt"
+write_stub_view_without_deps "$FIXTURE_REVIEW_GATE_SELECT" TASK-1 TASK-2
+run_select_stub "$FIXTURE_REVIEW_GATE_SELECT" 5 2
+assert_selected_ids "select-next-task: AC#3: 空き枠 5 でも In Review が max_in_review（2）に達していれば GATED で TASK_ID を出さない" 1
+assert "select-next-task: AC#3: そのときの REASON は max_in_review" run_result 1 'RESULT: GATED' 'REASON: max_in_review'
+
+# --- 5d. AC#5: To Do の A と、A に依存する B を同じ呼び出しで選ばない（実 CLI） ---
+# TASK-1 は Done。A（TASK-2、Medium）は TASK-1 に依存し、B（TASK-3、High）は A に依存する。
+# C（TASK-4、Low）は依存無し。空き枠 3 でも、A はまだ Done ではないので B は選ばれず A・C の 2 件になる。
+# A を Done にした後の呼び出しで初めて B が選ばれる。
+make_select_repo TMP_REPO_CHAIN_SELECT task
+bl "$TMP_REPO_CHAIN_SELECT" task create "Done base" -s "Done"
+bl "$TMP_REPO_CHAIN_SELECT" task create "A" --priority medium --dep task-1
+bl "$TMP_REPO_CHAIN_SELECT" task create "B depends on A" --priority high --dep task-2
+bl "$TMP_REPO_CHAIN_SELECT" task create "C" --priority low
+run_in "$TMP_REPO_CHAIN_SELECT" "$SELECT_SCRIPT" 3 3
+assert_selected_ids "select-next-task: AC#5: 空き枠 3 でも、A（TASK-2）に依存する B（TASK-3）は選ばず A・C（TASK-4）を選ぶ" 0 TASK-2 TASK-4
+bl "$TMP_REPO_CHAIN_SELECT" task edit TASK-2 -s "Done"
+run_in "$TMP_REPO_CHAIN_SELECT" "$SELECT_SCRIPT" 3 3
+assert_selected_ids "select-next-task: AC#5: A が Done になった後の呼び出しで B（TASK-3）が選ばれる" 0 TASK-3 TASK-4
+
 finish_tests
