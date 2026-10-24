@@ -52,7 +52,14 @@ git status --porcelain
 git branch --show-current
 git worktree list
 cat .backlog/config.my.yml 2>/dev/null   # 無ければ調整値は既定値を使う
+.claude/skills/improvement-dispatch/scripts/check-remote-config-mismatch
 ```
+
+最後の `check-remote-config-mismatch` は、リポジトリの実態と `auto_merge_reviewed` の設定が明らかに食い違っていないかを確かめる（読むだけで、何も書き込まない）。git リモートが 1 つも無いのに `auto_merge_reviewed` が `true` でない（`false`、キーが無い、ファイルが無い）と、`RESULT:` の行が `RESULT: MISMATCH`（終了ステータス 1）になり、その後の `WARNING:` の行に食い違いの事実と `config.my.yml` の見直し方法が出る。リモートが無ければ PR は作れないので、この設定のままでは手順 3 の `Approved` が滞留し続ける。
+
+- `RESULT: MISMATCH` のときは、`WARNING:` の行を手順 7 の報告にそのまま載せる。
+- 設定は変えない。`config.my.yml` を書き換えず、`auto_merge_reviewed` は読んだ値のまま以降の手順（手順 3 の `Approved` の扱い、手順 5 の起点）に使う。リモートがあっても PR を使わない運用や、後からリモートを足す運用があり、設定の意図は利用者にしか分からないためである。
+- 手順も止めない。`RESULT: OK`（終了ステータス 0）なら何も報告しない。`RESULT: ERROR`（終了ステータス 2）なら標準エラーの内容を報告に 1 行添えて先へ進む。
 
 進行中のサブエージェントがあるかも確認する。次の規定に従う。
 
@@ -208,6 +215,8 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
    ```
 
 3. 対応するワークツリー（既定では `<リポジトリルート>/.worktree/<リポジトリ名>/task-<n>-<スラッグ>`。配置場所は `worktree_base_dir` で変更できる）の後片付け（`git worktree remove`）も、この設定のときは dispatch ではなく人間が行う。dispatch は `auto_merge_reviewed: false` の間、`Approved`/`Done` のワークツリーを片付けない。
+
+手順 1 の `check-remote-config-mismatch` が `RESULT: MISMATCH` だった場合も、この節の扱いは変えない（マージしない）。食い違いの警告を手順 7 の報告に載せ、設定を見直すかどうかは人間に委ねる。
 
 この設定のとき、手順 7 の「人間に必要な行動」に `Approved` の一覧を毎回含めて報告し、ループが `Approved` のまま滞留していても人間が次に何をすべきか（PR 作成・マージ・`Done` への変更）分かるようにする。
 
@@ -456,6 +465,7 @@ git diff <デフォルトブランチ>...<作業ブランチ> --stat
   - main のプッシュ（`auto_merge_reviewed: true` でマージした場合のみ該当。dispatch は行わない）
   - 手順 6 で共有 `.backlog/config.yml` が `CHANGED` だった場合の判断：差分を見て、意図しない改変なら `RESTORE_COMMAND` の値（`backlog-config-snapshot restore <task-id>`）を実行して引き渡し時点の内容へ戻す。上書き前の内容は `<git-common-dir>/improvement-loop/backlog-config-snapshots/<task-id>.yml.before-restore.<UTC時刻>.<PID>` に退避される（`BACKUP=` の行に出る）。意図した変更なら `backlog-config-snapshot accept <task-id>` で複製を現在の内容に取り直す（取り直さないと、そのタスクの検知は `CHANGED` を返し続ける）。
     - 複数のタスクが `CHANGED` になった場合、戻す基準には最も早く引き渡されたタスクの複製を使う。改変の後に引き渡されたタスクの複製は改変後の内容を写しており、そのタスクの `check` は `OK` になり、その `restore` は壊れた内容のままにする。迷ったら `<git-common-dir>/improvement-loop/backlog-config-snapshots/` の各複製を `diff` で見比べてから選ぶ。複製と `.before-restore` は自動では消えない。
+  - 手順 1 の `check-remote-config-mismatch` が `RESULT: MISMATCH` だった場合の判断：出力の `WARNING:` の行をそのまま載せる。PR を作らずローカルで main にマージする運用なら、人間が `.backlog/config.my.yml` の `improvement_loop` に `auto_merge_reviewed: true` を設定する（直接編集する。dispatch は書き換えない）。後からリモートを足して PR で運用するなら、設定はそのままでよい。
   - `blocked:needs-decision` の判断：コメントに書かれた選択肢に答え、`backlog task edit TASK-<n> --remove-label 'blocked:needs-decision'` でループに戻す
 - 作業ブランチ名とワークツリーのパスの一覧（レビュー対象）。
 

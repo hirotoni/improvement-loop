@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# improvement-dispatch 手順1で、リポジトリの実態と auto_merge_reviewed の設定が
+# 明らかに食い違っていないかを確かめる。
+#
+# 使い方: check-remote-config-mismatch   （引数なし。対象リポジトリの中で実行する）
+#
+# 検知する食い違い: git リモートが 1 つも無いのに、.backlog/config.my.yml の
+# improvement_loop.auto_merge_reviewed が true でない（false、キーが無い、ファイルが無い）。
+# auto_merge_reviewed: false は PR ベースの運用を前提にしており、dispatch は Approved を
+# マージせず PR を作るよう案内する。リモートが無ければ PR は作れないので、Approved が
+# 滞留し続ける。
+#
+# auto_merge_reviewed の読み方と真偽の解釈（true/True/TRUE だけを真とし、それ以外・
+# キー無し・ファイル無しは既定の false）は bin/lib/config_scalar.sh を create-worktree と
+# 共有する。解釈がずれると、この警告と create-worktree の起点の決め方が食い違うためである。
+#
+# 出力（標準出力）:
+#   REMOTE_COUNT: <git remote の件数>
+#   AUTO_MERGE_REVIEWED: true|false
+#   CONFIG_FILE: present|missing
+#   RESULT: OK        食い違いは無い（exit 0）
+#   RESULT: MISMATCH  リモートが無いのに auto_merge_reviewed が true でない（exit 1）。
+#                     続けて WARNING: の行に、事実と設定の見直し方法を出す。
+#   RESULT: ERROR     対象リポジトリでない、git remote の実行に失敗した等（exit 2。詳細は標準エラー）
+#
+# 責務外: 設定の変更。このスクリプトは何も書き込まない。リモートがあっても PR を使わない
+# 運用や、後からリモートを足す運用があり、設定の意図は利用者にしか分からないためである。
+# MISMATCH を受けて手順を止めることもしない（dispatch は報告に載せるだけで、Approved の
+# 扱いは設定値どおりにする）。
+
+set -uo pipefail
+
+err() {
+  printf 'エラー: %s\n' "$*" >&2
+}
+
+result_error() {
+  err "$1"
+  printf 'RESULT: ERROR\n'
+  exit 2
+}
+
+# bin/lib/config_scalar.sh を source するために、自分自身の実パスから配布元リポジトリの
+# ルートを解決する（.claude/skills/improvement-dispatch シンボリックリンク経由で実行されうる
+# ため、BASH_SOURCE をそのまま使えない）。DIST_REPO_ROOT（配布元）は REPO_ROOT（対象）と別物。
+_bootstrap_resolve_own_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    local dir base
+    dir="$(cd "$(dirname "$1")" && pwd -P)"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+SCRIPT_SOURCE="$(_bootstrap_resolve_own_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+# SCRIPT_DIR は <配布元>/claude-code/skills/improvement-dispatch/scripts。4階層上がルート。
+DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=../../../../bin/lib/config_scalar.sh
+# set -e を使わないので、読み込みに失敗しても止まらない。止めないと auto_merge_reviewed_enabled が
+# command not found で偽になり、リモートが無ければ誤って MISMATCH を報告するため、ここで ERROR にする。
+source "$DIST_REPO_ROOT/bin/lib/config_scalar.sh" \
+  || result_error "$DIST_REPO_ROOT/bin/lib/config_scalar.sh を読み込めない"
+
+if [ "$#" -ne 0 ]; then
+  result_error "使い方: $(basename "$0")   （引数は取らない）"
+fi
+
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
+  result_error "リポジトリルートの取得に失敗した（カレントディレクトリが git リポジトリの中ではない可能性がある）: $REPO_ROOT"
+fi
+
+# 件数は標準出力だけから数える。標準エラーの警告を混ぜると、それをリモートと数えて
+# 食い違いを見逃すためである。失敗時だけ標準エラーを取り直して報告に添える。
+if ! REMOTES="$(git -C "$REPO_ROOT" remote 2>/dev/null)"; then
+  result_error "git remote の実行に失敗した: $(git -C "$REPO_ROOT" remote 2>&1 >/dev/null)"
+fi
+REMOTE_COUNT="$(printf '%s\n' "$REMOTES" | grep -c . || true)"
+
+CONFIG_FILE="$REPO_ROOT/.backlog/config.my.yml"
+if [ -f "$CONFIG_FILE" ]; then
+  CONFIG_STATE="present"
+else
+  CONFIG_STATE="missing"
+fi
+
+if auto_merge_reviewed_enabled "$CONFIG_FILE"; then
+  AUTO_MERGE_REVIEWED="true"
+else
+  AUTO_MERGE_REVIEWED="false"
+fi
+
+printf 'REMOTE_COUNT: %s\n' "$REMOTE_COUNT"
+printf 'AUTO_MERGE_REVIEWED: %s\n' "$AUTO_MERGE_REVIEWED"
+printf 'CONFIG_FILE: %s\n' "$CONFIG_STATE"
+
+if [ "$REMOTE_COUNT" -eq 0 ] && [ "$AUTO_MERGE_REVIEWED" = "false" ]; then
+  printf 'RESULT: MISMATCH\n'
+  printf 'WARNING: git リモートが 1 つも無いが、auto_merge_reviewed が true ではない（PR 運用前提の既定値 false で動いている）。この設定では dispatch は Approved をマージせず PR を作るよう案内するが、リモートが無いので PR は作れず、Approved が滞留する。\n'
+  printf 'WARNING: PR を作らずローカルで main にマージする運用なら、%s の improvement_loop に auto_merge_reviewed: true を設定する（直接編集する。ファイルが無ければ作る。backlog config set はこのファイルに効かない）。後からリモートを足して PR で運用する予定なら、設定はそのままでよい。\n' "$CONFIG_FILE"
+  exit 1
+fi
+
+printf 'RESULT: OK\n'
+exit 0

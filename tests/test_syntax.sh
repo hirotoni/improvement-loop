@@ -47,6 +47,7 @@ CHECK_SCRIPTS=(
   "$OCCUPANCY_LIB_SCRIPT|bin/lib/occupancy.sh|--shell=bash|false"
   "$NOTES_RECORDS_SCRIPT|bin/lib/notes_records.sh|--shell=bash|false"
   "$STALE_THRESHOLD_SCRIPT|bin/lib/stale_threshold.sh|--shell=bash -e SC2034|false"
+  "$CONFIG_SCALAR_SCRIPT|bin/lib/config_scalar.sh|--shell=bash|false"
   "$WORKSPACE_DISPATCH_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-dispatch/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$WORKSPACE_SCOUT_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-scout/scripts/list-target-repos|-x -P SCRIPTDIR|false"
   "$WORKSPACE_SCOUT_MAJOR_LIST_TARGET_REPOS_SCRIPT|claude-code/workspace-skills/workspace-scout-major/scripts/list-target-repos|-x -P SCRIPTDIR|false"
@@ -61,6 +62,7 @@ CHECK_SCRIPTS=(
   "$CHECK_FORBIDDEN_ALLOWED_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-forbidden-allowed-paths|-x -P SCRIPTDIR|false"
   "$BACKLOG_CONFIG_SNAPSHOT_SCRIPT|claude-code/skills/improvement-dispatch/scripts/backlog-config-snapshot||false"
   "$CHECK_REVIEW_RECORDS_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-review-records|-x -P SCRIPTDIR|false"
+  "$CHECK_REMOTE_CONFIG_MISMATCH_SCRIPT|claude-code/skills/improvement-dispatch/scripts/check-remote-config-mismatch|-x -P SCRIPTDIR|false"
 )
 
 # ---- tests/ 配下のスクリプトを実体から動的に追記する ----

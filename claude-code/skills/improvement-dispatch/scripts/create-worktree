@@ -87,6 +87,8 @@ DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 source "$DIST_REPO_ROOT/bin/lib/worktree_porcelain.sh"
 # shellcheck source=../../../../bin/lib/occupancy.sh
 source "$DIST_REPO_ROOT/bin/lib/occupancy.sh"
+# shellcheck source=../../../../bin/lib/config_scalar.sh
+source "$DIST_REPO_ROOT/bin/lib/config_scalar.sh"
 
 # git-common-dir は cwd 相対のパスを返すことがあるため、絶対パスへ正規化する。
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir)"
@@ -96,36 +98,19 @@ case "$GIT_COMMON_DIR" in
 esac
 
 # ---- .backlog/config.my.yml の improvement_loop 配下のスカラー値を読む ----
-# ファイルが無い、またはキーが無い場合は空文字（＝既定値扱い）を返す。
-# 単一行のスカラー値のみを扱う（配列が要る check-forbidden-allowed-paths は
-# 独自の parse_path_list を持つ）。
+# 読み方（ファイル・キーが無ければ空文字＝既定値扱い）は bin/lib/config_scalar.sh が正本。
 CONFIG_FILE="$REPO_ROOT/.backlog/config.my.yml"
-read_config_scalar() {
-  local key="$1"
-  if [ ! -f "$CONFIG_FILE" ]; then
-    return 0
-  fi
-  local config_line
-  config_line="$(grep -m1 -E "^[[:space:]]*${key}:" "$CONFIG_FILE" || true)"
-  if [ -z "$config_line" ]; then
-    return 0
-  fi
-  printf '%s\n' "$config_line" | sed -E \
-    -e "s/^[[:space:]]*${key}:[[:space:]]*//" \
-    -e 's/[[:space:]]+#.*$//' \
-    -e 's/[[:space:]]+$//' \
-    -e 's/^"(.*)"$/\1/' \
-    -e "s/^'(.*)'\$/\\1/"
-}
 
-WORKTREE_BASE_DIR_CONFIG="$(read_config_scalar worktree_base_dir)"
+WORKTREE_BASE_DIR_CONFIG="$(read_config_scalar "$CONFIG_FILE" worktree_base_dir)"
 
 # auto_merge_reviewed: true は push を行わない完全ローカル運用を意味し、起点の
 # 決め方が変わる（下の「起点（BASE_REF）の決定」）。既定は false。
-case "$(read_config_scalar auto_merge_reviewed)" in
-  true|True|TRUE) AUTO_MERGE_REVIEWED=1 ;;
-  *) AUTO_MERGE_REVIEWED=0 ;;
-esac
+# 真偽の解釈は check-remote-config-mismatch と共有する（bin/lib/config_scalar.sh）。
+if auto_merge_reviewed_enabled "$CONFIG_FILE"; then
+  AUTO_MERGE_REVIEWED=1
+else
+  AUTO_MERGE_REVIEWED=0
+fi
 
 # 設定値は絶対パスでもリポジトリルート起点の相対パスでもよい。
 if [ -z "$WORKTREE_BASE_DIR_CONFIG" ]; then
