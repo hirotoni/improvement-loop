@@ -95,6 +95,9 @@ OBS_WORKTREE_DIR="${TMP_OBS_REPO}-wt"
 register_tmp_cleanup "$TMP_OBS_REPO" "$OBS_WORKTREE_DIR"
 (cd "$TMP_OBS_REPO" && git init -q -b main && git commit -q --allow-empty -m init)
 (cd "$TMP_OBS_REPO" && git worktree add -q -b feature-observe "$OBS_WORKTREE_DIR" main)
+# create-worktree と同じく占有記録を git 管理外にする（status に ?? として出さないため）。
+echo ".worktree-occupancy" >> "$(git -C "$TMP_OBS_REPO" rev-parse --git-common-dir)/info/exclude"
+OBS_OCCUPANCY_FILE="$OBS_WORKTREE_DIR/.worktree-occupancy"
 (cd "$OBS_WORKTREE_DIR" && printf 'one\n' > tracked-1.txt && printf 'two\n' > tracked-2.txt \
   && git add tracked-1.txt tracked-2.txt && git commit -q -m "in-progress work")
 OBS_COMMIT_LINE="- commit: $(git -C "$OBS_WORKTREE_DIR" log -1 --format='%H (%cI)')"
@@ -125,10 +128,13 @@ append_record() {
 }
 # 本文の最後の行（観測時刻）を、指定した秒数だけ過去の観測時刻に置き換えたものを出す。
 # ISO 側は比較に使われないので、書式が正しい固定値でよい。
-# 本文は notes を空にして observe した RECORD の出力から作る（直近の実行が CARRY_OVER だと本文が無いため）。
+# 本文は notes を $HANDOFF だけにして observe した RECORD の出力から作る（直近の実行が CARRY_OVER
+# だと本文が無いため）。本文の notes 行は観測記録を除いた notes の指紋なので、呼び出し側は
+# $HANDOFF と観測記録だけからなる notes に埋め込む（それ以外を足すと指紋が変わり changed になる）。
+# 2 番目の引数で notes の観測記録以外の部分を差し替えられる（既定は $HANDOFF）。
 body_with_age() {
   local age="$1" epoch
-  clear_notes
+  set_notes "${2:-$HANDOFF}"
   observe
   epoch=$(( $(date -u +%s) - age ))
   record_body | sed '$d'
@@ -157,6 +163,10 @@ for STUB_VERSION in 1.48.0 1.53.0; do
     [ "$(record_body | sed -n '1,3p')" = "### 手順 2 観測記録
 $OBS_COMMIT_LINE
 - status: (clean)" ]
+  assert "2a[$STUB_VERSION]: 本文の 4 行目が notes の指紋（cksum の CRC とバイト数）" \
+    has_text "$(record_body | sed -n '4p' | grep -E '^- notes: cksum [0-9]+ [0-9]+$')" "cksum"
+  assert "2a[$STUB_VERSION]: 本文の 5 行目が占有記録（占有記録が無ければ (無し)）" \
+    [ "$(record_body | sed -n '5p')" = "- 占有記録: (無し)" ]
   assert "2a[$STUB_VERSION]: 本文の最後の行が観測時刻（ISO8601 と epoch）" \
     has_text "$(record_body | tail -n 1 | grep -E '^- 観測時刻: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z \(epoch [0-9]+\)$')" "観測時刻"
   assert "2a[$STUB_VERSION]: RESULT が最終行" last_lines_are "RECORD_END" "RESULT: RECORD"
@@ -232,9 +242,11 @@ $HANDOFF"
   assert "2f[$STUB_VERSION]: 同じ状態に対する本文（観測時刻を除く）が 2 回とも同一" \
     [ "$first_body" = "$second_body" ]
   assert "2f[$STUB_VERSION]: 本文に 3 件の変更がそれぞれ 1 行で出る（空白を含むパスは引用符付き）" \
-    [ "$(printf '%s\n' "$first_body" | sed -n '4,$p')" = '  -  M tracked-1.txt
+    [ "$(printf '%s\n' "$first_body" | sed -n '4,6p')" = '  -  M tracked-1.txt
   -  M tracked-2.txt
   - ?? "a b.txt"' ]
+  assert "2f[$STUB_VERSION]: status の項目の直後（7 行目）が notes の指紋の行" \
+    has_text "$(printf '%s\n' "$first_body" | sed -n '7p' | grep -E '^- notes: cksum [0-9]+ [0-9]+$')" "cksum" 
   append_record
   observe
   assert "2f[$STUB_VERSION]: 複数行・空白入りの記録を追記した直後の再実行も CARRY_OVER" \
@@ -278,6 +290,87 @@ $OBS_COMMIT_LINE
   observe
   assert "2g[$STUB_VERSION]: epoch の無い旧書式の記録は状態が同じでも PREVIOUS_RECORD: changed・RECORD" \
     run_result 0 "PREVIOUS_RECORD: changed" "RESULT: RECORD"
+
+  echo "--- 2h. コミット・status 以外の信号: notes の追記と占有記録の更新（TASK-142） ---"
+  git -C "$OBS_WORKTREE_DIR" checkout -q -- .
+  REVIEW_NOTE='### レビュー 2 巡目
+- 方法: 独立サブエージェント
+- 結果: No findings'
+  # どの信号も変わらないまま 30 分以上 -> 従来どおり RUN_RECOVERY（TASK-142 AC#3）。
+  # 占有記録とレビュー記録は観測の時点から既にあり、その後変わっていない。
+  printf 'TASK_ID=TASK-1\nASSIGNED_AT=2026-01-01T00:00:00Z\nASSIGNED_AT_EPOCH=1000\n' > "$OBS_OCCUPANCY_FILE"
+  set_notes "$HANDOFF
+
+$REVIEW_NOTE
+
+$(body_with_age 1900 "$HANDOFF
+
+$REVIEW_NOTE")"
+  observe
+  assert "2h[$STUB_VERSION]: commit・status・notes・占有記録のどれも変わらず 1900 秒なら RUN_RECOVERY（AC#3）" \
+    run_result 2 "PREVIOUS_RECORD: unchanged" "RESULT: RUN_RECOVERY"
+
+  # dispatch 自身が観測記録を追記しても notes の指紋は変わらない（でないと AC#3 に届かない）。
+  set_notes "$HANDOFF
+
+$REVIEW_NOTE"
+  observe
+  append_record
+  observe
+  assert "2h[$STUB_VERSION]: dispatch が追記した観測記録は notes の変化に数えない（CARRY_OVER）" \
+    run_result 1 "PREVIOUS_RECORD: unchanged" "RESULT: CARRY_OVER"
+
+  # 前回の観測の後に notes へレビュー巡の記録が追記された -> RUN_RECOVERY ではなく RECORD（AC#1）。
+  set_notes "$HANDOFF
+
+$(body_with_age 1900)
+
+$REVIEW_NOTE"
+  observe
+  assert "2h[$STUB_VERSION]: commit・status が同じでも観測後に notes へ見出し付きの追記があれば RECORD（AC#1）" \
+    run_result 0 "PREVIOUS_RECORD: changed" "RESULT: RECORD"
+  # 見出しの無い追記（空行を挟んで観測記録の後に続く本文）も拾う。
+  set_notes "$HANDOFF
+
+$(body_with_age 1900)
+
+実装スライス 2 を終えた。"
+  observe
+  assert "2h[$STUB_VERSION]: 観測記録の後に見出しの無い本文が追記されても RECORD（AC#1）" \
+    run_result 0 "PREVIOUS_RECORD: changed" "RESULT: RECORD"
+  # 古い観測記録の直後に空行を挟まず本文が続いた場合も、その本文は notes の変化に数える。
+  OLD_OBS='### 手順 2 観測記録
+- commit: 0000000000000000000000000000000000000000 (2026-01-01T00:00:00+09:00)
+- status: (clean)
+- 観測時刻: 2026-01-01T00:00:00Z (epoch 1)'
+  set_notes "$HANDOFF
+
+$OLD_OBS
+実装スライス 3 を終えた。
+
+$(body_with_age 1900 "$HANDOFF
+
+$OLD_OBS")"
+  observe
+  assert "2h[$STUB_VERSION]: 観測記録の直後に空行無しで続く本文も notes の変化に数えて RECORD（AC#1）" \
+    run_result 0 "PREVIOUS_RECORD: changed" "RESULT: RECORD"
+  # 追記を含めて改めて記録した直後は、同じ notes に対して変化なしに戻る。
+  append_record
+  observe
+  assert "2h[$STUB_VERSION]: 追記を観測した記録の直後は CARRY_OVER に戻る" \
+    run_result 1 "PREVIOUS_RECORD: unchanged" "RESULT: CARRY_OVER"
+
+  # 前回の観測の後に占有記録の ASSIGNED_AT_EPOCH が進んだ -> RUN_RECOVERY ではなく RECORD（AC#2）。
+  set_notes "$HANDOFF
+
+$(body_with_age 1900)"
+  printf 'TASK_ID=TASK-1\nASSIGNED_AT=2026-01-01T00:01:00Z\nASSIGNED_AT_EPOCH=1060\n' > "$OBS_OCCUPANCY_FILE"
+  observe
+  assert "2h[$STUB_VERSION]: commit・status・notes が同じでも観測後に ASSIGNED_AT_EPOCH が進めば RECORD（AC#2）" \
+    run_result 0 "PREVIOUS_RECORD: changed" "RESULT: RECORD"
+  assert "2h[$STUB_VERSION]: 本文の占有記録の行が新しい ASSIGNED_AT_EPOCH を示す" \
+    has_line "$(record_body)" "- 占有記録: ASSIGNED_AT_EPOCH 1060"
+  rm -f "$OBS_OCCUPANCY_FILE"
 done
 
 echo ""
@@ -292,6 +385,8 @@ for STUB_VERSION in 1.48.0 1.53.0; do
   assert "3a[$STUB_VERSION]: ブランチの直近コミットを観測値にし、status は (ワークツリー無し)" \
     [ "$(record_body | sed -n '2,3p')" = "$OBS_BRANCH_COMMIT_LINE
 - status: (ワークツリー無し)" ]
+  assert "3a[$STUB_VERSION]: ワークツリーが無ければ占有記録の行は (ワークツリー無し)" \
+    [ "$(record_body | sed -n '5p')" = "- 占有記録: (ワークツリー無し)" ]
   append_record
   observe
   assert "3a[$STUB_VERSION]: ブランチだけ残る場合も同じ比較ロジックで、追記直後の再実行は CARRY_OVER" \

@@ -12,13 +12,28 @@
 # ワークツリーの有無は check-progress-recovery と同じく git worktree list --porcelain への
 # 登録で判定し、加えてディレクトリが実在することを求める（観測に git -C が要るため）。
 #
-# 観測するもの:
+# 観測するもの（どれか 1 つでも前回の記録から変われば「変化あり」になる）:
 # - ワークツリーがある: そのワークツリーの `git log -1 --format='%H %cI'` と
 #   `git status --porcelain`（core.quotePath=true に固定する。利用者の設定で表記が変わらない
 #   ようにするため。--no-optional-locks で index.lock を取らず、作業中のサブエージェントの
 #   git add・commit とぶつからないようにする）。
 # - ワークツリーが無くブランチだけある: メインの作業木から見たブランチの直近コミット。
 #   作業ツリーは観測できないので status は `(ワークツリー無し)` とする。
+# - notes: Implementation Notes 節から `### 手順 2 観測記録` の記録（見出しの行と、それに続く
+#   このスクリプトの書式の行。空行か書式外の行か次の `### ` 行で終わる）と空行をすべて除いた
+#   ものの cksum。サブエージェントが
+#   コミットせずに notes へ追記する（improvement-work 手順 6 のレビュー巡の記録など）と変わる。
+#   観測記録を除くのは、dispatch 自身が追記する記録で指紋が変わると、毎回「変化あり」になって
+#   止まったサブエージェントを永久に復旧へ進められなくなるためである。backlog task edit
+#   --append-notes は追記の間に空行を挟むので、このスクリプトが出した記録は空行で終わる。
+#   空行が無いまま後続の本文が続いても、書式外の行から先は指紋に含める（取りこぼすと稼働中の
+#   追記を見落とすため。除き方は bin/lib/notes_records.sh の notes_without_records）。ただし
+#   続いた行が偶然この書式の行（`- status:` や字下げした `- ` 等）で始まると、その行は除かれる。
+#   手書きの記録の補足行（`- 補足:` 等）は指紋に含まれるが、変わらない限り比較には影響しない。
+#   空行も除くのは、記録を除いた跡に残る空行の数で指紋が揺れないようにするためである。
+# - 占有記録: ワークツリー直下の .worktree-occupancy の ASSIGNED_AT_EPOCH（bin/lib/occupancy.sh の
+#   occupancy_read_epoch で読む）。touch-occupancy のハートビートや再引き渡しで進む。
+#   読めなければ `(無し)`、ワークツリーが無ければ `(ワークツリー無し)` とする。
 # - どちらも無い: 観測を待たず、引き渡し先は存在しないと確定する（RUN_RECOVERY）。
 #   ワークツリーとブランチの両方が消えているのは、作業途中で環境ごと失われたことの強い
 #   証拠だからである。notes は読まない。
@@ -30,6 +45,9 @@
 #   - status:                              … ある場合は porcelain の各行を 1 行ずつ並べる
 #     - <git status --porcelain の 1 行>
 #   - status: (ワークツリー無し)            … ブランチだけ残っている場合
+#   - notes: cksum <CRC> <バイト数>
+#   - 占有記録: ASSIGNED_AT_EPOCH <UNIX 秒>  … 読めない場合は (無し)、ワークツリーが無い場合は
+#                                            (ワークツリー無し)
 #   - 観測時刻: <UTC の ISO8601> (epoch <UNIX 秒>)
 # 区切り文字で 1 行に連結しないのは、区切り文字がファイル名と衝突しうるためである。
 # 経過時間は epoch から計算する。ISO8601 文字列の解析は GNU date と BSD date で割れるので
@@ -41,7 +59,8 @@
 #   観測なので比べない。
 # - 前回の記録から最後の 1 行（観測時刻）を除いた部分が、今回の記録の同じ部分とバイト列で
 #   一致し、かつ前回の最後の行が上の観測時刻の書式どおりであるときだけ「変化なし」とする。
-#   それ以外（書式の揺れた手書きの記録、補足行付き、epoch の無い記録を含む）はすべて
+#   それ以外（書式の揺れた手書きの記録、補足行付き、epoch の無い記録、notes・占有記録の行が
+#   無いこの 2 行の導入前の記録を含む）はすべて
 #   「変化あり」として新しい記録を残させる。判定を止めずに安全側（まだ作業中）へ倒すためである。
 #
 # 標準出力（診断メッセージは標準エラー）:
@@ -71,6 +90,18 @@
 set -uo pipefail
 
 OBSERVATION_HEADING="手順 2 観測記録"
+# 記録の各行の書き出し。記録の組み立てと、notes の指紋から観測記録の行を除く ERE
+# （RECORD_LINE_ERE）の両方がここから作る。行の種類を増やすときはここに足し、ERE にも並べる。
+# ERE に漏れると dispatch 自身の記録で指紋が変わり、止まったサブエージェントが RUN_RECOVERY に
+# 届かなくなる（tests/test_observe_progress.sh 2h の CARRY_OVER の検査が落ちる）。
+# どの値も ERE の特殊文字を含まないので、そのまま ERE に埋め込める。
+REC_COMMIT="- commit: "
+REC_STATUS="- status:"
+REC_STATUS_ITEM="  - "
+REC_NOTES="- notes: "
+REC_OCCUPANCY="- 占有記録: "
+REC_TIME="- 観測時刻: "
+RECORD_LINE_ERE="^(${REC_COMMIT}|${REC_STATUS}|${REC_STATUS_ITEM}|${REC_NOTES}|${REC_OCCUPANCY}|${REC_TIME})"
 
 err() {
   printf 'エラー: %s\n' "$*" >&2
@@ -127,6 +158,8 @@ DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 source "$DIST_REPO_ROOT/bin/lib/notes_records.sh"
 # shellcheck source=../../../../bin/lib/stale_threshold.sh
 source "$DIST_REPO_ROOT/bin/lib/stale_threshold.sh"
+# shellcheck source=../../../../bin/lib/occupancy.sh
+source "$DIST_REPO_ROOT/bin/lib/occupancy.sh"
 
 # ---- 1. ワークツリー・ブランチの有無 ----
 if ! worktree_list_output="$(git -C "$REPO_ROOT" worktree list --porcelain 2>&1)"; then
@@ -161,6 +194,27 @@ if [ "$WORKTREE_EXISTS" = "false" ] && [ "$BRANCH_EXISTS" = "false" ]; then
 fi
 
 # ---- 2. 観測する ----
+# task view の出力は変数に取らず、一時ファイルに 1 回だけ書いて notes の指紋と前回の記録の両方を
+# そこから読む。$(...) は末尾の空行を削るので、1.53.0 の出力（notes 節の後に「Modified files: ...」
+# 行と空行が来て終わる）を一度変数に入れると、notes_section が Modified files 行を notes の終わりと
+# 認識できなくなる。2 回呼ばないのは、その間に notes が追記されると指紋と前回の記録が別の時点の
+# notes を指すためである。backlog の標準エラーはそのまま呼び出し元へ出る。
+if ! task_view_file="$(mktemp)"; then
+  fail_error "一時ファイルを作れない"
+fi
+trap 'rm -f "$task_view_file"' EXIT
+if ! backlog task view "$TASK_ID" --plain >"$task_view_file"; then
+  fail_error "backlog task view $TASK_ID --plain から notes の観測記録を読み取れなかった"
+fi
+
+if ! notes_fingerprint="$(notes_without_records "$OBSERVATION_HEADING" "$RECORD_LINE_ERE" \
+    <"$task_view_file" | cksum)"; then
+  fail_error "notes の指紋を計算できなかった"
+fi
+# cksum の出力は「CRC バイト数」（実装によっては後ろにファイル名が付くが、標準入力なので付かない）。
+read -r notes_crc notes_bytes _ <<<"$notes_fingerprint"
+notes_line="${REC_NOTES}cksum $notes_crc $notes_bytes"
+
 if [ "$WORKTREE_EXISTS" = "true" ]; then
   if ! commit_info="$(git -C "$WORKTREE_PATH" log -1 --format='%H %cI' 2>&1)"; then
     fail_error "ワークツリーの直近コミットを取得できない: $commit_info"
@@ -169,19 +223,29 @@ if [ "$WORKTREE_EXISTS" = "true" ]; then
     fail_error "ワークツリーの git status に失敗した: $porcelain"
   fi
   if [ -z "$porcelain" ]; then
-    status_lines="- status: (clean)"
+    status_lines="${REC_STATUS} (clean)"
   else
-    status_lines="- status:"
+    status_lines="$REC_STATUS"
     while IFS= read -r porcelain_line; do
       status_lines="$status_lines
-  - $porcelain_line"
+${REC_STATUS_ITEM}$porcelain_line"
     done <<<"$porcelain"
   fi
 else
   if ! commit_info="$(git -C "$REPO_ROOT" log -1 --format='%H %cI' "refs/heads/$BRANCH" 2>&1)"; then
     fail_error "ブランチの直近コミットを取得できない: $commit_info"
   fi
-  status_lines="- status: (ワークツリー無し)"
+  status_lines="${REC_STATUS} (ワークツリー無し)"
+fi
+
+if [ "$WORKTREE_EXISTS" = "true" ]; then
+  if occupancy_epoch="$(occupancy_read_epoch "$WORKTREE_PATH/.worktree-occupancy")"; then
+    occupancy_line="${REC_OCCUPANCY}ASSIGNED_AT_EPOCH $occupancy_epoch"
+  else
+    occupancy_line="${REC_OCCUPANCY}(無し)"
+  fi
+else
+  occupancy_line="${REC_OCCUPANCY}(ワークツリー無し)"
 fi
 
 commit_hash="${commit_info%% *}"
@@ -193,10 +257,12 @@ now_iso="${now_pair%% *}"
 now_epoch="${now_pair#* }"
 
 record_head="### $OBSERVATION_HEADING
-- commit: $commit_hash ($commit_time)
-$status_lines"
+${REC_COMMIT}$commit_hash ($commit_time)
+$status_lines
+$notes_line
+$occupancy_line"
 record_body="$record_head
-- 観測時刻: $now_iso (epoch $now_epoch)"
+${REC_TIME}$now_iso (epoch $now_epoch)"
 
 emit_record() {
   emit_summary "$1" "$2"
@@ -208,13 +274,9 @@ emit_record() {
 }
 
 # ---- 3. 前回の記録と比べる ----
-# task view の出力は変数に取らず、そのまま notes_records に流す。$(...) は末尾の空行を削るので、
-# 1.53.0 の出力（notes 節の後に「Modified files: ...」行と空行が来て終わる）を一度変数に
-# 入れると、notes_section が Modified files 行を notes の終わりと認識できなくなる。
-# backlog の失敗は pipefail で拾う（backlog の標準エラーはそのまま呼び出し元へ出る）。
-if ! previous_record="$(backlog task view "$TASK_ID" --plain \
-    | notes_records --after-last-handoff --heading "$OBSERVATION_HEADING" --last)"; then
-  fail_error "backlog task view $TASK_ID --plain から notes の観測記録を読み取れなかった"
+if ! previous_record="$(notes_records --after-last-handoff --heading "$OBSERVATION_HEADING" --last \
+    <"$task_view_file")"; then
+  fail_error "notes の観測記録を読み取れなかった"
 fi
 
 if [ -z "$previous_record" ]; then
@@ -225,7 +287,7 @@ fi
 previous_head="$(printf '%s\n' "$previous_record" | sed '$d')"
 previous_last="$(printf '%s\n' "$previous_record" | tail -n 1)"
 previous_epoch="$(printf '%s\n' "$previous_last" \
-  | LC_ALL=C sed -n 's/^- 観測時刻: [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z (epoch \([0-9][0-9]*\))$/\1/p')"
+  | LC_ALL=C sed -n 's/^'"$REC_TIME"'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z (epoch \([0-9][0-9]*\))$/\1/p')"
 
 if [ "$previous_head" != "$record_head" ] || [ -z "$previous_epoch" ]; then
   emit_record "changed" "N/A"

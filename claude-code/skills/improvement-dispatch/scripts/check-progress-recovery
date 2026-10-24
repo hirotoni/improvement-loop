@@ -62,7 +62,7 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>&1)"; then
   exit 3
 fi
 
-# bin/lib/stale_threshold.sh を source するために、自分自身の実パスから配布元リポジトリの
+# bin/lib/stale_threshold.sh・bin/lib/occupancy.sh を source するために、自分自身の実パスから配布元リポジトリの
 # ルートを解決する（`.claude/skills/improvement-dispatch` シンボリックリンク経由で実行され
 # うるため、BASH_SOURCE をそのまま使えない）。DIST_REPO_ROOT（配布元）は REPO_ROOT
 # （判定対象）とは別物である。touch-occupancy・create-worktree と同じ理由・同じ実装。
@@ -85,6 +85,8 @@ DIST_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 # shellcheck source=../../../../bin/lib/stale_threshold.sh
 source "$DIST_REPO_ROOT/bin/lib/stale_threshold.sh"
+# shellcheck source=../../../../bin/lib/occupancy.sh
+source "$DIST_REPO_ROOT/bin/lib/occupancy.sh"
 
 # ---- 0. 前提条件: base_branch がこのリポジトリで解決できるか ----
 if ! git -C "$REPO_ROOT" rev-parse --quiet --verify "${BASE_BRANCH}^{commit}" >/dev/null; then
@@ -136,28 +138,22 @@ OCCUPANCY_AGE_SECONDS="N/A"
 OCCUPANCY_FRESH="N/A"
 
 if [ "$WORKTREE_EXISTS" = "true" ]; then
-  occupancy_file="$WORKTREE_PATH/.worktree-occupancy"
-  if [ -f "$occupancy_file" ]; then
-    # ファイル全体を source せず ASSIGNED_AT_EPOCH の値だけを取り出す（外部が書いた
-    # ファイルを任意のシェルコードとして実行しないため）。ISO8601 文字列の方は
-    # GNU date と BSD date で解釈が割れるので使わない。
-    assigned_at_epoch="$(grep -m1 -E '^ASSIGNED_AT_EPOCH=' "$occupancy_file" 2>/dev/null | sed -E 's/^ASSIGNED_AT_EPOCH=//')"
-    if [ -n "$assigned_at_epoch" ] && [[ "$assigned_at_epoch" =~ ^[0-9]+$ ]]; then
-      OCCUPANCY_RECORD_EXISTS="true"
-      now_epoch="$(date -u +%s)"
-      OCCUPANCY_AGE_SECONDS=$((now_epoch - assigned_at_epoch))
-      if [ "$OCCUPANCY_AGE_SECONDS" -lt 0 ]; then
-        OCCUPANCY_AGE_SECONDS=0
-      fi
-      if [ "$OCCUPANCY_AGE_SECONDS" -lt "$IMPROVEMENT_STALE_THRESHOLD_SECONDS" ]; then
-        OCCUPANCY_FRESH="true"
-      else
-        OCCUPANCY_FRESH="false"
-      fi
+  # 値の取り出しは bin/lib/occupancy.sh の occupancy_read_epoch に委ねる（observe-progress と共有）。
+  if assigned_at_epoch="$(occupancy_read_epoch "$WORKTREE_PATH/.worktree-occupancy")"; then
+    OCCUPANCY_RECORD_EXISTS="true"
+    now_epoch="$(date -u +%s)"
+    OCCUPANCY_AGE_SECONDS=$((now_epoch - 10#$assigned_at_epoch))
+    if [ "$OCCUPANCY_AGE_SECONDS" -lt 0 ]; then
+      OCCUPANCY_AGE_SECONDS=0
     fi
-    # 読めない/数値でない場合は OCCUPANCY_RECORD_EXISTS=false のまま
-    # （＝占有記録なしとしてコミット履歴ベースの判定にフォールバックする）。
+    if [ "$OCCUPANCY_AGE_SECONDS" -lt "$IMPROVEMENT_STALE_THRESHOLD_SECONDS" ]; then
+      OCCUPANCY_FRESH="true"
+    else
+      OCCUPANCY_FRESH="false"
+    fi
   fi
+  # 読めない/数値でない場合は OCCUPANCY_RECORD_EXISTS=false のまま
+  # （＝占有記録なしとしてコミット履歴ベースの判定にフォールバックする）。
 fi
 
 printf 'WORKTREE_EXISTS: %s\n' "$WORKTREE_EXISTS"

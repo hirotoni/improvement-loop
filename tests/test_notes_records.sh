@@ -533,6 +533,43 @@ $RUN_OUT"
 done
 
 echo ""
+echo "=== 1b. notes_without_records: 書式の決まった記録だけを除く ==="
+SEP="--------------------------------------------------"
+WITHOUT_VIEW="Acceptance Criteria:
+$SEP
+No acceptance criteria defined
+
+Implementation Notes:
+$SEP
+### 引き渡し
+- BRANCH: x
+
+### 手順 2 観測記録
+- commit: a
+- status:
+  - ?? f
+- 観測時刻: t
+### 手順 2 観測記録  
+- commit: b
+空行無しで続いた追記
+- commit: これも残る
+
+### レビュー 1 巡目
+- 結果: No findings"
+RUN_OUT="$(printf '%s\n' "$WITHOUT_VIEW" | LC_ALL=en_US.UTF-8 bash -c 'source "$1"; notes_without_records "手順 2 観測記録" "^(- commit: |- status:|  - |- 観測時刻: )"' _ "$NOTES_RECORDS_SCRIPT" 2>&1)"
+RUN_EXIT=$?
+ASSERT_DETAIL="exit ${RUN_EXIT}:
+$RUN_OUT"
+assert "1b: 見出しが一致する記録の書式どおりの行と空行を除き、書式外の行から先は残す" \
+  [ "$RUN_OUT" = "### 引き渡し
+- BRANCH: x
+空行無しで続いた追記
+- commit: これも残る
+### レビュー 1 巡目
+- 結果: No findings" ]
+ASSERT_DETAIL=""
+
+echo ""
 echo "=== 2. 引数の誤り ==="
 # 不明な引数や値の無い --heading は、黙って全件を返さずに終了コード 2 で失敗する。
 notes_view 1.53.0 TASK-1 --heading

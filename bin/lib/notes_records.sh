@@ -1,10 +1,12 @@
-# notes_section() と notes_records() の唯一の定義。実行されず、必ず source される
+# notes_section()・notes_records()・notes_without_records() の唯一の定義。実行されず、必ず source される
 # 前提のためシバンは付けない。
 #
 # `backlog task view <ID> --plain` の出力から、Implementation Notes 節に `### ` 見出しで
 # 残した記録（`### 引き渡し`・`### 手順 2 観測記録`・`### レビュー <巡数> 巡目` 等）を
 # 取り出す。notes を読むスクリプトはこの 2 関数だけを使い、節の境界や見出しの区切りを
 # 各自で解析しない（別々に実装すると、片方だけを直したときにもう片方が無音で食い違った結果を返す）。
+# notes_without_records() も同じ理由でここに置き、見出しの解釈（_NOTES_RECORDS_AWK_TITLE_OF）を
+# notes_records() と共有する。
 #
 # 入力の前提（backlog CLI 1.48.0 と 1.53.0 の実出力で確認した。tests/test_notes_records.sh）:
 # - 本文の節は Description / Acceptance Criteria / Definition of Done / Implementation Plan /
@@ -96,6 +98,15 @@ notes_section() {
 #   例: 今回の引き渡し以降の最後の観測記録の本文だけを得る。
 #     backlog task view TASK-1 --plain \
 #       | notes_records --after-last-handoff --heading '手順 2 観測記録' --last | tail -n +2
+# 見出しの行（`### ` で始まる行）から見出しの文字列を取り出す awk の関数。notes_records() と
+# notes_without_records() が同じ規則（`### ` の後ろ、行末の空白を除く）で見出しを比べるために共有する。
+_NOTES_RECORDS_AWK_TITLE_OF='
+    function title_of(s) {
+      s = substr(s, 5)
+      sub(/[ \t]+$/, "", s)
+      return s
+    }'
+
 notes_records() {
   local after_handoff=0 has_heading=0 heading="" only_last=0
   while [ "$#" -gt 0 ]; do
@@ -120,12 +131,8 @@ notes_records() {
   done
   # 見出しは awk -v ではなく環境変数で渡す。-v はバックスラッシュをエスケープとして解釈するためである。
   notes_section | NOTES_RECORDS_HEADING="$heading" LC_ALL=C awk \
-    -v after_handoff="$after_handoff" -v has_heading="$has_heading" -v only_last="$only_last" '
-    function title_of(s) {
-      s = substr(s, 5)
-      sub(/[ \t]+$/, "", s)
-      return s
-    }
+    -v after_handoff="$after_handoff" -v has_heading="$has_heading" -v only_last="$only_last" \
+    "$_NOTES_RECORDS_AWK_TITLE_OF"'
     /^### / {
       n++
       head[n] = $0
@@ -162,5 +169,32 @@ notes_records() {
         for (x = 1; x <= m; x++) { print body[k, x] }
       }
     }
+  '
+}
+
+# notes_without_records <見出し> <本文の行の ERE>
+#   標準入力: task view --plain の出力。
+#   標準出力: notes 節から、見出しが一致する記録と空行をすべて除いた残りの行を元の順に出す。
+#   除く記録は「### <見出し>」の行と、それに続いて <本文の行の ERE> に一致する行である。
+#   空行、ERE に一致しない行、次の `### ` 行のどれかで記録は終わり、そこから先は残す。
+#   notes_records() と違い、記録を次の `### ` 行まで伸ばさない。書式の決まった記録（例:
+#   observe-progress の `### 手順 2 観測記録`）だけを除き、空行を挟まずその後に続いた別の
+#   追記を取りこぼさないためである。見出しの比べ方は notes_records() の --heading と同じ。
+#   終了コードは常に 0。
+#
+#   例: 観測記録を除いた notes の指紋を取る（observe-progress）。
+#     backlog task view TASK-1 --plain \
+#       | notes_without_records '手順 2 観測記録' '^(- commit: |- status:)' | cksum
+notes_without_records() {
+  # 見出しと ERE は awk -v ではなく環境変数で渡す。-v はバックスラッシュをエスケープとして解釈するためである。
+  notes_section | NOTES_RECORDS_HEADING="$1" NOTES_RECORDS_BODY_ERE="$2" LC_ALL=C awk \
+    "$_NOTES_RECORDS_AWK_TITLE_OF"'
+    /^### / {
+      skipping = (title_of($0) == ENVIRON["NOTES_RECORDS_HEADING"])
+      if (skipping) { next }
+    }
+    $0 == "" { skipping = 0; next }
+    skipping && $0 ~ ENVIRON["NOTES_RECORDS_BODY_ERE"] { next }
+    { skipping = 0; print }
   '
 }
