@@ -21,11 +21,12 @@
 #      backlog CLI の --sort（未文書化の tie-break に依存する）には頼らない。
 #      同じ呼び出しで選ぶタスク同士に依存があっても、依存先はまだ To Do で Done では
 #      ないので、上の 3 で依存元は除外される（依存先が Done になった後の呼び出しで選ばれる）。
-#   5. 4 の順に見ていく途中で、In Progress のタスク、またはこの呼び出しで先に選んだ候補と
-#      modified_files（task view の "Modified files:" 行）が1件でも重なる候補は選ばず後回しにし、
-#      枠を消費せずに次の候補を見る。相手が In Progress を抜けた後の呼び出しで通常どおり選ばれる。
+#   5. 4 の順に見ていく途中で、In Progress・In Review・Approved のタスク（まだ main に入っていない
+#      タスク）、またはこの呼び出しで先に選んだ候補と modified_files（task view の "Modified files:" 行）が
+#      1件でも重なる候補は選ばず後回しにし、枠を消費せずに次の候補を見る。相手が Done になった後の
+#      呼び出しで、相手の変更を含む main から分岐する形で通常どおり選ばれる。
 #      パスは完全一致で比べる。modified_files が空のタスクは誰とも重ならないものとして扱う。
-#      In Review 以降のタスクは相手にしない。枠が埋まった後の候補は重なりを調べない。
+#      枠が埋まった後の候補は重なりを調べない。
 #
 # 出力: 標準出力の1行目に必ず RESULT: <値> を出す。
 #   RESULT: SELECTED      2行目以降に TASK_ID: <ID> を1件1行で、選んだ順（優先度→数値ID昇順）に出す。
@@ -390,26 +391,29 @@ done < <(
   done | sort -t "$(printf '\t')" -k1,1n -k2,2n -k3,3n | cut -f3
 )
 
-# 変更先の重なりの相手。In Progress のタスクと、この呼び出しで先に選んだ候補である。
+# 変更先の重なりの相手。In Progress・In Review・Approved のタスクと、この呼び出しで先に選んだ候補である。
 # OCCUPIED_IDS[j] の modified_files を OCCUPIED_FILES[j] に改行区切りで持つ。
 # 同じファイルを変える作業ブランチを同時に進めると、後からマージする方が衝突しやすいため、
-# 重なる候補は相手が In Progress を抜けるまで後回しにする。In Review の相手は待たない。
+# 重なる候補は相手が Done になる（main に入る）まで後回しにする。In Review・Approved の間に着手すると、
+# 作業ブランチが相手の変更を含まない main から分岐し、マージ時の衝突を避けられないためである。
 # modified_files が空のタスクは変更先が分からないので、誰とも重ならないものとして扱う。
-# どの候補にも modified_files が無ければ重なりは起こらないので、In Progress の view は省く。
+# どの候補にも modified_files が無ければ重なりは起こらないので、相手の view は省く。
 OCCUPIED_IDS=()
 OCCUPIED_FILES=()
 if [ "$any_candidate_files" -eq 1 ]; then
+  approved_output="$(extract_status_section "$all_output" "Approved")"
+  unmerged_output="$(printf '%s\n%s\n%s\n' "$in_progress_output" "$in_review_output" "$approved_output")"
   while IFS= read -r line; do
-    ip_id="$(extract_task_id "$line")"
-    if [ -z "$ip_id" ]; then
+    peer_id="$(extract_task_id "$line")"
+    if [ -z "$peer_id" ]; then
       continue
     fi
-    if ! ip_view="$(backlog task view "$ip_id" --plain </dev/null)"; then
-      result_error "backlog task view \"$ip_id\" --plain が失敗した"
+    if ! peer_view="$(backlog task view "$peer_id" --plain </dev/null)"; then
+      result_error "backlog task view \"$peer_id\" --plain が失敗した"
     fi
-    OCCUPIED_IDS+=("$ip_id")
-    OCCUPIED_FILES+=("$(list_modified_files "$ip_view")")
-  done <<< "$in_progress_output"
+    OCCUPIED_IDS+=("$peer_id")
+    OCCUPIED_FILES+=("$(list_modified_files "$peer_view")")
+  done <<< "$unmerged_output"
 fi
 
 # $1・$2 = 改行区切りのファイル一覧。両方に現れるファイルを ", " 区切りで標準出力へ書く（無ければ空）。

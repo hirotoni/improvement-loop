@@ -909,8 +909,9 @@ assert_selected_ids "select-next-task: AC#5: A が Done になった後の呼び
 echo ""
 echo "=== 6. modified_files が重なるタスクを同時に In Progress にしない（TASK-144） ==="
 # 同じファイルを変える作業ブランチを同時に進めると、後からマージする方が衝突しやすい。
-# select-next-task は In Progress のタスク・同じ呼び出しで先に選んだ候補と modified_files が重なる
-# 候補を後回しにし、DEFERRED 行で相手と重なったファイルを出す。
+# select-next-task は In Progress・In Review・Approved のタスク（まだ main に入っていないタスク）・
+# 同じ呼び出しで先に選んだ候補と modified_files が重なる候補を後回しにし、DEFERRED 行で相手と
+# 重なったファイルを出す。相手が Done になった後の呼び出しでは通常どおり選ぶ。
 # Modified files 行の位置は CLI のバージョンで違う（1.48.0 はメタデータ部、1.53.0 は本文の節の後）。
 # 両形式をスタブで毎回確かめる（形式は tests/test_notes_records.sh の実出力のフィクスチャと同じ）。
 
@@ -956,7 +957,7 @@ $ASSERT_DETAIL"
   fi
 }
 
-# --- 6a. AC#1・AC#4: To Do 同士で重なる候補は優先度の高い 1 件だけを選び、残りを後回しにして報告する ---
+# --- 6a. AC#1・AC#5: To Do 同士で重なる候補は優先度の高い 1 件だけを選び、残りを後回しにして報告する ---
 # 空き枠 5、In Progress 無し。TASK-1（High、a.md・b.md）を選ぶ。TASK-2（High、b.md）と TASK-5（Low、a.md）は
 # TASK-1 と重なるので後回し。TASK-3（Medium、c.md）と modified_files の無い TASK-4 は選ぶ。
 # 1.48.0 形式と 1.53.0 形式を混ぜ、どちらの形式の読み取りが壊れても FAIL するようにする。
@@ -979,12 +980,12 @@ write_stub_view_modified "$FIXTURE_OVERLAP_TODO_SELECT" TASK-4 153
 write_stub_view_modified "$FIXTURE_OVERLAP_TODO_SELECT" TASK-5 148 'dir/x y.md' a.md
 run_select_stub "$FIXTURE_OVERLAP_TODO_SELECT" 5 3
 assert_selected_ids "select-next-task: AC#1: To Do 同士で modified_files が重なる候補（TASK-1 と TASK-2・TASK-5）からは TASK-1 だけを選び、重ならない TASK-3・TASK-4 も選ぶ" 0 TASK-1 TASK-3 TASK-4
-assert_deferred_lines "select-next-task: AC#4: 後回しにした TASK-2・TASK-5 について、相手（TASK-1）と重なったファイルを DEFERRED 行で出す" \
+assert_deferred_lines "select-next-task: AC#5: 後回しにした TASK-2・TASK-5 について、相手（TASK-1）と重なったファイルを DEFERRED 行で出す" \
   'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-1 FILES: b.md' \
   'DEFERRED: TASK-5 CONFLICTS_WITH: TASK-1 FILES: a.md'
 assert "select-next-task: DEFERRED 行があっても 1 行目は RESULT: SELECTED" first_line_is 'RESULT: SELECTED'
 
-# --- 6b. AC#2・AC#4: In Progress のタスクと重なる候補は空き枠があっても選ばない ---
+# --- 6b. AC#2・AC#5: In Progress のタスクと重なる候補は空き枠があっても選ばない ---
 # In Progress の TASK-20 は a.md を変える。空き枠 4。TASK-1（High、b.md）を選ぶ。TASK-2（Medium、a.md・b.md）は
 # TASK-20 とも、先に選んだ TASK-1 とも重なるので、相手ごとに DEFERRED 行を出す。TASK-3（Low、c.md）は選ぶ。
 FIXTURE_OVERLAP_IP_SELECT="$STUB_ROOT_SELECT/overlap-in-progress"
@@ -1006,9 +1007,43 @@ write_stub_view_modified "$FIXTURE_OVERLAP_IP_SELECT" TASK-3 153 c.md
 write_stub_view_modified "$FIXTURE_OVERLAP_IP_SELECT" TASK-20 153 a.md
 run_select_stub "$FIXTURE_OVERLAP_IP_SELECT" 5 3
 assert_selected_ids "select-next-task: AC#2: In Progress の TASK-20 と重なる TASK-2 は空き枠 4 があっても選ばず、TASK-1・TASK-3 を選ぶ" 0 TASK-1 TASK-3
-assert_deferred_lines "select-next-task: AC#4: TASK-2 は In Progress の TASK-20（a.md）と、先に選んだ TASK-1（b.md）の相手ごとに DEFERRED 行を出す" \
+assert_deferred_lines "select-next-task: AC#5: TASK-2 は In Progress の TASK-20（a.md）と、先に選んだ TASK-1（b.md）の相手ごとに DEFERRED 行を出す" \
   'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-20 FILES: a.md' \
   'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-1 FILES: b.md'
+
+# In Review・Approved のタスクも、まだ main に入っていないので相手にする。Done のタスクは相手にしない。
+# 空き枠 4。TASK-1（High、r.md）は In Review の TASK-30 と、TASK-2（Medium、p.md）は Approved の TASK-40 と重なる。
+# TASK-3（Low、d.md）は Done の TASK-50 と同じファイルを変えるが、TASK-50 は相手にしないので選ぶ。
+# TASK-50 の view はスタブに置かない（Done のタスクを view すると失敗して ERROR になり FAIL する）。
+FIXTURE_OVERLAP_UNMERGED_SELECT="$STUB_ROOT_SELECT/overlap-unmerged"
+mkdir -p "$FIXTURE_OVERLAP_UNMERGED_SELECT"
+cat > "$FIXTURE_OVERLAP_UNMERGED_SELECT/list.txt" <<'LIST'
+To Do:
+  [HIGH] TASK-1 - High r
+  [MEDIUM] TASK-2 - Medium p
+  [LOW] TASK-3 - Low d
+
+In Review:
+  TASK-30 - Reviewing r
+
+Approved:
+  TASK-40 - Approved p
+
+Done:
+  TASK-50 - Done d
+
+LIST
+: > "$FIXTURE_OVERLAP_UNMERGED_SELECT/blocked.txt"
+write_stub_view_modified "$FIXTURE_OVERLAP_UNMERGED_SELECT" TASK-1 153 r.md
+write_stub_view_modified "$FIXTURE_OVERLAP_UNMERGED_SELECT" TASK-2 148 p.md
+write_stub_view_modified "$FIXTURE_OVERLAP_UNMERGED_SELECT" TASK-3 153 d.md
+write_stub_view_modified "$FIXTURE_OVERLAP_UNMERGED_SELECT" TASK-30 148 r.md
+write_stub_view_modified "$FIXTURE_OVERLAP_UNMERGED_SELECT" TASK-40 153 p.md
+run_select_stub "$FIXTURE_OVERLAP_UNMERGED_SELECT" 5 3
+assert_selected_ids "select-next-task: AC#2: In Review の TASK-30・Approved の TASK-40 と重なる TASK-1・TASK-2 は空き枠 4 があっても選ばず、Done の TASK-50 とだけ重なる TASK-3 は選ぶ" 0 TASK-3
+assert_deferred_lines "select-next-task: AC#5: In Review・Approved の相手と重なったファイルを DEFERRED 行で出す" \
+  'DEFERRED: TASK-1 CONFLICTS_WITH: TASK-30 FILES: r.md' \
+  'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-40 FILES: p.md'
 
 # 候補がすべて In Progress と重なるなら NO_CANDIDATE で、DEFERRED 行に理由を出す。
 FIXTURE_OVERLAP_ALL_SELECT="$STUB_ROOT_SELECT/overlap-all"
@@ -1028,10 +1063,10 @@ run_select_stub "$FIXTURE_OVERLAP_ALL_SELECT" 3 3
 assert "select-next-task: AC#2: 候補がすべて In Progress と重なれば RESULT: NO_CANDIDATE（exit 2）" run_result 2 'RESULT: NO_CANDIDATE'
 assert "select-next-task: NO_CANDIDATE でも 1 行目は RESULT 行" first_line_is 'RESULT: NO_CANDIDATE'
 assert_selected_ids "select-next-task: 候補がすべて後回しなら TASK_ID 行を出さない" 2
-assert_deferred_lines "select-next-task: AC#4: NO_CANDIDATE のときも後回しの理由（TASK-1 と TASK-20 の a.md）を DEFERRED 行で出す" \
+assert_deferred_lines "select-next-task: AC#5: NO_CANDIDATE のときも後回しの理由（TASK-1 と TASK-20 の a.md）を DEFERRED 行で出す" \
   'DEFERRED: TASK-1 CONFLICTS_WITH: TASK-20 FILES: a.md'
 
-# --- 6c. AC#3: 重ならなければ従来どおり空き枠の数だけ選び、max_in_progress 1 の挙動は変わらない ---
+# --- 6c. AC#4: 重ならなければ従来どおり空き枠の数だけ選び、max_in_progress 1 の挙動は変わらない ---
 FIXTURE_NO_OVERLAP_SELECT="$STUB_ROOT_SELECT/no-overlap"
 mkdir -p "$FIXTURE_NO_OVERLAP_SELECT"
 cat > "$FIXTURE_NO_OVERLAP_SELECT/list.txt" <<'LIST'
@@ -1052,13 +1087,13 @@ write_stub_view_modified "$FIXTURE_NO_OVERLAP_SELECT" TASK-5 153 d.md
 # 空き枠 3。TASK-2 は TASK-1 と重なるので飛ばし、重ならない TASK-3・TASK-4 で枠を埋める。
 # 枠が埋まった後の TASK-5 は選ばれない（DEFERRED は TASK-2 だけ）。
 run_select_stub "$FIXTURE_NO_OVERLAP_SELECT" 3 3
-assert_selected_ids "select-next-task: AC#3: 重なる TASK-2 を飛ばしても、重ならない候補で空き枠 3 をちょうど埋める" 0 TASK-1 TASK-3 TASK-4
-assert_deferred_lines "select-next-task: AC#3: 枠が埋まった後の候補は DEFERRED に載せない" \
+assert_selected_ids "select-next-task: AC#4: 重なる TASK-2 を飛ばしても、重ならない候補で空き枠 3 をちょうど埋める" 0 TASK-1 TASK-3 TASK-4
+assert_deferred_lines "select-next-task: AC#4: 枠が埋まった後の候補は DEFERRED に載せない" \
   'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-1 FILES: a.md'
 # max_in_progress 1（In Progress 0 件）では、重なる候補があっても従来どおり最良の 1 件だけを選び、DEFERRED 行は出ない。
 run_select_stub "$FIXTURE_NO_OVERLAP_SELECT" 1 3
-assert_selected_ids "select-next-task: AC#3: max_in_progress 1 では従来どおり最良の TASK-1 だけを選ぶ" 0 TASK-1
-assert_deferred_lines "select-next-task: AC#3: max_in_progress 1 では DEFERRED 行を出さない"
+assert_selected_ids "select-next-task: AC#4: max_in_progress 1 では従来どおり最良の TASK-1 だけを選ぶ" 0 TASK-1
+assert_deferred_lines "select-next-task: AC#4: max_in_progress 1 では DEFERRED 行を出さない"
 
 # --- 6d. 自由記述の中の Modified files 行を modified_files として読まない ---
 # TASK-2 の実際の modified_files は z.md だけで、説明文（Comments 節の見出しと同じ見た目の組を続けて）と notes に「Modified files: a.md」を書いている。
@@ -1144,7 +1179,7 @@ run_select_stub "$FIXTURE_FAKE_LINE_SELECT" 3 3
 assert_selected_ids "select-next-task: 説明文・notes・Final Summary 中の Modified files 行を読まず、実際の modified_files（z.md）で判定して TASK-1・TASK-2・TASK-3 を選ぶ" 0 TASK-1 TASK-2 TASK-3
 assert_deferred_lines "select-next-task: 説明文・notes・Final Summary 中の Modified files 行で DEFERRED を出さない"
 
-# --- 6e. 実 CLI の出力でも modified_files を読み、In Progress と重なる候補を後回しにする ---
+# --- 6e. 実 CLI の出力でも modified_files を読み、In Progress・In Review・Approved の相手と重なる候補を後回しにし、相手が Done になれば選ぶ ---
 # 実行環境の CLI のバージョンの実出力で 6a〜6d と同じ読み取りが成り立つことを確かめる。
 make_select_repo TMP_REPO_OVERLAP_SELECT task
 bl "$TMP_REPO_OVERLAP_SELECT" task create "Running" -s "In Progress" --modified-file 'skills/x/SKILL.md' --modified-file 'refs/a b.md'
@@ -1155,8 +1190,16 @@ run_in "$TMP_REPO_OVERLAP_SELECT" "$SELECT_SCRIPT" 3 3
 assert_selected_ids "select-next-task: 実 CLI: In Progress の TASK-1 と重なる TASK-2 を選ばず TASK-3 を選ぶ" 0 TASK-3
 assert_deferred_lines "select-next-task: 実 CLI: TASK-2 と TASK-1 が refs/a b.md で重なることを DEFERRED 行で出す" \
   'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-1 FILES: refs/a b.md'
-bl "$TMP_REPO_OVERLAP_SELECT" task edit TASK-1 -s "In Review"
+for unmerged_status in "In Review" "Approved"; do
+  bl "$TMP_REPO_OVERLAP_SELECT" task edit TASK-1 -s "$unmerged_status"
+  run_in "$TMP_REPO_OVERLAP_SELECT" "$SELECT_SCRIPT" 3 3
+  assert_selected_ids "select-next-task: 実 CLI: AC#2: 相手（TASK-1）が $unmerged_status の間も TASK-2 を選ばない" 0 TASK-3
+  assert_deferred_lines "select-next-task: 実 CLI: AC#5: 相手が $unmerged_status の間も DEFERRED 行を出す" \
+    'DEFERRED: TASK-2 CONFLICTS_WITH: TASK-1 FILES: refs/a b.md'
+done
+bl "$TMP_REPO_OVERLAP_SELECT" task edit TASK-1 -s "Done"
 run_in "$TMP_REPO_OVERLAP_SELECT" "$SELECT_SCRIPT" 3 3
-assert_selected_ids "select-next-task: 実 CLI: 相手（TASK-1）が In Progress を抜けた後の呼び出しで TASK-2 が通常どおり選ばれる" 0 TASK-2 TASK-3
+assert_selected_ids "select-next-task: 実 CLI: AC#3: 相手（TASK-1）が Done になった後の呼び出しで TASK-2 が通常どおり選ばれる" 0 TASK-2 TASK-3
+assert_deferred_lines "select-next-task: 実 CLI: AC#3: 相手が Done になった後は DEFERRED 行を出さない"
 
 finish_tests
