@@ -31,7 +31,7 @@ description: コードベースを探索して改善タスクを Backlog.md に 
 
 ## 1. 前提を確認する
 
-- backlog CLI のどのコマンドに `--plain` を付けるかの正本は [`claude-code/skills/backlog-plain.md`](../backlog-plain.md) にある。ここに複製せず、以下の backlog コマンドを実行する前にまず読む。
+- backlog CLI のどのコマンドに `--plain` を付けるかの正本は [`claude-code/skills/improvement-scout/backlog-plain.md`](backlog-plain.md) にある。ここに複製せず、以下の backlog コマンドを実行する前にまず読む。
 - `backlog instructions overview` と `backlog instructions task-creation` を読む。プロジェクトの規約が優先される。
 - `backlog config get statuses` を実行し、`Proposed` があるか確認する。設定にない status を渡すとタスク作成が失敗するため、この確認を先に行う。
 - 無ければ `.backlog/config.yml`（または `backlog/config.yml`）の `statuses` に `Proposed` を先頭で追加する。`statuses` は `backlog config set` では変更できず、backlog 自身が config ファイルの直接編集を案内する。
@@ -44,7 +44,7 @@ description: コードベースを探索して改善タスクを Backlog.md に 
 
 選定は、これまでの起票が少ない観点を優先する。使用履歴は `viewpoint:<slug>` ラベルで backlog 側に残っているので、別の状態ファイルは持たない。
 
-件数の数え方の正本は [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) の「観点ラベルの件数を集計する」にある。ここに複製せず、そのコマンドをそのまま実行して件数を得る。`backlog task list --labels` だけで数えると完了・アーカイブ済みが件数から落ち、既に十分消化した観点を選び続けることになる。
+件数の数え方の正本は [`claude-code/skills/improvement-scout/completed-tasks-lookup.md`](completed-tasks-lookup.md) の「観点ラベルの件数を集計する」にある。ここに複製せず、そのコマンドをそのまま実行して件数を得る。`backlog task list --labels` だけで数えると完了・アーカイブ済みが件数から落ち、既に十分消化した観点を選び続けることになる。
 
 - 件数が少ない観点から 3 つ取る。同数のときは今回の対象範囲に効きそうなものを選ぶ。
 - 全観点が同程度に消化されているときは、直近のコミットが触っている領域に関係する観点を選ぶ。
@@ -60,7 +60,7 @@ backlog search "<キーワード>" --plain
 backlog search --modified-file <対象パス> --plain
 ```
 
-- 上の backlog コマンドは `.backlog/tasks/` しか見ない。完了・アーカイブ済みのタスクとの照合手順の正本は [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) にある。ここに複製せず、上のコマンドと併せて必ず実行する。
+- 上の backlog コマンドは `.backlog/tasks/` しか見ない。完了・アーカイブ済みのタスクとの照合手順の正本は [`claude-code/skills/improvement-scout/completed-tasks-lookup.md`](completed-tasks-lookup.md) にある。ここに複製せず、上のコマンドと併せて必ず実行する。
 - 同じ内容のタスクがあれば起票しない。`Proposed` のまま残っている候補も対象に含めて数える。
 - 既存タスクに足すべき情報があるときは `backlog task edit TASK-<n> --comment '<追記>' --comment-author @<name>` にとどめる。説明や受入基準の書き換えはユーザーに確認してから行う。
 - `Proposed` が溜まりすぎている（目安 10 件超）なら、新規起票の前にその事実を報告する。積み増しより承認待ちの解消が先である。
@@ -136,7 +136,7 @@ backlog task create '<何をどうするかが分かる動詞句>' \
 - 複数行の description は引用符の中に実際の改行を入れる。`\n` は展開されない。
 - `-s Proposed` を明示する。`default_status` に依存しない。
 - `--labels 'audit,viewpoint:<slug>'` を必ず付ける。`audit` で監査由来のタスクを、`viewpoint:` で観点の消化状況を追える。
-- `--modified-file` に根拠のファイルを入れる。次回以降 `backlog search --modified-file <path> --plain` と、完了・アーカイブ済みを対象にした [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) の手順 2 で重複を検出できる。
+- `--modified-file` に根拠のファイルを入れる。次回以降 `backlog search --modified-file <path> --plain` と、完了・アーカイブ済みを対象にした [`claude-code/skills/improvement-scout/completed-tasks-lookup.md`](completed-tasks-lookup.md) の手順 2 で重複を検出できる。
 - 受入基準は振る舞いで書く。「関数を追加する」ではなく「〜のとき〜になる」。実装手順を受入基準にしない。
 - `--plan` は書かない。着手時に improvement-work が調べ直して記録する。
 - `## 確認したこと` には実際に見た根拠だけを書く。ここが書けない候補は起票の条件を満たしていない。

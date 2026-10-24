@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 完了・アーカイブ済みタスクの照合手順の正本（claude-code/skills/completed-tasks-lookup.md）と、
+# 完了・アーカイブ済みタスクの照合手順の正本（claude-code/skills/improvement-scout/completed-tasks-lookup.md）と、
 # それを参照する起票系スキルの SKILL.md に対するテスト。
 #
 # backlog CLI の task list / search / view は .backlog/tasks/ しか見ないため、正本の走査手順は
@@ -13,10 +13,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=../bin/lib/resolve_path.sh
+source "$RESOLVE_PATH_SCRIPT"
 
 check_test_dependencies
 
-CANONICAL_REL="claude-code/skills/completed-tasks-lookup.md"
+CANONICAL_REL="claude-code/skills/improvement-scout/completed-tasks-lookup.md"
 CANONICAL_FILE="$REPO_ROOT/$CANONICAL_REL"
 
 # 正本を参照する側のファイル（リポジトリルートからの相対パス）。
@@ -28,9 +30,10 @@ REFERRING_FILES=(
 )
 
 # 参照ファイル中の Markdown リンクのうち、正本のファイル名を指すものを参照ファイルの
-# ディレクトリ起点で解決し、すべて正本の実体に届くことを確認する。配布先では
-# .claude/skills/<スキル名> シンボリックリンクから実体を解決するので、実体のディレクトリ
-# 起点での解決がそのまま配布先での解決になる。リンクの文言や周りの説明は見ない。
+# ディレクトリ起点で解決し、シンボリックリンクを辿った実体がすべて正本に届くことを確認する
+# （workspace-scout-major は同じディレクトリに置いた正本へのシンボリックリンクを指す）。
+# 導入先の .claude/skills/<スキル名> 配置で字面のまま届くかは tests/test_shared_doc_reference.sh が見る。
+# リンクの文言や周りの説明は見ない。
 # 認識するのはインライン形式 [text](path) のリンクだけである（タイトル付き・参照形式は拾わず FAIL になる）。
 check_canonical_links() {
   local rel="$1"
@@ -40,7 +43,7 @@ check_canonical_links() {
   canonical_base="$(basename "$CANONICAL_FILE")"
   canonical_real=""
   if [ -f "$CANONICAL_FILE" ]; then
-    canonical_real="$(cd "$(dirname "$CANONICAL_FILE")" && pwd -P)/$canonical_base"
+    canonical_real="$(resolve_path "$CANONICAL_FILE")"
   fi
   while IFS= read -r target; do
     target="${target#](}"
@@ -50,8 +53,8 @@ check_canonical_links() {
     found=1
     link_dir="$(dirname "$file")/$(dirname "$target")"
     resolved=""
-    if [ -d "$link_dir" ]; then
-      resolved="$(cd "$link_dir" && pwd -P)/$(basename "$target")"
+    if [ -f "$link_dir/$(basename "$target")" ]; then
+      resolved="$(resolve_path "$link_dir/$(basename "$target")")"
     fi
     if [ -z "$canonical_real" ] || [ ! -f "$resolved" ] || [ "$resolved" != "$canonical_real" ]; then
       broken+=("$target")

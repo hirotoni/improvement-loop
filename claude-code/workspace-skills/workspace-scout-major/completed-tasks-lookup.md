@@ -1,0 +1,1 @@
+../../skills/improvement-scout/completed-tasks-lookup.md

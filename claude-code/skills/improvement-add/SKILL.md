@@ -29,7 +29,7 @@ description: 人間が伝えた改善要望を、探索や観点選定を挟ま�
 
 ## 1. 前提を確認する
 
-- backlog CLI のどのコマンドに `--plain` を付けるかの正本は [`claude-code/skills/backlog-plain.md`](../backlog-plain.md) にある。ここに複製せず、以下の backlog コマンドを実行する前にまず読む。
+- backlog CLI のどのコマンドに `--plain` を付けるかの正本は [`claude-code/skills/improvement-scout/backlog-plain.md`](../improvement-scout/backlog-plain.md) にある。ここに複製せず、以下の backlog コマンドを実行する前にまず読む。
 - `backlog instructions overview` と `backlog instructions task-creation` を読む。プロジェクトの規約が優先される。
 - `backlog config get statuses` を実行し、`Proposed` があるか確認する。設定にない status を渡すとタスク作成が失敗するため、この確認を先に行う。
 - 無ければ `.backlog/config.yml`（または `backlog/config.yml`）の `statuses` に `Proposed` を先頭で追加する。`statuses` は `backlog config set` では変更できず、backlog 自身が config ファイルの直接編集を案内する。
@@ -46,7 +46,7 @@ backlog search "<キーワード>" --plain
 backlog search --modified-file <対象パス> --plain
 ```
 
-- 上の backlog コマンドは `.backlog/tasks/` しか見ない。完了・アーカイブ済みのタスクとの照合手順の正本は [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) にある。ここに複製せず、上のコマンドと併せて必ず実行する。
+- 上の backlog コマンドは `.backlog/tasks/` しか見ない。完了・アーカイブ済みのタスクとの照合手順の正本は [`claude-code/skills/improvement-scout/completed-tasks-lookup.md`](../improvement-scout/completed-tasks-lookup.md) にある。ここに複製せず、上のコマンドと併せて必ず実行する。
 - 同じ内容のタスクがあれば起票しない。`Proposed` のまま残っている候補も対象に含めて数える。既存タスクを見つけたらユーザーに伝え、重複起票せず終える。
 - 既存タスクに足すべき情報があるときは `backlog task edit TASK-<n> --comment '<追記>' --comment-author @<name>` にとどめる。説明や受入基準の書き換えはユーザーに確認してから行う。
 - `Proposed` が溜まりすぎている（目安 10 件超）なら、新規起票の前にその事実を報告する。積み増しより承認待ちの解消が先である。
@@ -83,7 +83,7 @@ backlog task create '<何をどうするかが分かる動詞句>' \
 - 複数行の description は引用符の中に実際の改行を入れる。`\n` は展開されない。
 - `-s Proposed` を明示する。`default_status` に依存しない。
 - `audit` ラベルは付けない。`audit` は improvement-scout が調査から起票したタスクに使う印で、このスキルが起票するのは人間発案のタスクだから対象外である。
-- `--modified-file` は分かっている場合だけ付ける。次回以降 `backlog search --modified-file <path> --plain` と、完了・アーカイブ済みを対象にした [`claude-code/skills/completed-tasks-lookup.md`](../completed-tasks-lookup.md) の手順 2 で重複を検出できる。
+- `--modified-file` は分かっている場合だけ付ける。次回以降 `backlog search --modified-file <path> --plain` と、完了・アーカイブ済みを対象にした [`claude-code/skills/improvement-scout/completed-tasks-lookup.md`](../improvement-scout/completed-tasks-lookup.md) の手順 2 で重複を検出できる。
 - 受入基準は振る舞いで書く。「関数を追加する」ではなく「〜のとき〜になる」。実装手順を受入基準にしない。
 - `--plan` は書かない。着手時に improvement-work が調べ直して記録する。
 - `## 確認したこと` には実際に見た根拠だけを書く。人間から伝えられた内容をそのまま書き写すだけでなく、重複確認で実行したコマンドとその結果を書く。
