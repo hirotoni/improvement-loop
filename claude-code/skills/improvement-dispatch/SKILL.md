@@ -250,7 +250,7 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 
 ### 4. 次に引き渡すタスクを選ぶ
 
-選定ロジック（除外集合の計算、依存確認、優先度ソート、`max_in_progress`/`max_in_review` の閾値判定）は `.claude/skills/improvement-dispatch/scripts/select-next-task` に切り出されている。テキスト出力を手で読んで集合演算・ソートを組み立てない。手順 1 で読んだ `max_in_progress`（既定 1）・`max_in_review`（既定 3）の値をそのまま渡して呼ぶ。
+選定ロジック（除外集合の計算、依存確認、優先度ソート、変更先の重なりの回避、`max_in_progress`/`max_in_review` の閾値判定）は `.claude/skills/improvement-dispatch/scripts/select-next-task` に切り出されている。テキスト出力を手で読んで集合演算・ソートを組み立てない。手順 1 で読んだ `max_in_progress`（既定 1）・`max_in_review`（既定 3）の値をそのまま渡して呼ぶ。
 
 ```bash
 .claude/skills/improvement-dispatch/scripts/select-next-task <max_in_progress> <max_in_review>
@@ -258,10 +258,11 @@ main へのマージは行わない。このリポジトリは GitHub 上の PR 
 
 標準出力の1行目 `RESULT: <値>` で結果が分かる。終了ステータスでも判別できる（0=SELECTED, 1=GATED, 2=NO_CANDIDATE, 3=ERROR）。
 
-- `RESULT: SELECTED` / `TASK_ID:` 行（1 行以上） → 2 行目以降の `TASK_ID:` 行のタスクをすべて、行の順に手順 5 で引き渡す。`TASK_ID:` 行は空き枠（`max_in_progress` から現在の `In Progress` の件数を引いた数）を上限に、選べる候補の数だけ出る（`max_in_progress` が 1 なら常に 1 行）。同じ呼び出しで選ばれたタスク同士に依存は無い（依存先がまだ Done でないタスクは除外される）。`select-next-task` を引き渡しの途中で呼び直さない。ただし、今回の起動の手順 2（復旧の `REVERT_TO_TODO`）や手順 6（満たしていない場合の扱い）で `To Do` に戻したタスクが選ばれていたら、今回は引き渡さず次回の起動に回す（その分の枠は今回は空けたままにする。手順 6 の「次回の起動で再度引き渡す」に合わせるためである）。`max_in_review` は引き渡し前の件数で 1 回だけ判定するので、複数件を引き渡すと、それらが後で `In Review` になったときに `In Review` が `max_in_review` を超えることがある。
+- `RESULT: SELECTED` / `TASK_ID:` 行（1 行以上） → 2 行目以降の `TASK_ID:` 行のタスクをすべて、行の順に手順 5 で引き渡す。`TASK_ID:` 行は空き枠（`max_in_progress` から現在の `In Progress` の件数を引いた数）を上限に、選べる候補の数だけ出る（`max_in_progress` が 1 なら常に 1 行）。同じ呼び出しで選ばれたタスク同士に依存は無い（依存先がまだ Done でないタスクは除外される）。同じ呼び出しで選ばれたタスク同士、および選ばれたタスクと `In Progress`・`In Review`・`Approved` のタスクとの間で、modified_files（`backlog task view` の `Modified files:` 行）は重ならない（下の `DEFERRED:` 行を参照）。`select-next-task` を引き渡しの途中で呼び直さない。ただし、今回の起動の手順 2（復旧の `REVERT_TO_TODO`）や手順 6（満たしていない場合の扱い）で `To Do` に戻したタスクが選ばれていたら、今回は引き渡さず次回の起動に回す（その分の枠は今回は空けたままにする。手順 6 の「次回の起動で再度引き渡す」に合わせるためである）。`max_in_review` は引き渡し前の件数で 1 回だけ判定するので、複数件を引き渡すと、それらが後で `In Review` になったときに `In Review` が `max_in_review` を超えることがある。
+- `DEFERRED: <ID> CONFLICTS_WITH: <相手のID> FILES: <パス>, ...` 行 → `RESULT: SELECTED` の `TASK_ID:` 行の後、または `RESULT: NO_CANDIDATE` の後に出ることがある。`<ID>` のタスクは、`In Progress`・`In Review`・`Approved` のタスク（まだ main に入っていないタスク）か今回先に選ばれたタスク（`<相手のID>`）と modified_files が重なるため、今回は選ばれていない（`FILES:` が重なったパス）。同じファイルを変える作業ブランチを同時に進めると、後からマージする方が手順 3 で `CONFLICT` になりやすいためである。相手が `In Review`・`Approved` の間に着手しても、作業ブランチは相手の変更を含まない main から分岐するので、待つ対象に含める。相手が `Done` になった後の起動で、相手の変更を含む main から分岐する形で通常どおり選ばれる。modified_files が空のタスクは誰とも重ならないものとして扱われる。`DEFERRED:` 行のタスクには何もしない（ステータスもラベルも変えない）。行は手順 7 の報告にそのまま載せる。
 - `RESULT: GATED` / `REASON: max_in_progress` → `In Progress` が上限に達している。今回は引き渡さず手順 7 に進む。
 - `RESULT: GATED` / `REASON: max_in_review` → `In Review` が上限に達している。レビューが追いついていない。新規の引き渡しをせず、レビュー待ちの一覧を報告して手順 7 に進む。
-- `RESULT: NO_CANDIDATE` → `To Do` に選べる候補が無い（`blocked:needs-decision` ラベル付き・依存タスク未完了のものを除いて残らない場合を含む）。手順 7 に進む。
+- `RESULT: NO_CANDIDATE` → `To Do` に選べる候補が無い（`blocked:needs-decision` ラベル付き・依存タスク未完了のものを除いて残らない場合、残った候補がすべて `DEFERRED:` になった場合を含む）。手順 7 に進む。
 - `RESULT: ERROR` → 引数不正など。標準エラーに詳細が出る。原因を確認する。
 
 メインの作業木が汚れている（`git status --porcelain` に出力がある）ことは、引き渡しを止める条件にしない。手順 5 は `git worktree add` でワークツリーの作成先ベースディレクトリ（既定ではリポジトリルートの `.worktree/`。`worktree_base_dir` で変更可能）配下の `<リポジトリ名>/` に新しいワークツリーを作るだけで、メインの作業木のブランチ切り替えや checkout の変更を伴わない。そのため人間がメインの作業木で未コミットの変更を持っていても新規タスクを引き渡せる（`.claude/skills/improvement-dispatch/scripts/select-next-task` もこの条件を見ない）。
@@ -472,6 +473,7 @@ git diff <デフォルトブランチ>...<作業ブランチ> --stat
     - 複数のタスクが `CHANGED` になった場合、戻す基準には最も早く引き渡されたタスクの複製を使う。改変の後に引き渡されたタスクの複製は改変後の内容を写しており、そのタスクの `check` は `OK` になり、その `restore` は壊れた内容のままにする。迷ったら `<git-common-dir>/improvement-loop/backlog-config-snapshots/` の各複製を `diff` で見比べてから選ぶ。複製と `.before-restore` は自動では消えない。
   - 手順 1 の `check-remote-config-mismatch` が `RESULT: MISMATCH` だった場合の判断：出力の `WARNING:` の行をそのまま載せる。PR を作らずローカルで main にマージする運用なら、人間が `.backlog/config.my.yml` の `improvement_loop` に `auto_merge_reviewed: true` を設定する（直接編集する。dispatch は書き換えない）。後からリモートを足して PR で運用するなら、設定はそのままでよい。
   - `blocked:needs-decision` の判断：コメントに書かれた選択肢に答え、`backlog task edit TASK-<n> --remove-label 'blocked:needs-decision'` でループに戻す
+- 手順 4 の `select-next-task` が `DEFERRED:` 行を出した場合は、その行をすべてそのまま載せる（後回しにしたタスク・重なった相手・重なったファイルが分かるようにする）。
 - 今回引き渡したタスクごとの ID・ワークツリーのパス・ブランチ名（複数件を引き渡した場合はすべて）と、作業ブランチ名とワークツリーのパスの一覧（レビュー対象）。
 
 `/loop` に間隔が指定されている場合は、その間隔に任せる。間隔が指定されていない（動的ペース）場合は `ScheduleWakeup` で次回を決める。

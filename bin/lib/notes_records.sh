@@ -19,6 +19,8 @@
 #   Description より前なので、この解析には関係しない）。1.48.0 はメタデータ部（Description より前）に
 #   「Modified files: ...」行を出す。1.53.0 は Implementation Notes 節の直後（空行の後、
 #   Comments 節の前）に「Modified files: ...」行と空行を出す。
+#   Modified files の値の取り出しは claude-code/skills/improvement-dispatch/scripts/select-next-task の
+#   list_modified_files が同じ観察に依って行う。この位置が変わったらそちらも直すこと。
 #
 # 解析しないもの（既知の限界）:
 # - Implementation Plan の本文に「Implementation Notes:」とハイフン 50 個の組がそのまま
