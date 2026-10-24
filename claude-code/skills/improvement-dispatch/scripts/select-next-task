@@ -15,11 +15,16 @@
 #      （依存タスクが見つからない場合も安全側に倒して未完了扱い）。
 #      依存は backlog CLI 1.48.0 の "Dependencies:" 行と 1.53.0 の
 #      "Dependency Graph:" の木の両形式から読む（list_direct_dependencies）。
-#   4. 残りを優先度（High→Medium→Low→未設定）→数値ID昇順で並べ先頭を選ぶ。
+#   4. 残りを優先度（High→Medium→Low→未設定）→数値ID昇順で並べ、先頭から
+#      空き枠（max_in_progress − In Progress の件数）の数まで選ぶ。候補が空き枠より
+#      少なければ候補をすべて選ぶ。
 #      backlog CLI の --sort（未文書化の tie-break に依存する）には頼らない。
+#      同じ呼び出しで選ぶタスク同士に依存があっても、依存先はまだ To Do で Done では
+#      ないので、上の 3 で依存元は除外される（依存先が Done になった後の呼び出しで選ばれる）。
 #
 # 出力: 標準出力の1行目に必ず RESULT: <値> を出す。
-#   RESULT: SELECTED      2行目に TASK_ID: <ID>
+#   RESULT: SELECTED      2行目以降に TASK_ID: <ID> を1件1行で、選んだ順（優先度→数値ID昇順）に出す。
+#                         行数は 1 以上、空き枠の数以下（max_in_progress が 1 なら常に1行）。
 #   RESULT: GATED         2行目に REASON: max_in_progress|max_in_review、3行目以降に件数
 #   RESULT: NO_CANDIDATE  除外後に残る候補が無い
 #   RESULT: ERROR         引数不正・backlog コマンド不在など（詳細は標準エラー）
@@ -292,24 +297,19 @@ if [ "${#FINAL_IDS[@]}" -eq 0 ]; then
   exit 2
 fi
 
-# ---- 4. 優先度→数値ID昇順で最良の1件を選ぶ ----
-best_idx=0
-i=1
-while [ "$i" -lt "${#FINAL_IDS[@]}" ]; do
-  if [ "${FINAL_RANK[$i]}" -lt "${FINAL_RANK[$best_idx]}" ]; then
-    best_idx=$i
-  elif [ "${FINAL_RANK[$i]}" -eq "${FINAL_RANK[$best_idx]}" ]; then
-    # `##*-` で最後のハイフンまでを最長一致で取り除き、接頭辞の値を読まずに
-    # 末尾の数値部分だけを取り出す（接頭辞は task_prefix によって変わる）。
-    id_i="${FINAL_IDS[$i]##*-}"
-    id_best="${FINAL_IDS[$best_idx]##*-}"
-    if [ "$id_i" -lt "$id_best" ]; then
-      best_idx=$i
-    fi
-  fi
-  i=$((i + 1))
-done
+# ---- 4. 優先度→数値ID昇順で並べ、空き枠の数まで選ぶ ----
+# 1 の GATED 判定を通っているので空き枠は 1 以上である。
+free_slots=$((MAX_IN_PROGRESS - in_progress_count))
 
+# 「ランク<TAB>数値ID<TAB>ID」の行を数値で2段ソートする。数値IDは `##*-` で最後の
+# ハイフンまでを最長一致で取り除き、接頭辞の値を読まずに末尾の数値部分だけを取り出す
+# （接頭辞は task_prefix によって変わる）。
+# 空き枠で打ち切るのに head は使わない。head が先に終わると sort が SIGPIPE で落ち、
+# pipefail により RESULT: SELECTED を出した後で非ゼロ終了しうるためである。awk は全行を読む。
 printf 'RESULT: SELECTED\n'
-printf 'TASK_ID: %s\n' "${FINAL_IDS[$best_idx]}"
+i=0
+while [ "$i" -lt "${#FINAL_IDS[@]}" ]; do
+  printf '%s\t%s\t%s\n' "${FINAL_RANK[$i]}" "${FINAL_IDS[$i]##*-}" "${FINAL_IDS[$i]}"
+  i=$((i + 1))
+done | sort -t "$(printf '\t')" -k1,1n -k2,2n | awk -F '\t' -v n="$free_slots" 'NR <= n { print "TASK_ID: " $3 }'
 exit 0
